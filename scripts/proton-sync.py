@@ -51,8 +51,12 @@ Environment knobs
   PROTON_SYNC_DELETES    1 = propagate deletions (default 0 = never delete)
   PROTON_SYNC_WORKERS    parallel scan calls    (default 8)
   PROTON_SYNC_RETRIES    scan attempts per folder (default 3)
+  PROTON_SYNC_SUBFOLDERS comma-separated subfolders to mirror (default all)
+  PROTON_SYNC_EXCLUDE    comma-separated globs to skip (e.g. "*.tmp,.cache")
   PROTON_SYNC_INOTIFY    0 = disable the inotify fast path
 
+Telemetry: ${XDG_STATE_HOME:-~/.local/state}/proton-sync/health.json is
+merge-updated at the start and end of every cycle for the GUI (never fatal).
 State: ${XDG_STATE_HOME:-~/.local/state}/proton-sync/state.json (+ sync.lock)
 """
 
@@ -60,6 +64,7 @@ import argparse
 import ctypes
 import datetime
 import fcntl
+import fnmatch
 import json
 import logging
 import os
@@ -89,11 +94,16 @@ TRANSFER_TIMEOUT = int(os.environ.get("PROTON_SYNC_TIMEOUT", "3600"))
 META_TIMEOUT = int(os.environ.get("PROTON_SYNC_META_TIMEOUT", "120"))
 PROPAGATE_DELETES = os.environ.get("PROTON_SYNC_DELETES", "0") == "1"
 INOTIFY_ENABLED = os.environ.get("PROTON_SYNC_INOTIFY", "1") == "1"
+# selective sync: only these remote subfolders are mirrored ("" = everything)
+SUBFOLDERS = [s.strip("/") for s in os.environ.get("PROTON_SYNC_SUBFOLDERS", "").split(",") if s.strip()]
+# comma-separated globs matched against rel path and file name (e.g. "*.tmp,.cache")
+EXCLUDE = [p.strip() for p in os.environ.get("PROTON_SYNC_EXCLUDE", "").split(",") if p.strip()]
 SKIP_NAME = re.compile(r"^\.Trash-\d+$")   # trash folders desktop apps leave behind
 
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "proton-sync"
 STATE_FILE = STATE_DIR / "state.json"
 LOCK_FILE = STATE_DIR / "sync.lock"
+HEALTH_FILE = STATE_DIR / "health.json"
 # dropping this file requests an immediate cycle (the GUI's "Sync now" button)
 WAKE_FILE = STATE_DIR / "wake"
 
@@ -157,6 +167,48 @@ def ts_ns(iso):
     return int(datetime.datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp() * 1e9)
 
 
+# --------------------------------------------------- selective sync + excludes
+
+def allowed_dir(rel):
+    """Selective sync: this folder is in view if it is selected, contains a
+    selection, or is an ancestor of one ("" root is always in view)."""
+    if not SUBFOLDERS or not rel:
+        return True
+    return any(rel == s or rel.startswith(s + "/") or s.startswith(rel + "/") for s in SUBFOLDERS)
+
+
+def allowed_file(rel):
+    if not SUBFOLDERS:
+        return True
+    return any(rel == s or rel.startswith(s + "/") for s in SUBFOLDERS)
+
+
+def excluded(rel):
+    """PROTON_SYNC_EXCLUDE globs, matched against the relative path and the name."""
+    if not EXCLUDE:
+        return False
+    base = rel.rsplit("/", 1)[-1]
+    return any(fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(base, pat) for pat in EXCLUDE)
+
+
+def write_health(**kw):
+    """Merge-update the telemetry file the GUI reads. Never breaks a cycle."""
+    try:
+        data = {}
+        try:
+            data = json.loads(HEALTH_FILE.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        data.update(kw)
+        data["ts"] = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = HEALTH_FILE.with_name("health.json.tmp")
+        tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
+        os.replace(tmp, HEALTH_FILE)
+    except Exception:  # noqa: BLE001 - telemetry must never break syncing
+        log.debug("health write failed", exc_info=True)
+
+
 # ----------------------------------------------------------------- remote scan
 
 def _list_folder(rpath):
@@ -199,6 +251,8 @@ def scan_remote():
                     if SKIP_NAME.match(name):
                         continue
                     child_rel = f"{rel}/{name}" if rel else name
+                    if excluded(child_rel):
+                        continue
                     media = e.get("mediaType") or ""
                     node = {
                         "uid": e.get("uid"),
@@ -207,6 +261,10 @@ def scan_remote():
                         "size": int((e.get("activeRevision") or {}).get("claimedSize") or 0),
                         "doc": media.startswith("application/vnd.proton"),  # Docs/Sheets: not downloadable
                     }
+                    if node["type"] == "file" and not allowed_file(child_rel):
+                        continue
+                    if node["type"] == "dir" and not allowed_dir(child_rel):
+                        continue
                     tree[child_rel] = node
                     if node["type"] == "dir":
                         child_rpath = f"{rpath}/{escape(name)}"
@@ -226,12 +284,18 @@ def scan_local():
         base = Path(dirpath)
         rel_base = base.relative_to(LOCAL_ROOT).as_posix()
         rel_base = "" if rel_base == "." else rel_base
-        dirnames[:] = sorted(d for d in dirnames if not SKIP_NAME.match(d))
+
+        def rel_of(name):
+            return f"{rel_base}/{name}" if rel_base else name
+
+        dirnames[:] = sorted(d for d in dirnames
+                             if not SKIP_NAME.match(d)
+                             and not excluded(rel_of(d))
+                             and allowed_dir(rel_of(d)))
         for d in dirnames:
-            rel = f"{rel_base}/{d}" if rel_base else d
-            tree[rel] = {"type": "dir"}
+            tree[rel_of(d)] = {"type": "dir"}
         for f in sorted(filenames):
-            if SKIP_NAME.match(f):
+            if SKIP_NAME.match(f) or excluded(rel_of(f)) or not allowed_file(rel_of(f)):
                 continue
             p = base / f
             try:
@@ -241,8 +305,7 @@ def scan_local():
             if not stat.S_ISREG(st.st_mode):
                 log.debug("skip non-regular file %s", p)
                 continue
-            rel = f"{rel_base}/{f}" if rel_base else f
-            tree[rel] = {"type": "file", "mtime_ns": st.st_mtime_ns, "size": st.st_size}
+            tree[rel_of(f)] = {"type": "file", "mtime_ns": st.st_mtime_ns, "size": st.st_size}
     return tree
 
 
@@ -598,6 +661,9 @@ def refresh_state(remote, local, old_state, failed, acted):
 def run_once(dry_run=False):
     LOCAL_ROOT.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
+    if not dry_run:
+        write_health(status="syncing",
+                     started=datetime.datetime.now().astimezone().isoformat(timespec="seconds"))
     log.info("scan: remote %s + local %s", REMOTE_ROOT, LOCAL_ROOT)
     remote = scan_remote()
     local = scan_local()
@@ -616,6 +682,10 @@ def run_once(dry_run=False):
     if not actions:
         save_state(refresh_state(remote, local, state, set(), set()))
         log.info("cycle done: in sync")
+        write_health(status="ok", cycle_seconds=round(time.time() - t0, 1),
+                     actions=0, holds=holds, failed=0, uploaded=0, downloaded=0, conflicts=0,
+                     remote_entries=len(remote), local_entries=len(local),
+                     state_records=len(state), interval=INTERVAL)
         return True
 
     failed, downloaded, did_upload = execute(actions, remote, local)
@@ -626,7 +696,14 @@ def run_once(dry_run=False):
     remote2 = scan_remote() if did_upload else remote
     saved = refresh_state(remote2, local2, state, failed, {a[1] for a in actions})
     save_state(saved)
+    uploaded_n = sum(1 for kind, rel, _ in actions if kind == "up" and rel not in failed)
+    conflicts_n = sum(1 for kind, rel, _ in actions if kind == "conflict" and rel not in failed)
     log.info("cycle done: %d failed, state=%d records", len(failed), len(saved))
+    write_health(status="ok", cycle_seconds=round(time.time() - t0, 1),
+                 actions=len(actions), holds=holds, failed=len(failed),
+                 uploaded=uploaded_n, downloaded=len(downloaded), conflicts=conflicts_n,
+                 remote_entries=len(remote), local_entries=len(local),
+                 state_records=len(saved), interval=INTERVAL)
     return not failed
 
 
@@ -713,12 +790,16 @@ def loop_forever():
             run_once()
         except CliError as e:
             log.error("cycle failed: %s (next try in %ds)", e, INTERVAL)
-        except Exception:
+            write_health(status="error", error=str(e)[:300], interval=INTERVAL)
+        except Exception as e:  # noqa: BLE001 - keep the loop alive, report it
             log.exception("cycle crashed (next try in %ds)", INTERVAL)
+            write_health(status="error", error=str(e)[:300], interval=INTERVAL)
         wake.clear()
 
         # sleep until the interval expires, a local change, or a wake request
         deadline = time.time() + INTERVAL
+        write_health(next_poll=datetime.datetime.fromtimestamp(deadline)
+                     .astimezone().isoformat(timespec="seconds"), interval=INTERVAL)
         while time.time() < deadline:
             triggered = wake.wait(timeout=1)
             if WAKE_FILE.exists():

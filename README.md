@@ -65,7 +65,10 @@ Safety rules baked in:
 
 Knobs: `PROTON_SYNC_LOCAL`, `PROTON_SYNC_REMOTE`, `PROTON_SYNC_INTERVAL`
 (seconds, default 300), `PROTON_SYNC_DELETES`, `PROTON_SYNC_WORKERS`,
-`PROTON_SYNC_INOTIFY=0` (disable the fast path). Uninstall:
+`PROTON_SYNC_RETRIES`, `PROTON_SYNC_SUBFOLDERS` (comma-separated folders to
+mirror instead of everything), `PROTON_SYNC_EXCLUDE` (comma-separated globs
+like `*.tmp,.cache` that are never synced), `PROTON_SYNC_INOTIFY=0` (disable
+the fast path). Uninstall:
 `./scripts/install-sync.sh uninstall` (folder and state are kept).
 Settings live in `~/.config/proton-sync.conf` - edit by hand or with the app.
 
@@ -80,14 +83,23 @@ proton-drive-gui             # or search "Proton Drive" in your app menu
 A Qt6 front-end for the sync service (PyQt6 from the **official repos** -
 no AUR, no bundled toolkits):
 
-* **Dashboard** - live status, account, file count/size, one-click
-  *Sync now*, *Open folder*, *Pause/Resume*
-* **Activity** - live service log with filter
-* **Settings** - sync folder, remote folder, interval, instant-upload watch,
-  deletion syncing; saving writes `~/.config/proton-sync.conf` and restarts
-  the service
-* **tray icon** - status at a glance; closing the window keeps it running
-  (right-click the tray icon to quit)
+* **Dashboard** - live status with next-check countdown, account, file
+  count/size, one-click *Sync now*, *Open folder* and *Pause* (15 minutes,
+  1 hour, or until you resume)
+* **Changes** - transfer history: what was uploaded, downloaded, trashed or
+  conflicted, with path/kind filters and copy
+* **Activity** - live raw service log with filter, auto-scroll and copy
+* **Settings** - sync folder, interval, instant-upload watch, deletion
+  syncing, **selective sync** (browse the cloud and pick which folders
+  mirror), **exclusions** (`*.tmp`-style skip patterns), **notifications**
+  (errors, conflicts, finished rounds) with a test button, **start at
+  login**, start-minimized-in-tray, **light/dark/system theme**, and an
+  advanced box for extra environment variables (e.g. proxies); saving
+  writes `~/.config/proton-sync.conf` and restarts the service
+* **Details** - service health, last-cycle statistics, versions, paths and
+  quick actions (restart service, open config, copy log command)
+* **tray icon** - status at a glance plus desktop notifications; closing
+  the window keeps it running (right-click the tray icon to quit)
 
 ## Distro notes
 

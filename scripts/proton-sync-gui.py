@@ -1,50 +1,63 @@
 #!/usr/bin/env python3
 """
-proton-sync-gui.py - "Proton Drive" desktop app for Linux (unofficial).
+proton-sync-gui.py - "Proton Drive" desktop app for Linux (unofficial), v2.
 
-Part of Proton-Drive-Linux-Cli (MIT). A professional front-end for the
-two-way folder sync service (proton-sync.py) on top of the OFFICIAL CLI:
+Part of Proton-Drive-Linux-Cli (MIT). A Qt6 front-end for the two-way folder
+sync service (proton-sync.py) on top of the OFFICIAL Proton Drive CLI.
 
-* Dashboard  - live status, account, one-click Sync now / Open folder /
-               Pause-Resume, recent activity
-* Activity   - live service log with filter
-* Settings   - edits ~/.config/proton-sync.conf and restarts the service
-* About      - versions, links, license + legal notes
-* tray icon  - status at a glance; closing the window keeps it running
+Design ideas are taken from how professional desktop cloud-drive clients
+(Proton Drive on Windows, Google Drive on Windows) behave and which settings
+they offer - the implementation is 100% original MIT-licensed code in this
+repository; no code, assets or trademarks of those products are used.
 
-No third-party dependencies beyond PyQt6 (official repos) and the official
-Proton Drive CLI. Nothing here talks to Proton directly - it drives the same
-service and CLI you would use by hand.
+Pages
+-----
+  Dashboard  live status, next-check countdown, account, file count/size,
+             Sync now / Open folder / Pause (15 min, 1 hour, until resumed)
+  Changes    parsed transfer history (uploaded / downloaded / conflicts)
+  Activity   raw live service log with filter
+  Settings   sync, selective sync (folder picker), exclusions, notifications,
+             startup, appearance, advanced environment
+  Details    service/health statistics, paths, quick actions
+  About      versions, links, license + legal notes
+
+The engine writes ~/.local/state/proton-sync/health.json every cycle; the
+dashboard reads that (instant) instead of parsing the journal each tick.
 
 Run:  python3 scripts/proton-sync-gui.py      (or the proton-drive-gui shim)
 """
 
 import datetime
+import functools
+import json
 import os
 import re
 import shlex
 import shutil
 import subprocess
 import sys
+import traceback
 from pathlib import Path
 
-from PyQt6.QtCore import QLockFile, QUrl, Qt, QThread, QTimer, pyqtSignal as Signal
-from PyQt6.QtGui import (QCloseEvent, QColor, QDesktopServices, QIcon, QPainter,
-                         QPalette, QPen, QPixmap, QFont)
+from PyQt6.QtCore import (QLockFile, QPoint, QSettings, QUrl, Qt, QThread,
+                          QTimer, pyqtSignal as Signal)
+from PyQt6.QtGui import (QCloseEvent, QColor, QDesktopServices, QIcon,
+                         QPainter, QPalette, QPen, QPixmap)
 from PyQt6.QtSvg import QSvgRenderer
-from PyQt6.QtWidgets import (QApplication, QCheckBox, QFileDialog, QFrame,
-                             QHBoxLayout, QLabel, QLineEdit, QListWidget,
-                             QListWidgetItem, QMessageBox, QPlainTextEdit,
-                             QPushButton, QScrollArea, QSizePolicy, QSpinBox,
-                             QStackedWidget, QStyle, QSystemTrayIcon, QMenu,
-                             QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog,
+                             QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+                             QMenu, QMessageBox, QPlainTextEdit, QPushButton,
+                             QScrollArea, QSizePolicy, QSpinBox, QStackedWidget,
+                             QStyle, QSystemTrayIcon, QTreeWidget,
+                             QTreeWidgetItem, QVBoxLayout, QWidget)
 
-GUI_VERSION = "1.0.0"
+GUI_VERSION = "2.0.0"
 
 REPO_URL = "https://github.com/zhafribs/Proton-Drive-Linux-Cli"
 CONF_FILE = Path.home() / ".config" / "proton-sync.conf"
 UNIT_FILE = Path.home() / ".config" / "systemd" / "user" / "proton-sync.service"
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "proton-sync"
+HEALTH_FILE = STATE_DIR / "health.json"
 WAKE_FILE = STATE_DIR / "wake"
 LOCK_FILE = STATE_DIR / "gui.lock"
 JOURNAL_UNIT = "proton-sync"
@@ -56,6 +69,9 @@ CONF_DEFAULTS = {
     "PROTON_SYNC_DELETES": "0",
     "PROTON_SYNC_INOTIFY": "1",
     "PROTON_SYNC_WORKERS": "8",
+    "PROTON_SYNC_RETRIES": "3",
+    "PROTON_SYNC_SUBFOLDERS": "",
+    "PROTON_SYNC_EXCLUDE": "",
 }
 
 ACCENT = "#6D4AFF"
@@ -72,10 +88,8 @@ def resolve_cli() -> str:
     try:
         text = UNIT_FILE.read_text(encoding="utf-8")
         m = re.search(r"^Environment=PROTON_DRIVE_BIN=(.+)$", text, re.M)
-        if m:
-            cand = m.group(1).strip()
-            if os.access(cand, os.X_OK):
-                return cand
+        if m and os.access(m.group(1).strip(), os.X_OK):
+            return m.group(1).strip()
     except OSError:
         pass
     for cand in (shutil.which("proton-drive"), str(Path.home() / ".local/bin/proton-drive")):
@@ -97,12 +111,29 @@ def read_conf() -> dict:
     return values
 
 
-def write_conf(values: dict):
+def read_conf_extras() -> list:
+    """KEY=VALUE lines in the conf that are not managed by this app."""
+    out = []
+    try:
+        for line in CONF_FILE.read_text(encoding="utf-8").splitlines():
+            s = line.strip()
+            if s and not s.startswith("#") and "=" in s \
+                    and s.split("=", 1)[0].strip() not in CONF_DEFAULTS:
+                out.append(s)
+    except OSError:
+        pass
+    return out
+
+
+def write_conf(values: dict, extras: list = None):
     CONF_FILE.parent.mkdir(parents=True, exist_ok=True)
-    header = ("# proton-sync settings - editable by hand or with the Proton Drive GUI\n"
-              "# changes apply after the service restarts\n")
-    body = "".join(f"{k}={values.get(k, v)}\n" for k, v in CONF_DEFAULTS.items())
-    CONF_FILE.write_text(header + body, encoding="utf-8")
+    parts = ["# proton-sync settings - editable by hand or with the Proton Drive GUI\n",
+             "# changes apply after the service restarts\n"]
+    for k, v in CONF_DEFAULTS.items():
+        parts.append(f"{k}={values.get(k, v)}\n")
+    for e in (extras or []):
+        parts.append(e.rstrip() + "\n")
+    CONF_FILE.write_text("".join(parts), encoding="utf-8")
 
 
 def systemctl(*args, timeout=15) -> bool:
@@ -113,9 +144,23 @@ def systemctl(*args, timeout=15) -> bool:
         return False
 
 
-def service_active() -> bool:
+def systemd_run(*args, timeout=15) -> bool:
+    exe = shutil.which("systemd-run")
+    if not exe:
+        return False
     try:
-        return subprocess.run(["systemctl", "--user", "is-active", "--quiet", JOURNAL_UNIT],
+        return subprocess.run([exe, "--user", *args],
+                              capture_output=True, timeout=timeout).returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+def service_active() -> bool:
+    exe = shutil.which("systemctl")
+    if not exe:
+        return False
+    try:
+        return subprocess.run([exe, "--user", "is-active", "--quiet", JOURNAL_UNIT],
                               timeout=10).returncode == 0
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
@@ -125,8 +170,11 @@ ISO_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4})")
 
 
 def journal_lines(n=400) -> list:
+    exe = shutil.which("journalctl")
+    if not exe:
+        return []
     try:
-        r = subprocess.run(["journalctl", "--user", "-u", JOURNAL_UNIT, "--no-pager",
+        r = subprocess.run([exe, "--user", "-u", JOURNAL_UNIT, "--no-pager",
                             "-n", str(n), "-o", "short-iso"],
                            capture_output=True, text=True, timeout=10)
         return r.stdout.splitlines()
@@ -145,43 +193,14 @@ def journal_ts(line: str):
 
 
 def journal_body(line: str) -> str:
-    """Strip the 'HOST UNIT[pid]: ' prefix journald adds."""
     return line.split("]: ", 1)[-1] if "]: " in line else line
 
 
-def analyse(lines, active) -> dict:
-    """Work out what the service is doing right now."""
-    last_cycle_ts, last_cycle_text = None, ""
-    activity_ts, activity_text = None, ""
-    last_error = ""
-    for ln in lines:
-        body = journal_body(ln)
-        ts = journal_ts(ln)
-        if "cycle done" in body:
-            last_cycle_ts, last_cycle_text = ts, body.strip()
-            last_error = ""
-        elif any(k in body for k in ("UPLOAD ", "DOWNLOAD ", "MKDIR  ", "manual sync")):
-            activity_ts, activity_text = ts, body.strip()
-        elif "ERROR" in body or "FAILED" in body:
-            last_error = body.strip()
-    if not active:
-        status = "paused"
-    elif last_error and (last_cycle_ts is None or (journal_ts_of(last_error, lines) or last_cycle_ts) >= last_cycle_ts):
-        status = "error"
-    elif activity_ts and (last_cycle_ts is None or activity_ts > last_cycle_ts):
-        status = "syncing"
-    else:
-        status = "synced"
-    return {"status": status, "last_cycle_ts": last_cycle_ts,
-            "last_cycle_text": last_cycle_text, "last_error": last_error,
-            "activity": activity_text or last_cycle_text}
-
-
-def journal_ts_of(text, lines):
-    for ln in reversed(lines):
-        if text in ln:
-            return journal_ts(ln)
-    return None
+def read_health() -> dict:
+    try:
+        return json.loads(HEALTH_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
 
 
 def rel_time(dt) -> str:
@@ -209,17 +228,22 @@ def find_icon() -> str:
     return ""
 
 
+_PIXMAP_CACHE = {}
+
+
 def svg_pixmap(path: str, size: int) -> QPixmap:
-    pm = QPixmap(size, size)
-    pm.fill(Qt.GlobalColor.transparent)
-    if path and QSvgRenderer(path).isValid():
-        QSvgRenderer(path).render(QPainter(pm))
-    else:
-        p = QPainter(pm)
-        p.fillRect(0, 0, size, size, QColor(ACCENT))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.end()
-    return pm
+    key = (path, size)
+    if key not in _PIXMAP_CACHE:
+        pm = QPixmap(size, size)
+        pm.fill(Qt.GlobalColor.transparent)
+        if path and QSvgRenderer(path).isValid():
+            QSvgRenderer(path).render(QPainter(pm))
+        else:
+            p = QPainter(pm)
+            p.fillRect(0, 0, size, size, QColor(ACCENT))
+            p.end()
+        _PIXMAP_CACHE[key] = pm
+    return _PIXMAP_CACHE[key]
 
 
 def tray_icon(base: QPixmap, status: str) -> QIcon:
@@ -235,7 +259,7 @@ def tray_icon(base: QPixmap, status: str) -> QIcon:
     return QIcon(pm)
 
 
-# --------------------------------------------------------------------------- worker
+# --------------------------------------------------------------------------- workers
 
 
 class Worker(QThread):
@@ -262,14 +286,14 @@ def fetch_identity() -> dict:
         return out
     try:
         r = subprocess.run([cli, "--version"], capture_output=True, text=True, timeout=60)
-        out["version"] = (r.stdout or r.stderr).strip().splitlines()[0] if (r.stdout or r.stderr).strip() else "?"
+        text = (r.stdout or r.stderr).strip()
+        out["version"] = text.splitlines()[0] if text else "?"
     except subprocess.TimeoutExpired:
         out["version"] = "?"
     try:
         r = subprocess.run([cli, "fs", "list", "/my-files", "--json"],
                            capture_output=True, text=True, timeout=120)
         if r.returncode == 0 and r.stdout.strip():
-            import json
             for e in json.loads(r.stdout):
                 email = (e.get("ownedBy") or {}).get("email")
                 if email:
@@ -281,7 +305,31 @@ def fetch_identity() -> dict:
     return out
 
 
-# --------------------------------------------------------------------------- styling
+def fetch_remote_folders(remote_root: str, rel_path: str) -> list:
+    """Folders one level below REL_PATH, for the selective-sync picker."""
+    cli = resolve_cli()
+    if not cli:
+        return []
+    rpath = "/".join([remote_root] + [c.replace("/", r"\/") for c in rel_path.split("/")]) \
+        if rel_path else remote_root
+    r = subprocess.run([cli, "fs", "list", rpath, "--json"],
+                       capture_output=True, text=True, timeout=120)
+    if r.returncode != 0 or not r.stdout.strip():
+        return []
+    out = []
+    for e in json.loads(r.stdout):
+        if e.get("type") != "folder":
+            continue
+        name = (e.get("name") or {}).get("value")
+        if not (e.get("name") or {}).get("ok", True) or not name:
+            continue
+        if re.match(r"^\.Trash-\d+$", name):
+            continue
+        out.append({"name": name, "rel": f"{rel_path}/{name}" if rel_path else name})
+    return sorted(out, key=lambda f: f["name"].lower())
+
+
+# --------------------------------------------------------------------------- styles
 
 LIGHT = dict(BG="#f2f3f7", CARD="#ffffff", FG="#1c2029", MUTED="#6b7280",
              BORDER="#e4e6ec", SIDE="#171b26", SIDE_FG="#c9cdd8", SIDE_MUTED="#7d8494",
@@ -306,13 +354,13 @@ QFrame#statusDot {{ border-radius: 6px; background: #8a90a0; min-width: 12px; ma
 QLabel#pageTitle {{ font-size: 22px; font-weight: 700; }}
 QLabel#pageSub {{ color: {MUTED}; font-size: 12px; }}
 QFrame#card {{ background: {CARD}; border: 1px solid {BORDER}; border-radius: 12px; }}
-QLabel#cardTitle {{ color: {MUTED}; font-size: 11px; font-weight: 600;
-                    text-transform: uppercase; }}
+QLabel#cardTitle {{ color: {MUTED}; font-size: 11px; font-weight: 600; }}
 QLabel#cardValue {{ font-size: 20px; font-weight: 700; }}
 QLabel#statusTitle {{ font-size: 20px; font-weight: 700; }}
 QLabel#statusDetail, QLabel#hint {{ color: {MUTED}; }}
 QLabel#badge {{ padding: 3px 10px; border-radius: 10px; font-size: 11px; font-weight: 600; }}
 QLabel#legal {{ color: {MUTED}; font-size: 12px; }}
+QLabel#sectionHead {{ font-size: 14px; font-weight: 700; }}
 QPushButton {{ background: {CARD}; border: 1px solid {BORDER}; border-radius: 8px;
                padding: 7px 14px; font-weight: 600; }}
 QPushButton:hover {{ background: {HOVER}; }}
@@ -320,14 +368,26 @@ QPushButton:disabled {{ color: {MUTED}; }}
 QPushButton#primary {{ background: {ACCENT}; border: none; color: #ffffff; }}
 QPushButton#primary:hover {{ background: #5b3ce0; }}
 QPushButton#danger {{ color: #d04444; }}
-QLineEdit, QSpinBox, QPlainTextEdit {{ background: {INPUT}; border: 1px solid {BORDER};
-    border-radius: 8px; padding: 7px 10px; selection-background-color: {ACCENT}; }}
+QLineEdit, QSpinBox, QPlainTextEdit, QComboBox, QTreeWidget {{
+    background: {INPUT}; border: 1px solid {BORDER}; border-radius: 8px;
+    padding: 6px 10px; selection-background-color: {ACCENT}; }}
+QComboBox::drop-down {{ border: none; width: 22px; }}
 QPlainTextEdit {{ font-family: "JetBrains Mono", "Fira Code", monospace; font-size: 12px; }}
-QLineEdit:focus, QSpinBox:focus, QPlainTextEdit:focus {{ border: 1px solid {ACCENT}; }}
+QLineEdit:focus, QSpinBox:focus, QPlainTextEdit:focus, QTreeWidget:focus {{
+    border: 1px solid {ACCENT}; }}
 QCheckBox {{ spacing: 8px; }}
 QCheckBox::indicator {{ width: 17px; height: 17px; }}
+QTreeWidget {{ border: 1px solid {BORDER}; border-radius: 8px; }}
+QTreeWidget::item {{ padding: 4px 2px; }}
+QHeaderView::section {{ background: transparent; border: none; border-bottom: 1px solid {BORDER};
+                        padding: 6px 8px; font-weight: 600; color: {MUTED}; }}
 QScrollArea {{ border: none; }}
 """
+
+
+def is_system_dark(app: QApplication) -> bool:
+    c = app.palette().color(QPalette.ColorRole.Window)
+    return (0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()) < 128
 
 
 def build_qss(dark: bool) -> str:
@@ -337,6 +397,17 @@ def build_qss(dark: bool) -> str:
 
 
 # --------------------------------------------------------------------------- widgets
+
+
+def guard_slot(fn):
+    """A crashing slot must never take the whole app down."""
+    @functools.wraps(fn)
+    def wrapper(self, *a, **k):
+        try:
+            return fn(self, *a, **k)
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+    return wrapper
 
 
 def card(title: str) -> tuple:
@@ -383,24 +454,39 @@ def scroll_page(inner: QWidget) -> QScrollArea:
     return sc
 
 
+def path_label(text: str) -> QLabel:
+    lab = QLabel(text)
+    lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+    lab.setObjectName("hint")
+    lab.setWordWrap(True)
+    return lab
+
+
 # --------------------------------------------------------------------------- window
+
+CHANGE_RE = re.compile(r"\b(UPLOAD|DOWNLOAD|MKDIR|TRASH|CONFLICT)\s*(.*)$")
 
 
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Proton Drive")
-        self.setMinimumSize(940, 640)
-        self.resize(1020, 700)
+        self.setMinimumSize(980, 680)
+        self.resize(1060, 720)
         self._quitting = False
         self._tray_warned = False
         self._identity = {"version": "?", "email": None, "logged_in": False}
-        self._status = {"status": "unknown", "last_cycle_ts": None, "activity": "", "last_error": ""}
         self._log_lines = []
+        self._changes = []
         self._workers = []
+        self._prefs = QSettings("ProtonDriveCLI", "ProtonDriveGUI")
+        self._notify_cool = {}
+        self._last_seen_ts = datetime.datetime.now().astimezone()
+        self._prev_health_status = None
+        self._selection = []
+        self._remote_root = "/my-files"
 
-        self._icon_svg = find_icon()
-        self.setWindowIcon(QIcon(svg_pixmap(self._icon_svg, 64)))
+        self.setWindowIcon(QIcon(svg_pixmap(find_icon(), 64)))
 
         self._build_ui()
         self._build_tray()
@@ -417,10 +503,16 @@ class MainWindow(QWidget):
         self._counts_timer.timeout.connect(self.refresh_counts)
         self._counts_timer.start(15000)
 
+        self._tick_timer = QTimer(self)
+        self._tick_timer.timeout.connect(self.update_countdown)
+        self._tick_timer.start(1000)
+
         self.refresh_status()
         self.refresh_logs()
         self.refresh_counts()
+        self.refresh_details()
         self.load_identity()
+        self.load_settings()
 
     # ------------------------------------------------------------------ UI build
 
@@ -429,7 +521,6 @@ class MainWindow(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ---- sidebar
         side = QFrame()
         side.setObjectName("sidebar")
         side.setFixedWidth(216)
@@ -440,7 +531,7 @@ class MainWindow(QWidget):
         head = QHBoxLayout()
         head.setSpacing(10)
         glyph = QLabel()
-        glyph.setPixmap(svg_pixmap(self._icon_svg, 30))
+        glyph.setPixmap(svg_pixmap(find_icon(), 30))
         head.addWidget(glyph)
         titles = QVBoxLayout()
         titles.setSpacing(0)
@@ -457,9 +548,8 @@ class MainWindow(QWidget):
 
         self.nav = QListWidget()
         self.nav.setObjectName("nav")
-        self.nav.setFixedHeight(160)
-        for label in ("Dashboard", "Activity", "Settings", "About"):
-            QListWidgetItem(label).setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+        self.nav.setFixedHeight(200)
+        for label in ("Dashboard", "Changes", "Activity", "Settings", "Details", "About"):
             self.nav.addItem(label)
         self.nav.currentRowChanged.connect(self._switch_page)
         sl.addWidget(self.nav)
@@ -481,14 +571,17 @@ class MainWindow(QWidget):
 
         root.addWidget(side)
 
-        # ---- pages
         self.stack = QStackedWidget()
         root.addWidget(self.stack, 1)
         self.stack.addWidget(self._dashboard_page())
+        self.stack.addWidget(self._changes_page())
         self.stack.addWidget(self._activity_page())
         self.stack.addWidget(self._settings_page())
+        self.stack.addWidget(self._details_page())
         self.stack.addWidget(self._about_page())
         self.nav.setCurrentRow(0)
+
+    # ---- dashboard ----------------------------------------------------------
 
     def _dashboard_page(self) -> QWidget:
         page = QWidget()
@@ -502,7 +595,6 @@ class MainWindow(QWidget):
         col.setContentsMargins(0, 0, 6, 0)
         col.setSpacing(14)
 
-        # status banner
         banner = QFrame()
         banner.setObjectName("card")
         bl = QHBoxLayout(banner)
@@ -528,13 +620,12 @@ class MainWindow(QWidget):
         self.btn_folder.clicked.connect(self.open_folder)
         self.btn_pause = QPushButton(" Pause")
         self.btn_pause.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause))
-        self.btn_pause.clicked.connect(self.toggle_pause)
+        self.btn_pause.clicked.connect(self._pause_clicked)
         for b in (self.btn_sync, self.btn_folder, self.btn_pause):
             btns.addWidget(b)
         bl.addLayout(btns)
         col.addWidget(banner)
 
-        # stat cards
         cards = QHBoxLayout()
         cards.setSpacing(12)
         self.val_files = QLabel("-")
@@ -547,7 +638,6 @@ class MainWindow(QWidget):
         cards.addWidget(stat_card("Service", self.val_service))
         col.addLayout(cards)
 
-        # account
         acct, al = card("Account")
         arow = QHBoxLayout()
         self.val_email = QLabel("...")
@@ -566,7 +656,6 @@ class MainWindow(QWidget):
         al.addLayout(arow)
         col.addWidget(acct)
 
-        # recent activity
         act, cl = card("Recent activity")
         self.preview = QPlainTextEdit()
         self.preview.setReadOnly(True)
@@ -576,16 +665,56 @@ class MainWindow(QWidget):
         col.addWidget(act)
 
         col.addStretch(1)
-        sc = scroll_page(inner)
-        outer.addWidget(sc, 1)
+        outer.addWidget(scroll_page(inner), 1)
         return page
+
+    # ---- changes ------------------------------------------------------------
+
+    def _changes_page(self) -> QWidget:
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(26, 22, 26, 18)
+        outer.setSpacing(14)
+        outer.addWidget(page_header("Changes", "What the sync has moved recently"))
+
+        bar = QHBoxLayout()
+        bar.setSpacing(8)
+        self.ch_filter = QLineEdit()
+        self.ch_filter.setPlaceholderText("filter by path...")
+        self.ch_filter.textChanged.connect(self.render_changes)
+        bar.addWidget(self.ch_filter, 1)
+        self.ch_kind = QComboBox()
+        self.ch_kind.addItems(["All changes", "Uploaded", "Downloaded", "Other"])
+        self.ch_kind.currentIndexChanged.connect(self.render_changes)
+        bar.addWidget(self.ch_kind)
+        self.ch_count = QLabel("")
+        self.ch_count.setObjectName("hint")
+        bar.addWidget(self.ch_count)
+        btn_copy = QPushButton("Copy list")
+        btn_copy.clicked.connect(self.copy_changes)
+        bar.addWidget(btn_copy)
+        outer.addLayout(bar)
+
+        self.ch_view = QTreeWidget()
+        self.ch_view.setColumnCount(3)
+        self.ch_view.setHeaderLabels(["When", "Action", "Path"])
+        self.ch_view.setRootIsDecorated(False)
+        self.ch_view.setAlternatingRowColors(True)
+        self.ch_view.setUniformRowHeights(True)
+        self.ch_view.header().setStretchLastSection(True)
+        self.ch_view.setColumnWidth(0, 130)
+        self.ch_view.setColumnWidth(1, 110)
+        outer.addWidget(self.ch_view, 1)
+        return page
+
+    # ---- activity -----------------------------------------------------------
 
     def _activity_page(self) -> QWidget:
         page = QWidget()
         outer = QVBoxLayout(page)
         outer.setContentsMargins(26, 22, 26, 18)
         outer.setSpacing(14)
-        outer.addWidget(page_header("Activity", "Live log of the sync service"))
+        outer.addWidget(page_header("Activity", "Live raw log of the sync service"))
 
         bar = QHBoxLayout()
         bar.setSpacing(8)
@@ -610,6 +739,8 @@ class MainWindow(QWidget):
         outer.addWidget(self.log_view, 1)
         return page
 
+    # ---- settings -----------------------------------------------------------
+
     def _settings_page(self) -> QWidget:
         page = QWidget()
         outer = QVBoxLayout(page)
@@ -622,6 +753,7 @@ class MainWindow(QWidget):
         col.setContentsMargins(0, 0, 6, 0)
         col.setSpacing(14)
 
+        # --- sync
         box, form = card("Sync")
         form.setSpacing(10)
 
@@ -653,6 +785,20 @@ class MainWindow(QWidget):
         row.addStretch(1)
         form.addLayout(row)
 
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        row.addWidget(QLabel("Parallel scan connections"))
+        self.sp_workers = QSpinBox()
+        self.sp_workers.setRange(1, 16)
+        row.addWidget(self.sp_workers)
+        row.addSpacing(20)
+        row.addWidget(QLabel("Retries per folder"))
+        self.sp_retries = QSpinBox()
+        self.sp_retries.setRange(1, 10)
+        row.addWidget(self.sp_retries)
+        row.addStretch(1)
+        form.addLayout(row)
+
         self.chk_inotify = QCheckBox("Upload local changes instantly (watch the folder)")
         form.addWidget(self.chk_inotify)
         self.chk_deletes = QCheckBox("Also sync deletions (files deleted on one side get"
@@ -661,15 +807,95 @@ class MainWindow(QWidget):
         hint = QLabel("Off = a file deleted on one side stays safely on the other side.")
         hint.setObjectName("hint")
         form.addWidget(hint)
+        col.addWidget(box)
 
+        # --- selective sync
+        box, form = card("Selective sync")
+        form.setSpacing(10)
+        self.chk_selective = QCheckBox("Only sync selected folders (instead of everything)")
+        form.addWidget(self.chk_selective)
+        hint = QLabel("Checked folders are mirrored. Unchecked folders stay only in the "
+                      "cloud and are not downloaded. Deselecting never deletes local files.")
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        form.addWidget(hint)
+        self.sel_tree = QTreeWidget()
+        self.sel_tree.setHeaderHidden(True)
+        self.sel_tree.setMinimumHeight(180)
+        self.sel_tree.itemExpanded.connect(self._sel_expand)
+        form.addWidget(self.sel_tree)
+        row = QHBoxLayout()
+        btn_reload = QPushButton("Reload folder list")
+        btn_reload.clicked.connect(self._sel_load_root)
+        row.addWidget(btn_reload)
+        self.sel_hint = QLabel("")
+        self.sel_hint.setObjectName("hint")
+        row.addWidget(self.sel_hint, 1)
+        form.addLayout(row)
+        col.addWidget(box)
+
+        # --- exclusions
+        box, form = card("Exclusions")
+        form.setSpacing(10)
+        self.ed_exclude = QLineEdit()
+        self.ed_exclude.setPlaceholderText("*.tmp, .cache, node_modules, *.iso")
+        form.addWidget(self.ed_exclude)
+        hint = QLabel("Comma-separated patterns, matched against file names and paths. "
+                      "Matching files are neither uploaded nor downloaded.")
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        form.addWidget(hint)
+        col.addWidget(box)
+
+        # --- notifications + startup
+        box, form = card("Notifications and startup")
+        form.setSpacing(8)
+        self.chk_note_errors = QCheckBox("Notify me about sync errors")
+        self.chk_note_conflicts = QCheckBox("Notify me about conflicts (both sides changed)")
+        self.chk_note_done = QCheckBox("Notify me when a sync round finished with changes")
+        self.chk_autostart = QCheckBox("Start syncing automatically at login")
+        self.chk_starttray = QCheckBox("Start this app minimized in the tray")
+        for w in (self.chk_note_errors, self.chk_note_conflicts, self.chk_note_done,
+                  self.chk_autostart, self.chk_starttray):
+            form.addWidget(w)
+        row = QHBoxLayout()
+        btn_test = QPushButton("Test notification")
+        btn_test.clicked.connect(
+            lambda: self.tray and self.tray.showMessage(
+                "Proton Drive", "Notifications work.",
+                QSystemTrayIcon.MessageIcon.Information, 3000))
+        row.addWidget(btn_test)
+        self.start_hint = QLabel("")
+        self.start_hint.setObjectName("hint")
+        row.addWidget(self.start_hint, 1)
+        form.addLayout(row)
+        col.addWidget(box)
+
+        # --- appearance
+        box, form = card("Appearance")
         row = QHBoxLayout()
         row.setSpacing(8)
-        row.addWidget(QLabel("Parallel scan connections"))
-        self.sp_workers = QSpinBox()
-        self.sp_workers.setRange(1, 16)
-        row.addWidget(self.sp_workers)
+        row.addWidget(QLabel("Theme"))
+        self.cmb_theme = QComboBox()
+        self.cmb_theme.addItems(["System", "Light", "Dark"])
+        self.cmb_theme.currentIndexChanged.connect(self._theme_changed)
+        row.addWidget(self.cmb_theme)
         row.addStretch(1)
         form.addLayout(row)
+        col.addWidget(box)
+
+        # --- advanced
+        box, form = card("Advanced: extra environment variables")
+        form.setSpacing(8)
+        self.ed_extra = QPlainTextEdit()
+        self.ed_extra.setPlaceholderText("HTTPS_PROXY=http://proxy:3128\nFOO=bar")
+        self.ed_extra.setMinimumHeight(70)
+        form.addWidget(self.ed_extra)
+        hint = QLabel("One KEY=VALUE per line, passed to the sync service "
+                      "(e.g. a proxy). Lines you do not manage here are preserved.")
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        form.addWidget(hint)
         col.addWidget(box)
 
         btns = QHBoxLayout()
@@ -689,8 +915,73 @@ class MainWindow(QWidget):
         col.addStretch(1)
 
         outer.addWidget(scroll_page(inner))
-        self.load_settings()
         return page
+
+    # ---- details ------------------------------------------------------------
+
+    def _details_page(self) -> QWidget:
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(26, 22, 26, 18)
+        outer.setSpacing(14)
+        outer.addWidget(page_header("Details", "Service health, statistics and paths"))
+
+        inner = QWidget()
+        col = QVBoxLayout(inner)
+        col.setContentsMargins(0, 0, 6, 0)
+        col.setSpacing(14)
+
+        box, form = card("Service")
+        form.setSpacing(6)
+        self.det_service = QLabel("-")
+        self.det_cycle = QLabel("-")
+        self.det_entries = QLabel("-")
+        self.det_next = QLabel("-")
+        for lab in (self.det_service, self.det_cycle, self.det_entries, self.det_next):
+            lab.setWordWrap(True)
+            form.addWidget(lab)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        btn_restart = QPushButton("Restart service now")
+        btn_restart.clicked.connect(self.restart_service)
+        row.addWidget(btn_restart)
+        btn_open_conf = QPushButton("Open config file")
+        btn_open_conf.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(CONF_FILE))))
+        row.addWidget(btn_open_conf)
+        btn_journal = QPushButton("Copy log command")
+        btn_journal.clicked.connect(
+            lambda: (QApplication.clipboard().setText("journalctl --user -u proton-sync -f"),
+                     self.sel_hint.setText("copied")))
+        row.addWidget(btn_journal)
+        row.addStretch(1)
+        form.addLayout(row)
+        col.addWidget(box)
+
+        box, form = card("Paths")
+        form.setSpacing(4)
+        for title, value in (
+                ("Sync folder", self._local_path()),
+                ("Settings file", str(CONF_FILE)),
+                ("Health / state", str(STATE_DIR)),
+                ("Service unit", str(UNIT_FILE)),
+        ):
+            form.addWidget(QLabel(title))
+            form.addWidget(path_label(value))
+        col.addWidget(box)
+
+        box, form = card("Versions")
+        form.setSpacing(4)
+        self.det_versions = QLabel("-")
+        self.det_versions.setWordWrap(True)
+        form.addWidget(self.det_versions)
+        col.addWidget(box)
+
+        col.addStretch(1)
+        outer.addWidget(scroll_page(inner))
+        return page
+
+    # ---- about --------------------------------------------------------------
 
     def _about_page(self) -> QWidget:
         page = QWidget()
@@ -708,7 +999,7 @@ class MainWindow(QWidget):
         line = QHBoxLayout()
         line.setSpacing(14)
         big = QLabel()
-        big.setPixmap(svg_pixmap(self._icon_svg, 56))
+        big.setPixmap(svg_pixmap(find_icon(), 56))
         line.addWidget(big)
         texts = QVBoxLayout()
         texts.setSpacing(2)
@@ -729,8 +1020,8 @@ class MainWindow(QWidget):
         how = QLabel(
             "This window is a friendly front-end for the <b>official Proton Drive CLI</b> "
             "and the sync service that keeps <b>~/ProtonDrive</b> equal to your cloud. "
-            "Everything it does, you could do by hand in a terminal - it just does it for you, "
-            "with your settings from the Settings page.")
+            "Its feature set is modeled on what professional desktop cloud-drive clients "
+            "do - the code is original MIT-licensed work in this repository.")
         how.setObjectName("legal")
         how.setWordWrap(True)
         lay.addWidget(how)
@@ -738,14 +1029,15 @@ class MainWindow(QWidget):
 
         legal, ll = card("License and legal")
         txt = QLabel(
-            "<b>Unofficial.</b> Not affiliated with, endorsed, sponsored or supported by Proton AG. "
-            "This app talks to the official Proton Drive CLI (its payload is MIT, "
-            "Copyright (c) 2025-2026 Proton AG; source: github.com/ProtonDriveApps/sdk). "
-            "This repository's own scripts, including this GUI, are MIT (see LICENSE in the repo). "
-            "'Proton' and 'Proton Drive' are trademarks of Proton AG, used here only to identify "
-            "the product being packaged. No AUR, no third-party binaries: only official Proton "
-            "downloads and official-repo packages.<br><br>"
-            "Not legal advice.")
+            "<b>Unofficial.</b> Not affiliated with, endorsed, sponsored or supported by "
+            "Proton AG, Google LLC or Microsoft Corporation. This app talks to the official "
+            "Proton Drive CLI (its payload is MIT, Copyright (c) 2025-2026 Proton AG; source: "
+            "github.com/ProtonDriveApps/sdk). This repository's own scripts, including this "
+            "GUI, are MIT (see LICENSE in the repo). 'Proton' and 'Proton Drive' are "
+            "trademarks of Proton AG, used here only to identify the product being packaged. "
+            "References to other products are feature comparisons only - no code, assets or "
+            "configuration of those products is used. No AUR, no third-party binaries."
+            "<br><br>Not legal advice.")
         txt.setObjectName("legal")
         txt.setWordWrap(True)
         ll.addWidget(txt)
@@ -761,19 +1053,19 @@ class MainWindow(QWidget):
         self.tray = None
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return
-        self.tray = QSystemTrayIcon(tray_icon(svg_pixmap(self._icon_svg, 64), "unknown"), self)
+        self.tray = QSystemTrayIcon(tray_icon(svg_pixmap(find_icon(), 64), "unknown"), self)
         self.tray.setToolTip("Proton Drive")
         menu = QMenu()
-        self.act_show = menu.addAction("Show window")
-        self.act_show.triggered.connect(self.showNormal)
+        act_show = menu.addAction("Show window")
+        act_show.triggered.connect(self.show_normal)
         menu.addSeparator()
         self.act_sync = menu.addAction("Sync now")
         self.act_sync.triggered.connect(self.sync_now)
-        self.act_folder = menu.addAction("Open folder")
-        self.act_folder.triggered.connect(self.open_folder)
+        act_folder = menu.addAction("Open folder")
+        act_folder.triggered.connect(self.open_folder)
         menu.addSeparator()
         self.act_pause = menu.addAction("Pause sync")
-        self.act_pause.triggered.connect(self.toggle_pause)
+        self.act_pause.triggered.connect(self._pause_clicked)
         menu.addSeparator()
         act_quit = menu.addAction("Quit")
         act_quit.triggered.connect(self.quit_app)
@@ -783,14 +1075,456 @@ class MainWindow(QWidget):
 
     def _tray_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
-            self.showNormal()
-            self.raise_()
-            self.activateWindow()
+            self.show_normal()
 
-    # ------------------------------------------------------------------ actions
+    def show_normal(self):
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    # ------------------------------------------------------------------ status
 
     def _switch_page(self, row: int):
         self.stack.setCurrentIndex(max(0, row))
+        if row == 1:
+            self.render_changes()
+
+    @guard_slot
+    def refresh_status(self):
+        active = service_active()
+        health = read_health()
+        hstatus = health.get("status", "")
+        if not active:
+            status = "paused"
+        elif hstatus in ("ok", "syncing", "error"):
+            status = {"ok": "synced", "syncing": "syncing", "error": "error"}[hstatus]
+        else:
+            status = "unknown"
+        color = STATUS_COLORS.get(status, STATUS_COLORS["unknown"])
+
+        self.status_title.setText(STATUS_LABELS.get(status, status))
+        if status == "error":
+            detail = str(health.get("error") or "see Activity page for details")
+        elif status == "paused":
+            detail = "Sync is paused. Press Resume to continue."
+        elif status == "syncing":
+            started = str(health.get("started", ""))[11:19]
+            detail = f"checking and syncing since {started}" if started else "working..."
+        else:
+            detail = self._next_poll_text()
+        self.status_detail.setText(detail[:220])
+        self.status_title.setStyleSheet(f"color: {color};")
+
+        self.side_dot.setStyleSheet(
+            f"border-radius: 6px; background: {color}; min-width:12px; max-width:12px;"
+            "min-height:12px; max-height:12px;")
+        self.side_status.setText(STATUS_LABELS.get(status, status))
+
+        self.val_service.setText("running" if active else "stopped")
+        try:
+            ts = datetime.datetime.fromisoformat(str(health.get("ts")))
+            self.val_sync.setText(rel_time(ts) if hstatus == "ok" else "-")
+        except ValueError:
+            self.val_sync.setText("-")
+
+        self.btn_pause.setText(" Pause" if active else " Resume")
+        self.btn_pause.setIcon(self.style().standardIcon(
+            QStyle.StandardPixmap.SP_MediaPause if active else QStyle.StandardPixmap.SP_MediaPlay))
+        self.btn_sync.setEnabled(active)
+        self.act_sync.setEnabled(active)
+        self.act_pause.setText("Pause sync" if active else "Resume sync")
+
+        if self.tray:
+            self.tray.setIcon(tray_icon(svg_pixmap(find_icon(), 64), status))
+            self.tray.setToolTip(f"Proton Drive - {STATUS_LABELS.get(status, status)}")
+
+        self._poll_notifications(health)
+        self._prev_health_status = hstatus
+
+    def _next_poll_text(self) -> str:
+        health = read_health()
+        try:
+            nxt = datetime.datetime.fromisoformat(str(health.get("next_poll")))
+            secs = max(0, int((nxt - datetime.datetime.now(nxt.tzinfo)).total_seconds()))
+            return f"next check in ~{secs // 60}m {secs % 60:02d}s  ·  in sync"
+        except ValueError:
+            return "in sync"
+
+    @guard_slot
+    def update_countdown(self):
+        if self.status_title.text() == STATUS_LABELS["synced"]:
+            self.status_detail.setText(self._next_poll_text())
+        if self.stack.currentWidget() is not None and self.nav.currentRow() == 4:
+            self.det_next.setText("Next check: " + self._next_poll_text())
+
+    @guard_slot
+    def refresh_logs(self):
+        self._log_lines = journal_lines(400)
+        self.preview.setPlainText("\n".join(self._log_lines[-8:]) or "(no activity yet)")
+        self._parse_changes()
+        if self.chk_auto.isChecked():
+            self.render_logs()
+        if self.nav.currentRow() == 1:
+            self.render_changes()
+
+    def render_logs(self):
+        needle = self.log_filter.text().strip().lower()
+        lines = [ln for ln in self._log_lines if needle in ln.lower()] if needle else self._log_lines
+        at_bottom = (self.log_view.verticalScrollBar().value()
+                     >= self.log_view.verticalScrollBar().maximum() - 4)
+        self.log_view.setPlainText("\n".join(lines[-600:]))
+        if at_bottom or needle:
+            sb = self.log_view.verticalScrollBar()
+            sb.setValue(sb.maximum())
+
+    def copy_logs(self):
+        QApplication.clipboard().setText("\n".join(self._log_lines))
+
+    def _parse_changes(self):
+        changes = []
+        for ln in self._log_lines[-400:]:
+            body = journal_body(ln)
+            m = CHANGE_RE.search(body)
+            if not m:
+                continue
+            ts = journal_ts(ln)
+            kind, rest = m.group(1), m.group(2).strip()
+            if kind == "UPLOAD":
+                label, direction = "Uploaded", "up"
+            elif kind == "DOWNLOAD":
+                label, direction = "Downloaded", "down"
+                rest = re.sub(r"^dir\s+", "", rest)
+            elif kind == "MKDIR":
+                label, direction = "Folder created", "up"
+            elif kind == "TRASH":
+                label, direction = "Trashed", "other"
+            else:
+                label, direction = "Conflict", "warn"
+            rest = re.sub(r"\s*\(.*\)$", "", rest)
+            changes.append({"ts": ts, "label": label, "dir": direction, "path": rest})
+        self._changes = changes[-300:]
+
+    def render_changes(self):
+        kind = self.ch_kind.currentIndex()
+        needle = self.ch_filter.text().strip().lower()
+        self.ch_view.clear()
+        shown = 0
+        for c in reversed(self._changes):
+            if kind == 1 and c["dir"] != "up":
+                continue
+            if kind == 2 and c["dir"] != "down":
+                continue
+            if kind == 3 and c["dir"] not in ("other", "warn"):
+                continue
+            if needle and needle not in c["path"].lower():
+                continue
+            when = c["ts"].strftime("%d %b %H:%M:%S") if c["ts"] else "?"
+            item = QTreeWidgetItem([when, c["label"], c["path"]])
+            color = {"up": "#2e9e5b", "down": "#3b6fd4", "warn": "#d9822b",
+                     "other": "#8a90a0"}.get(c["dir"], "#8a90a0")
+            item.setForeground(1, QColor(color))
+            self.ch_view.addTopLevelItem(item)
+            shown += 1
+            if shown >= 300:
+                break
+        self.ch_count.setText(f"{shown} entries")
+
+    def copy_changes(self):
+        text = "\n".join(f"{c['ts'].strftime('%Y-%m-%d %H:%M:%S') if c['ts'] else ''}"
+                         f"\t{c['label']}\t{c['path']}" for c in reversed(self._changes))
+        QApplication.clipboard().setText(text)
+        self.ch_count.setText("copied")
+
+    @guard_slot
+    def refresh_counts(self):
+        root = Path(self.ed_local.text().strip() or CONF_DEFAULTS["PROTON_SYNC_LOCAL"]).expanduser()
+        files = 0
+        total = 0
+        try:
+            for dirpath, _dirnames, filenames in os.walk(root):
+                for f in filenames:
+                    try:
+                        total += os.path.getsize(os.path.join(dirpath, f))
+                        files += 1
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+        self.val_files.setText(f"{files:,}")
+        self.val_size.setText(f"{total / 1_048_576:,.0f} MiB")
+
+    @guard_slot
+    def refresh_details(self):
+        active = service_active()
+        health = read_health()
+        self.det_service.setText(
+            "Service: " + ("running" if active else "stopped")
+            + f"   ·   state: {health.get('status', '?')}")
+        bits = []
+        if "cycle_seconds" in health:
+            bits.append(f"last cycle took {health['cycle_seconds']} s")
+        if "actions" in health:
+            bits.append(f"{health['actions']} action(s), {health.get('failed', 0)} failed")
+        if "uploaded" in health or "downloaded" in health:
+            bits.append(f"last round: {health.get('uploaded', 0)} uploaded, "
+                        f"{health.get('downloaded', 0)} downloaded, "
+                        f"{health.get('conflicts', 0)} conflicts")
+        if "holds" in health:
+            bits.append(f"{health['holds']} unchanged")
+        self.det_cycle.setText("   ·   ".join(bits) or "-")
+        self.det_entries.setText(
+            f"counted: {health.get('remote_entries', '?')} remote / "
+            f"{health.get('local_entries', '?')} local / "
+            f"{health.get('state_records', '?')} state records")
+        self.det_next.setText("Next check: " + self._next_poll_text())
+        self.det_versions.setText(
+            f"GUI {GUI_VERSION}  ·  CLI {self._identity.get('version', '?')}  ·  "
+            f"Python {sys.version.split()[0]}  ·  Qt {self._qt_version()}")
+
+    @staticmethod
+    def _qt_version() -> str:
+        from PyQt6.QtCore import QT_VERSION_STR
+        return QT_VERSION_STR
+
+    # ------------------------------------------------------------------ actions
+
+    def sync_now(self):
+        if not service_active():
+            QMessageBox.information(self, "Sync paused",
+                                    "The sync service is paused. Press Resume first.")
+            return
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        WAKE_FILE.touch()
+        self.status_detail.setText("manual sync requested...")
+
+    def _local_path(self) -> str:
+        return self.ed_local.text().strip() if hasattr(self, "ed_local") \
+            else read_conf()["PROTON_SYNC_LOCAL"]
+
+    def open_folder(self):
+        root = Path(self._local_path() or CONF_DEFAULTS["PROTON_SYNC_LOCAL"]).expanduser()
+        root.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(root)))
+
+    def _browse(self):
+        start = self.ed_local.text().strip() or str(Path.home())
+        chosen = QFileDialog.getExistingDirectory(self, "Choose the folder to sync", start)
+        if chosen:
+            self.ed_local.setText(chosen)
+
+    def _pause_clicked(self):
+        if not service_active():
+            self.resume_now()
+            return
+        menu = QMenu(self)
+        menu.addAction("Pause for 15 minutes", lambda: self.pause_for(15))
+        menu.addAction("Pause for 1 hour", lambda: self.pause_for(60))
+        menu.addAction("Pause until I resume", lambda: self.pause_for(None))
+        menu.exec(self.btn_pause.mapToGlobal(QPoint(0, self.btn_pause.height())))
+
+    def pause_for(self, minutes):
+        systemctl("stop", JOURNAL_UNIT)
+        if minutes:
+            systemctl("stop", "proton-sync-autoresume.timer", "proton-sync-autoresume.service")
+            systemd_run(f"--on-active={minutes * 60}", "--unit=proton-sync-autoresume",
+                         shutil.which("systemctl") or "systemctl", "--user", "start", JOURNAL_UNIT)
+            self.status_detail.setText(f"paused for {minutes} minute(s)")
+        else:
+            systemctl("stop", "proton-sync-autoresume.timer", "proton-sync-autoresume.service")
+            self.status_detail.setText("paused")
+        QTimer.singleShot(600, self.refresh_status)
+
+    def resume_now(self):
+        systemctl("stop", "proton-sync-autoresume.timer", "proton-sync-autoresume.service")
+        systemctl("start", JOURNAL_UNIT)
+        QTimer.singleShot(600, self.refresh_status)
+
+    def restart_service(self):
+        systemctl("restart", JOURNAL_UNIT)
+        QTimer.singleShot(800, self.refresh_status)
+        self.det_service.setText("Service: restarting...")
+
+    # ------------------------------------------------------------------ settings
+
+    @guard_slot
+    def load_settings(self):
+        c = read_conf()
+        self.ed_local.setText(c["PROTON_SYNC_LOCAL"])
+        self.ed_remote.setText(c["PROTON_SYNC_REMOTE"])
+        self._remote_root = c["PROTON_SYNC_REMOTE"] or "/my-files"
+        self.sp_interval.setValue(int(c["PROTON_SYNC_INTERVAL"]))
+        self.chk_inotify.setChecked(c["PROTON_SYNC_INOTIFY"] == "1")
+        self.chk_deletes.setChecked(c["PROTON_SYNC_DELETES"] == "1")
+        self.sp_workers.setValue(int(c["PROTON_SYNC_WORKERS"]))
+        self.sp_retries.setValue(int(c["PROTON_SYNC_RETRIES"]))
+        self.ed_exclude.setText(c["PROTON_SYNC_EXCLUDE"])
+        self._selection = [s for s in c["PROTON_SYNC_SUBFOLDERS"].split(",") if s]
+        self.chk_selective.setChecked(bool(self._selection))
+        self.ed_extra.setPlainText("\n".join(read_conf_extras()))
+        self.save_hint.setText("")
+
+        # preferences (GUI-only, stored via QSettings)
+        theme = self._prefs.value("theme", "system")
+        self.cmb_theme.blockSignals(True)
+        self.cmb_theme.setCurrentText({"system": "System", "light": "Light",
+                                       "dark": "Dark"}.get(theme, "System"))
+        self.cmb_theme.blockSignals(False)
+        self.chk_starttray.setChecked(self._prefs.value("start_in_tray", False, type=bool))
+        self.chk_note_errors.setChecked(self._prefs.value("notify_errors", True, type=bool))
+        self.chk_note_conflicts.setChecked(self._prefs.value("notify_conflicts", True, type=bool))
+        self.chk_note_done.setChecked(self._prefs.value("notify_complete", False, type=bool))
+
+        exe = shutil.which("systemctl")
+        enabled = False
+        if exe:
+            try:
+                enabled = subprocess.run([exe, "--user", "is-enabled", "--quiet", JOURNAL_UNIT],
+                                         timeout=10).returncode == 0
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                pass
+        self.chk_autostart.blockSignals(True)
+        self.chk_autostart.setChecked(enabled)
+        self.chk_autostart.blockSignals(False)
+
+        self._sel_load_root()
+
+    def save_settings(self):
+        local = self.ed_local.text().strip()
+        if not local.startswith("/"):
+            QMessageBox.warning(self, "Invalid folder", "The local folder must be an absolute path.")
+            return
+        selection = self._derive_selection() if self.chk_selective.isChecked() else []
+        values = {
+            "PROTON_SYNC_LOCAL": local,
+            "PROTON_SYNC_REMOTE": self.ed_remote.text().strip() or "/my-files",
+            "PROTON_SYNC_INTERVAL": str(self.sp_interval.value()),
+            "PROTON_SYNC_DELETES": "1" if self.chk_deletes.isChecked() else "0",
+            "PROTON_SYNC_INOTIFY": "1" if self.chk_inotify.isChecked() else "0",
+            "PROTON_SYNC_WORKERS": str(self.sp_workers.value()),
+            "PROTON_SYNC_RETRIES": str(self.sp_retries.value()),
+            "PROTON_SYNC_SUBFOLDERS": ",".join(selection),
+            "PROTON_SYNC_EXCLUDE": self.ed_exclude.text().strip(),
+        }
+        extras = [l.strip() for l in self.ed_extra.toPlainText().splitlines()
+                  if l.strip() and not l.strip().startswith("#")
+                  and "=" in l and l.split("=", 1)[0].strip() not in CONF_DEFAULTS]
+        answer = QMessageBox.question(
+            self, "Save settings",
+            "Save and restart the sync service now?\n\n"
+            "(An upload or download in progress will simply continue in the next cycle.)")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        write_conf(values, extras)
+        outdated = True
+        try:
+            outdated = "EnvironmentFile" not in UNIT_FILE.read_text(encoding="utf-8")
+        except OSError:
+            pass
+        restarted = systemctl("restart", JOURNAL_UNIT)
+        if outdated:
+            self.save_hint.setText("saved, but the service unit is old - run "
+                                   "./scripts/install-sync.sh in the repo")
+        elif restarted:
+            self.save_hint.setText("saved - service restarted")
+        else:
+            self.save_hint.setText("saved, but the service could not be restarted")
+        QTimer.singleShot(800, self.refresh_status)
+
+    def _theme_changed(self, index: int):
+        name = ["system", "light", "dark"][max(0, min(2, index))]
+        self._prefs.setValue("theme", name)
+        self.apply_theme(name)
+
+    @staticmethod
+    def apply_theme(name: str):
+        app = QApplication.instance()
+        if not app:
+            return
+        dark = is_system_dark(app) if name == "system" else (name == "dark")
+        app.setStyleSheet(build_qss(dark))
+
+    # --- selective sync tree
+
+    def _sel_load_root(self):
+        self.sel_tree.clear()
+        c = read_conf()
+        self._remote_root = c["PROTON_SYNC_REMOTE"] or "/my-files"
+        self._selection = [s for s in c["PROTON_SYNC_SUBFOLDERS"].split(",") if s]
+        root = QTreeWidgetItem([f"My files  ({self._remote_root})"])
+        root.setData(0, Qt.ItemDataRole.UserRole, "")
+        root.setFlags(root.flags() | Qt.ItemFlag.ItemIsUserCheckable
+                      | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsAutoTristate)
+        root.setCheckState(0, Qt.CheckState.Unchecked if self._selection
+                           else Qt.CheckState.Checked)
+        self.sel_tree.addTopLevelItem(root)
+        placeholder = QTreeWidgetItem(root, ["Loading..."])
+        placeholder.setData(0, Qt.ItemDataRole.UserRole, None)
+        self.sel_hint.setText("loading folder list...")
+
+        w = Worker(lambda: fetch_remote_folders(self._remote_root, ""))
+        w.done.connect(lambda r: self._sel_populate(root, r))
+        self._workers.append(w)
+        w.start()
+
+    def _sel_populate(self, item, folders):
+        if isinstance(folders, Exception):
+            folders = []
+        item.takeChildren()
+        sel = set(self._selection)
+        for f in folders:
+            child = QTreeWidgetItem(item, [f["name"]])
+            child.setData(0, Qt.ItemDataRole.UserRole, f["rel"])
+            child.setData(0, Qt.ItemDataRole.UserRole + 1, True)
+            child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable
+                           | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsAutoTristate)
+            child.setCheckState(0, Qt.CheckState.Checked if f["rel"] in sel
+                                else Qt.CheckState.Unchecked)
+            QTreeWidgetItem(child, ["..."]).setData(0, Qt.ItemDataRole.UserRole, None)
+        if item is self.sel_tree.topLevelItem(0):
+            self.sel_hint.setText(f"{len(folders)} top-level folder(s) - expand to choose")
+
+    def _sel_expand(self, item):
+        if item.data(0, Qt.ItemDataRole.UserRole + 1):
+            return  # already loaded
+        rel = item.data(0, Qt.ItemDataRole.UserRole) or ""
+        w = Worker(lambda: fetch_remote_folders(self._remote_root, rel))
+        w.done.connect(lambda r, item=item: self._sel_populate(item, r))
+        self._workers.append(w)
+        w.start()
+
+    def _derive_selection(self) -> list:
+        root = self.sel_tree.topLevelItem(0)
+        if root is None:
+            return []
+        if root.checkState(0) == Qt.CheckState.Checked:
+            return []
+        out = []
+
+        def walk(item):
+            for i in range(item.childCount()):
+                c = item.child(i)
+                rel = c.data(0, Qt.ItemDataRole.UserRole)
+                if not rel:
+                    continue
+                if c.checkState(0) == Qt.CheckState.Checked:
+                    out.append(rel)
+                else:
+                    walk(c)
+
+        walk(root)
+        return out
+
+    # --- preference toggles
+
+    def _autostart_toggled(self, checked: bool):
+        exe = shutil.which("systemctl")
+        if not exe:
+            return
+        ok = subprocess.run([exe, "--user", "enable" if checked else "disable",
+                             JOURNAL_UNIT], capture_output=True, timeout=15).returncode == 0
+        self.start_hint.setText("starts at login" if ok else "could not change autostart")
+
+    # ------------------------------------------------------------------ account
 
     def load_identity(self):
         w = Worker(fetch_identity)
@@ -813,153 +1547,7 @@ class MainWindow(QWidget):
         ver = result.get("version", "?")
         self.side_version.setText("CLI " + ver)
         self.about_version.setText(f"GUI {GUI_VERSION}  ·  CLI {ver}")
-
-    def refresh_status(self):
-        active = service_active()
-        self._status = analyse(journal_lines(400), active)
-        st = self._status["status"]
-        color = STATUS_COLORS.get(st, STATUS_COLORS["unknown"])
-
-        self.status_title.setText(STATUS_LABELS.get(st, st))
-        if st == "error" and self._status.get("last_error"):
-            detail = self._status["last_error"]
-        elif st == "paused":
-            detail = "Service is stopped. Press Resume to continue syncing."
-        else:
-            detail = self._status.get("activity") or ""
-        self.status_detail.setText(detail[:200])
-        self.status_title.setStyleSheet(f"color: {color};")
-
-        self.side_dot.setStyleSheet(
-            f"border-radius: 6px; background: {color}; min-width:12px; max-width:12px;"
-            "min-height:12px; max-height:12px;")
-        self.side_status.setText(STATUS_LABELS.get(st, st))
-
-        self.val_service.setText("running" if active else "stopped")
-        self.val_sync.setText(rel_time(self._status.get("last_cycle_ts")))
-
-        self.btn_pause.setText(" Pause" if active else " Resume")
-        self.btn_pause.setIcon(self.style().standardIcon(
-            QStyle.StandardPixmap.SP_MediaPause if active else QStyle.StandardPixmap.SP_MediaPlay))
-        self.btn_sync.setEnabled(active)
-        self.act_sync.setEnabled(active)
-        self.act_pause.setText("Pause sync" if active else "Resume sync")
-
-        if self.tray:
-            self.tray.setIcon(tray_icon(svg_pixmap(self._icon_svg, 64), st))
-            self.tray.setToolTip(f"Proton Drive - {STATUS_LABELS.get(st, st)}")
-
-    def refresh_logs(self):
-        self._log_lines = journal_lines(400)
-        self.preview.setPlainText("\n".join(self._log_lines[-8:]) or "(no activity yet)")
-        if self.chk_auto.isChecked():
-            self.render_logs()
-
-    def render_logs(self):
-        needle = self.log_filter.text().strip().lower()
-        lines = [ln for ln in self._log_lines if needle in ln.lower()] if needle else self._log_lines
-        at_bottom = (self.log_view.verticalScrollBar().value()
-                     >= self.log_view.verticalScrollBar().maximum() - 4)
-        self.log_view.setPlainText("\n".join(lines[-600:]))
-        if at_bottom or needle:
-            sb = self.log_view.verticalScrollBar()
-            sb.setValue(sb.maximum())
-
-    def copy_logs(self):
-        QApplication.clipboard().setText("\n".join(self._log_lines))
-        self.save_hint.setText("log copied")
-
-    def refresh_counts(self):
-        root = Path(self.ed_local.text().strip() or CONF_DEFAULTS["PROTON_SYNC_LOCAL"]).expanduser()
-        files = 0
-        total = 0
-        try:
-            for dirpath, _dirnames, filenames in os.walk(root):
-                for f in filenames:
-                    try:
-                        total += os.path.getsize(os.path.join(dirpath, f))
-                        files += 1
-                    except OSError:
-                        pass
-        except OSError:
-            pass
-        self.val_files.setText(f"{files:,}")
-        self.val_size.setText(f"{total / 1_048_576:,.0f} MiB")
-
-    def sync_now(self):
-        if not service_active():
-            QMessageBox.information(self, "Sync paused",
-                                    "The sync service is paused. Press Resume first.")
-            return
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
-        WAKE_FILE.touch()
-        self.status_detail.setText("manual sync requested...")
-
-    def open_folder(self):
-        root = Path(self.ed_local.text().strip() or CONF_DEFAULTS["PROTON_SYNC_LOCAL"]).expanduser()
-        root.mkdir(parents=True, exist_ok=True)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(root)))
-
-    def toggle_pause(self):
-        if service_active():
-            systemctl("stop", JOURNAL_UNIT)
-        else:
-            systemctl("start", JOURNAL_UNIT)
-        QTimer.singleShot(600, self.refresh_status)
-
-    # ------------------------------------------------------------------ settings
-
-    def load_settings(self):
-        c = read_conf()
-        self.ed_local.setText(c["PROTON_SYNC_LOCAL"])
-        self.ed_remote.setText(c["PROTON_SYNC_REMOTE"])
-        self.sp_interval.setValue(int(c["PROTON_SYNC_INTERVAL"]))
-        self.chk_inotify.setChecked(c["PROTON_SYNC_INOTIFY"] == "1")
-        self.chk_deletes.setChecked(c["PROTON_SYNC_DELETES"] == "1")
-        self.sp_workers.setValue(int(c["PROTON_SYNC_WORKERS"]))
-        self.save_hint.setText("")
-
-    def save_settings(self):
-        local = self.ed_local.text().strip()
-        if not local.startswith("/"):
-            QMessageBox.warning(self, "Invalid folder", "The local folder must be an absolute path.")
-            return
-        values = {
-            "PROTON_SYNC_LOCAL": local,
-            "PROTON_SYNC_REMOTE": self.ed_remote.text().strip() or "/my-files",
-            "PROTON_SYNC_INTERVAL": str(self.sp_interval.value()),
-            "PROTON_SYNC_DELETES": "1" if self.chk_deletes.isChecked() else "0",
-            "PROTON_SYNC_INOTIFY": "1" if self.chk_inotify.isChecked() else "0",
-            "PROTON_SYNC_WORKERS": str(self.sp_workers.value()),
-        }
-        answer = QMessageBox.question(
-            self, "Save settings",
-            "Save and restart the sync service now?\n\n"
-            "(An upload or download in progress will simply continue in the next cycle.)")
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-        write_conf(values)
-        outdated = True
-        try:
-            outdated = "EnvironmentFile" not in UNIT_FILE.read_text(encoding="utf-8")
-        except OSError:
-            pass
-        restarted = systemctl("restart", JOURNAL_UNIT)
-        if outdated:
-            self.save_hint.setText("saved, but the service unit is old - run "
-                                   "./scripts/install-sync.sh in the repo")
-        elif restarted:
-            self.save_hint.setText("saved - service restarted")
-        else:
-            self.save_hint.setText("saved, but the service could not be restarted")
-        QTimer.singleShot(800, self.refresh_status)
-
-    def _browse(self):
-        d = QFileDialog.getExistingDirectory(self, "Choose sync folder", self.ed_local.text())
-        if d:
-            self.ed_local.setText(d)
-
-    # ------------------------------------------------------------------ account
+        self.refresh_details()
 
     def login_terminal(self):
         cli = resolve_cli()
@@ -987,6 +1575,43 @@ class MainWindow(QWidget):
             subprocess.run([cli, "auth", "logout"], capture_output=True, timeout=120)
         self.load_identity()
 
+    # ------------------------------------------------------------------ notifications
+
+    def _cool_ok(self, key: str, seconds: int = 30) -> bool:
+        now = datetime.datetime.now().timestamp()
+        if now - self._notify_cool.get(key, 0) < seconds:
+            return False
+        self._notify_cool[key] = now
+        return True
+
+    def _notify(self, title: str, msg: str):
+        if self.tray:
+            self.tray.showMessage(title, msg, QSystemTrayIcon.MessageIcon.Information, 4000)
+
+    def _poll_notifications(self, health: dict):
+        lines = journal_lines(60)
+        for ln in lines:
+            ts = journal_ts(ln)
+            if ts is None or ts <= self._last_seen_ts:
+                continue
+            self._last_seen_ts = ts
+            body = journal_body(ln)
+            if "CONFLICT" in body and self.chk_note_conflicts.isChecked() \
+                    and self._cool_ok("conflict"):
+                self._notify("Proton Drive - conflict",
+                             re.sub(r"^CONFLICT\s+", "", body)[:150])
+            elif ("ERROR" in body or "FAILED" in body) and self.chk_note_errors.isChecked() \
+                    and self._cool_ok("error"):
+                self._notify("Proton Drive - sync error", body[:150])
+        # finished round with real work done
+        if (self._prev_health_status == "syncing" and health.get("status") == "ok"
+                and self.chk_note_done.isChecked()
+                and (health.get("uploaded", 0) or health.get("downloaded", 0))
+                and self._cool_ok("done", 60)):
+            self._notify("Proton Drive - synced",
+                         f"{health.get('uploaded', 0)} uploaded, "
+                         f"{health.get('downloaded', 0)} downloaded")
+
     # ------------------------------------------------------------------ window
 
     def quit_app(self):
@@ -996,8 +1621,7 @@ class MainWindow(QWidget):
         QApplication.quit()
 
     def closeEvent(self, event: QCloseEvent):  # noqa: N802 - Qt naming
-        if (not self._quitting and self.tray
-                and QSystemTrayIcon.isSystemTrayAvailable()):
+        if not self._quitting and self.tray and QSystemTrayIcon.isSystemTrayAvailable():
             event.ignore()
             self.hide()
             if not self._tray_warned:
@@ -1021,8 +1645,10 @@ def main() -> int:
     app.setApplicationName("Proton Drive")
     app.setOrganizationName("ProtonDriveCLI")
     app.setStyle("Fusion")
-    dark = app.palette().color(QPalette.ColorRole.Window).lightness() < 128
-    app.setStyleSheet(build_qss(dark) + f"QPushButton#primary:hover {{ background: #5b3ce0; }}")
+
+    prefs = QSettings("ProtonDriveCLI", "ProtonDriveGUI")
+    theme = prefs.value("theme", "system")
+    MainWindow.apply_theme(theme if theme in ("system", "light", "dark") else "system")
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     lock = QLockFile(str(LOCK_FILE))
@@ -1031,9 +1657,24 @@ def main() -> int:
         return 0
 
     win = MainWindow()
-    win.show()
+    # preferences that act immediately
+    win.chk_autostart.toggled.connect(win._autostart_toggled)
+    win.chk_starttray.toggled.connect(
+        lambda v: win._prefs.setValue("start_in_tray", v))
+    for chk, key in ((win.chk_note_errors, "notify_errors"),
+                     (win.chk_note_conflicts, "notify_conflicts"),
+                     (win.chk_note_done, "notify_complete")):
+        chk.toggled.connect(lambda v, k=key: win._prefs.setValue(k, v))
+
+    if smoke or not prefs.value("start_in_tray", False, type=bool):
+        win.show()
+    else:
+        win.tray and win.tray.showMessage(
+            "Proton Drive", "Started in the tray - click the icon to open.",
+            QSystemTrayIcon.MessageIcon.Information, 3000)
+
     if smoke:
-        QTimer.singleShot(1500, app.quit)
+        QTimer.singleShot(2500, app.quit)
     rc = app.exec()
     lock.unlock()
     return rc
