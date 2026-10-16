@@ -1,0 +1,130 @@
+name: Check upstream & release
+
+# Future-proofing: this workflow keeps the repository tracking Proton's CLI.
+#
+#   schedule        every 6 hours - detects a new upstream release, rewrites
+#                   upstream.lock, builds both AppImages and publishes a
+#                   GitHub release tagged v<version>
+#   workflow_dispatch  manual run; set force_rebuild to rebuild + re-upload
+#                   assets for the current version
+#   push to main    rebuilds whenever the packaging itself changes
+#   pull_request    validation only (build + metadata checks, no publish)
+#
+# Everything the build needs is data-driven from upstream.lock, which
+# scripts/check-upstream.sh refreshes by parsing Proton's download page.
+
+on:
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: 'Rebuild and re-upload release assets even if they already exist'
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - upstream.lock
+      - build.sh
+      - release-notes.md.tmpl
+      - 'src/**'
+      - 'scripts/**'
+      - '.github/workflows/release.yml'
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends librsvg2-bin desktop-file-utils appstream
+
+      - name: Cache Proton binaries and build tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            tools
+            download
+          key: build-${{ runner.os }}-${{ hashFiles('upstream.lock') }}
+          restore-keys: |
+            build-${{ runner.os }}-
+
+      - name: Check Proton's download page for a new release
+        id: upstream
+        run: ./scripts/check-upstream.sh
+
+      - name: Commit the refreshed upstream.lock
+        if: steps.upstream.outputs.updated == 'true' && github.event_name != 'pull_request'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add upstream.lock
+          git commit -m "chore: bump Proton Drive CLI to ${{ steps.upstream.outputs.version }} [skip ci]"
+          git push
+
+      - name: Build AppImages (x86_64 + aarch64)
+        run: ./build.sh
+
+      - name: Generate release notes
+        run: ./scripts/release-notes.sh "${{ steps.upstream.outputs.version }}" > "$RUNNER_TEMP/release-notes.md"
+
+      - name: Publish the GitHub release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE: ${{ inputs.force_rebuild || false }}
+          VERSION: ${{ steps.upstream.outputs.version }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          NOTES="$RUNNER_TEMP/release-notes.md"
+          ASSETS=(dist/ProtonDrive-CLI-"${VERSION}"-x86_64.AppImage
+                  dist/ProtonDrive-CLI-"${VERSION}"-aarch64.AppImage
+                  dist/SHA256SUMS)
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            existing="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+            missing=0
+            for name in ProtonDrive-CLI-"${VERSION}"-x86_64.AppImage \
+                        ProtonDrive-CLI-"${VERSION}"-aarch64.AppImage \
+                        SHA256SUMS; do
+              grep -qxF "$name" <<<"$existing" || missing=1
+            done
+            if [ "$missing" -eq 0 ] && [ "$FORCE" != "true" ]; then
+              echo "Release $TAG already has every asset; nothing to upload."
+              echo "Re-run with force_rebuild to replace them."
+            else
+              gh release upload "$TAG" "${ASSETS[@]}" --clobber
+              gh release edit "$TAG" --notes-file "$NOTES"
+              echo "Refreshed assets and notes on $TAG."
+            fi
+          else
+            gh release create "$TAG" \
+              --title "Proton Drive CLI ${VERSION} — AppImage (x86_64 + aarch64)" \
+              --notes-file "$NOTES" \
+              "${ASSETS[@]}"
+            echo "Created release $TAG."
+          fi
+
+      - name: Keep the built artifacts for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: appimages-${{ steps.upstream.outputs.version }}
+          path: |
+            dist/*.AppImage
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7

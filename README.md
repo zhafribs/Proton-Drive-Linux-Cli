@@ -63,27 +63,74 @@ metadata, all of which validate cleanly.
 ## Rebuilding / upgrading
 
 ```bash
-./build.sh              # both architectures
-./build.sh x86_64       # one architecture
-VERSION=0.9.1 ./build.sh  # a newer upstream release (update the SHA-512 table first)
+./scripts/check-upstream.sh   # sync upstream.lock with Proton's latest release
+./build.sh                    # both architectures
+./build.sh x86_64             # one architecture
 ```
 
+The version and its published checksums live in **`upstream.lock`** — you never
+edit numbers by hand. `check-upstream.sh` parses Proton's download page,
+rewrites the lock when a new release appears (or `--dry-run` to only report,
+exit 3 = update available), and `build.sh` reads it and **aborts if the SHA-512
+of the downloaded binary does not match**. A corrupt or incomplete lock fails
+the build with a message telling you to run `check-upstream.sh`.
+
 `build.sh` downloads `appimagetool` and the aarch64 runtime into `tools/` on
-first run, fetches the upstream binaries, **aborts if the SHA-512 does not match
-Proton's published checksum**, then builds and validates.
+first run, fetches the upstream binaries, verifies them, then builds and
+validates.
 
 Dependencies (all non-root, nothing is installed system-wide):
 
-* `wget`, `bash`, `coreutils` — likely already present
+* `wget` or `curl`, `bash`, `coreutils` — likely already present
 * `rsvg-convert` (`pacman -S librsvg` / `apt install librsvg2-bin` / `dnf install librsvg2-tools`) — renders the icon
 * `desktop-file-validate` (`desktop-file-utils`) and `appstreamcli` (`appstream`) — optional, used for validation
 
 No `sudo` and no `mksquashfs` needed: appimagetool ships its own squashfs builder.
 
+## Automatic updates (future-proofing)
+
+The repository tracks upstream on its own — `.github/workflows/release.yml`:
+
+| Trigger | What happens |
+| --- | --- |
+| **schedule** (every 6 h) | Runs `check-upstream.sh`. If Proton shipped a new CLI: rewrites `upstream.lock`, commits it with `[skip ci]`, builds both AppImages, renders notes from `release-notes.md.tmpl` and **publishes a release tagged `v<new version>`**. If nothing changed: validation build, no commit, no release churn. |
+| **workflow_dispatch** (manual) | Same, plus a `force_rebuild` input that re-uploads assets and refreshes notes for the current version. |
+| **push to main** (packaging changed) | Rebuilds and fills in any missing release assets. |
+| **pull_request** | Validation only — builds and checks metadata, never commits or publishes. |
+
+Design notes:
+
+* **Idempotent**: the release step checks whether all three assets already
+  exist and skips them, so a green run does not silently replace the AppImages
+  people already downloaded (their hashes change on every rebuild).
+* **Version-safe**: the tag always comes from `upstream.lock`, which only
+  changes when Proton's page changes, so one release per upstream version.
+* **Fails loudly**: if Proton restructures the page so nothing parses,
+  `check-upstream.sh` exits 2 and the scheduled run turns red (GitHub emails
+  you) instead of silently releasing a stale build.
+* **Caching**: `tools/` and `download/` are cached, keyed on `upstream.lock`,
+  so routine runs only pay for the squashfs build.
+* **Caveat**: GitHub disables scheduled workflows after ~60 days without
+  repository activity. A commit/release interaction resets that clock; if the
+  badge ever says "workflow disabled", re-enable it under the Actions tab.
+
+Adding a future platform (e.g. Proton's `linux-x64-musl` build) = add
+`SHA512_LINUX_X64_MUSL=…` to `upstream.lock`, map it in `APPIMAGE_ARCH` in
+`build.sh`, and add it to `REQUIRED_PLATFORMS` in
+`scripts/check-upstream.sh` — the checker already warns about upstream
+platforms it does not package, so new ones are visible in every run log.
+
+Local equivalent of CI: `./scripts/check-upstream.sh && ./build.sh && ./scripts/release-notes.sh`.
+
 ## Project layout
 
 ```
-build.sh          reproducible build script (download → verify → package → validate)
+build.sh          reproducible build script (download -> verify -> package -> validate)
+upstream.lock     VERSION + Proton's published SHA-512s - written by check-upstream.sh only
+scripts/check-upstream.sh   parse proton.me, refresh upstream.lock (CI runs this)
+scripts/release-notes.sh    render release-notes.md.tmpl for the built artifacts
+release-notes.md.tmpl       release notes template (hashes filled in at build time)
+.github/workflows/release.yml  scheduled upstream check + build + publish
 install-command.sh  symlink the built AppImage into ~/.local/bin
 LICENSE           MIT, this project's own scripts
 THIRD_PARTY_NOTICES.md  Proton's MIT payload license, trademarks, tooling credits

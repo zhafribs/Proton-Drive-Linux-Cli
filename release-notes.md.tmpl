@@ -1,0 +1,96 @@
+# Proton Drive CLI {{VERSION}} — AppImage (x86_64 + aarch64)
+
+> **Unofficial.** This packaging is **not created by, affiliated with, endorsed,
+> sponsored or otherwise supported by Proton AG.** "Proton Drive" and the
+> "Proton Drive CLI" are trademarks of Proton AG.
+
+Portable AppImages of the **official Proton Drive CLI** published by Proton at
+<{{PAGE_URL}}> — the unmodified upstream binary, verified against the SHA-512
+checksums Proton publishes before it is wrapped.
+
+**Upstream version:** `{{VERSION}}` (released {{RELEASE_DATE}})
+**Built:** {{BUILD_DATE}}
+
+## Download
+
+| Asset | Arch | SHA-256 |
+| --- | --- | --- |
+| `ProtonDrive-CLI-{{VERSION}}-x86_64.AppImage` | x86_64 (Intel/AMD) | `{{SHA256_X86_64}}` |
+| `ProtonDrive-CLI-{{VERSION}}-aarch64.AppImage` | aarch64 (ARM64) | `{{SHA256_AARCH64}}` |
+| `SHA256SUMS` | checksums for both | — |
+
+Verify: `sha256sum -c SHA256SUMS`
+
+## Run it
+
+```bash
+chmod +x ProtonDrive-CLI-{{VERSION}}-x86_64.AppImage
+./ProtonDrive-CLI-{{VERSION}}-x86_64.AppImage --version
+./ProtonDrive-CLI-{{VERSION}}-x86_64.AppImage --help
+./ProtonDrive-CLI-{{VERSION}}-x86_64.AppImage auth login   # first run (opens your browser)
+```
+
+Put it on your `PATH` as `proton-drive`:
+
+```bash
+ln -s "$(pwd)/ProtonDrive-CLI-{{VERSION}}-x86_64.AppImage" ~/.local/bin/proton-drive
+```
+
+Both binaries need only **glibc ≥ 2.17**, so one file covers:
+
+* **Arch / CachyOS** — works out of the box with `fuse2` installed
+* **Debian / Ubuntu** — `sudo apt install libfuse2t64` (or `libfuse2` on older releases)
+* **Fedora** — `sudo dnf install fuse-libs`
+
+No FUSE (containers, restricted systems):
+`APPIMAGE_EXTRACT_AND_RUN=1 ./ProtonDrive-CLI-{{VERSION}}-x86_64.AppImage --help`
+
+Typical commands: `auth login`, `filesystem list /`, `filesystem upload <local> /`,
+`filesystem download <remote> <dir>`, `sharing set-url …`, `photo timeline`,
+`takeout run <dir>`. Full list: `--help`.
+
+Desktop menu entry: install AppImageLauncher or run `appimaged` — the AppImage
+ships a `Terminal=true` desktop file, 256/512 px icons and AppStream metadata.
+
+## Integrity of the payload
+
+`build.sh` downloads straight from `proton.me` and **aborts if the SHA-512 does
+not match Proton's published checksum**:
+
+* `linux-x64` → `{{SHA512_LINUX_X64}}`
+* `linux-arm64` → `{{SHA512_LINUX_ARM64}}`
+
+No Proton binary is committed to the repository — `download/`, `dist/`,
+`tools/` and `build/` are git-ignored. The packaged bytes are identical to
+Proton's downloads; nothing is patched, repacked or re-signed.
+
+## License
+
+* **This project's scripts and metadata** (build.sh, AppRun, desktop/AppStream
+  files, icon source): MIT — see [`LICENSE`](https://github.com/{{REPO}}/blob/main/LICENSE).
+* **The packaged Proton Drive CLI payload**: **MIT,
+  `Copyright (c) 2025-2026 Proton AG`**, source at
+  <https://github.com/ProtonDriveApps/sdk>. MIT requires the notice to travel
+  with copies, so it is installed inside every AppImage at
+  `usr/share/licenses/proton-drive/LICENSE`.
+* **Trademarks**: Proton's marks and logos belong to Proton AG and their Terms
+  of Service grant no trademark license. The name is used only to identify the
+  product being packaged; the icon glyph is from simple-icons (CC0 file).
+* Details: [`THIRD_PARTY_NOTICES.md`](https://github.com/{{REPO}}/blob/main/THIRD_PARTY_NOTICES.md).
+  Not legal advice.
+
+## Build it yourself
+
+```bash
+git clone https://github.com/{{REPO}}.git
+cd Proton-Drive-Linux-Cli
+./scripts/check-upstream.sh   # sync with Proton's latest published version
+./build.sh                    # both architectures
+```
+
+No `sudo` needed; `appimagetool` is downloaded automatically. Dependencies:
+`wget`, `rsvg-convert` (librsvg), optionally `desktop-file-validate` and
+`appstreamcli` for validation.
+
+This repository checks Proton's download page automatically and publishes a new
+release whenever upstream ships one — see "Automatic updates" in the README.

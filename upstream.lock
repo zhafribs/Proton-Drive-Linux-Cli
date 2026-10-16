@@ -1,0 +1,17 @@
+# upstream.lock - single source of truth for the packaged Proton Drive CLI.
+#
+# DO NOT EDIT BY HAND. scripts/check-upstream.sh parses
+# https://proton.me/download/drive/cli/index.html and rewrites this file, and
+# .github/workflows/release.yml runs that automatically on a schedule.
+# build.sh refuses to package anything whose SHA-512 differs from the values
+# recorded here, which are themselves copied from Proton's published table.
+#
+# To add another upstream platform (e.g. linux-x64-musl), add a
+# SHA512_<PLATFORM> line (dashes become underscores, upper-case) and a matching
+# entry in APPIMAGE_ARCH in build.sh.
+PAGE_URL=https://proton.me/download/drive/cli/index.html
+DOWNLOAD_BASE=https://proton.me/download/drive/cli
+VERSION=0.9.0
+RELEASE_DATE=2026-10-05
+SHA512_LINUX_X64=3533025ba69ae112b64e3e01fbcc1ad0688136a4043f6cf6a72886967d85fdcd9ec235479c2e113171614be5225bfba93427509a05ca5aa6071d924fa7e91ca8
+SHA512_LINUX_ARM64=c8d5a6b174e57f06d05cb5483400b9963faf58e743b6b33706bb73ecff718047ffce6b439994255b94b5b226b90d2e91bef7418ec96c1c3f5d8bf39b6cd01321

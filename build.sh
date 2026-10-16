@@ -7,20 +7,24 @@
 # portable AppImages with appimagetool.
 #
 # Usage:
-#   ./build.sh                 # build both architectures
-#   ./build.sh x86_64          # build one architecture
-#   VERSION=0.9.1 ./build.sh   # build a different upstream version
+#   ./build.sh                   # build both architectures
+#   ./build.sh x86_64            # build one architecture
+#   ./scripts/check-upstream.sh  # refresh upstream.lock first (or let CI do it)
+#
+# The upstream version and the SHA-512 checksums Proton publishes live in
+# upstream.lock. Never edit that file by hand - scripts/check-upstream.sh
+# parses proton.me and rewrites it, so verification against Proton's own
+# published checksums stays automatic as new releases appear.
 #
 set -euo pipefail
 
-VERSION="${VERSION:-0.9.0}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$ROOT/src"
 DOWNLOAD="$ROOT/download"
 TOOLS="$ROOT/tools"
 BUILD="$ROOT/build"
 DIST="$ROOT/dist"
-BASE_URL="https://proton.me/download/drive/cli/${VERSION}"
+LOCK="$ROOT/upstream.lock"
 APPIMAGE_NAME="ProtonDrive-CLI"
 # AppStream/desktop ids: appimagetool requires the metainfo file to be named
 # "<desktop-basename>.appdata.xml", and appstreamcli requires that basename to
@@ -28,13 +32,6 @@ APPIMAGE_NAME="ProtonDrive-CLI"
 # all share this value.
 DESKTOP_ID="io.github.zhafrisbs.ProtonDriveCLI.desktop"
 METAINFO_ID="io.github.zhafrisbs.ProtonDriveCLI.appdata.xml"
-
-# SHA-512 checksums published by Proton at https://proton.me/download/drive/cli/index.html
-# Key = upstream platform id, value = expected SHA-512.
-declare -A UPSTREAM_SHA512=(
-    [linux-x64]="3533025ba69ae112b64e3e01fbcc1ad0688136a4043f6cf6a72886967d85fdcd9ec235479c2e113171614be5225bfba93427509a05ca5aa6071d924fa7e91ca8"
-    [linux-arm64]="c8d5a6b174e57f06d05cb5483400b9963faf58e743b6b33706bb73ecff718047ffce6b439994255b94b5b226b90d2e91bef7418ec96c1c3f5d8bf39b6cd01321"
-)
 
 # upstream platform -> AppImage architecture, output suffix
 declare -A APPIMAGE_ARCH=(
@@ -51,6 +48,42 @@ esac
 
 log() { printf '\033[1;35m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+
+# lock_get KEY  -> value of KEY=VALUE in upstream.lock ('' if absent)
+lock_get() {
+    [ -f "$LOCK" ] || return 0
+    awk -F= -v key="$1" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$LOCK"
+}
+
+# SHA512 key for a platform id: linux-x64 -> SHA512_LINUX_X64
+sha512_key() {
+    printf 'SHA512_%s' "$1" | tr '[:lower:]-' '[:upper:]_'
+}
+
+# Load VERSION / checksums / URLs from upstream.lock into the globals used below.
+load_upstream() {
+    [ -f "$LOCK" ] || die "upstream.lock not found - run scripts/check-upstream.sh"
+    VERSION="$(lock_get VERSION)"
+    RELEASE_DATE="$(lock_get RELEASE_DATE)"
+    PAGE_URL="$(lock_get PAGE_URL)"
+    DOWNLOAD_BASE="$(lock_get DOWNLOAD_BASE)"
+    [ -n "$VERSION" ]           || die "upstream.lock is missing VERSION - run scripts/check-upstream.sh"
+    [ -n "$DOWNLOAD_BASE" ]     || die "upstream.lock is missing DOWNLOAD_BASE - run scripts/check-upstream.sh"
+    [ -n "$PAGE_URL" ]          || PAGE_URL="https://proton.me/download/drive/cli/index.html"
+    [ -n "$RELEASE_DATE" ]      || RELEASE_DATE="unknown"
+    BASE_URL="${DOWNLOAD_BASE}/${VERSION}"
+
+    declare -gA UPSTREAM_SHA512=()
+    local platform key value
+    for platform in "${!APPIMAGE_ARCH[@]}"; do
+        key="$(sha512_key "$platform")"
+        value="$(lock_get "$key")"
+        [ -n "$value" ] || die "upstream.lock is missing $key - run scripts/check-upstream.sh"
+        UPSTREAM_SHA512[$platform]="$value"
+    done
+}
+
+load_upstream
 
 fetch_tool() {
     mkdir -p "$TOOLS"
