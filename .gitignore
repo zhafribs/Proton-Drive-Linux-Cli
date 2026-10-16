@@ -14,3 +14,6 @@ squashfs-root/
 # Editor/OS noise
 .DS_Store
 *.swp
+
+# python bytecode (proton-sync.py)
+__pycache__/
