@@ -36,6 +36,38 @@ Typical commands: `auth login`, `filesystem list /`, `filesystem upload <local> 
 `filesystem download <remote> <local-folder>`, `sharing set-url ...`,
 `photo timeline`, `takeout run <folder>`. Full list: `--help`.
 
+## Folder sync (Google Drive-style)
+
+Want your Drive as a normal folder in the file manager instead of typing
+commands? The repo ships a two-way sync built **only on the official CLI** —
+no AUR, no third-party binaries, nothing but this project's own MIT scripts:
+
+```bash
+./scripts/install-sync.sh     # installs a systemd *user* service (no sudo)
+```
+
+That keeps `~/ProtonDrive` in sync with the `/my-files` section of your Drive:
+
+* **local edits upload within seconds** (inotify wakes the sync immediately),
+  remote changes appear within 5 minutes (poll)
+* runs at every login, restarts on failure, logs to the journal
+  (`journalctl --user -u proton-sync -f`)
+* dry run first: `python3 scripts/proton-sync.py --dry-run`
+
+Safety rules baked in:
+
+* **never deletes anything** (opt in with `PROTON_SYNC_DELETES=1`: local
+  deletions go to Proton's trash, remote deletions to the desktop trash)
+* deleting a file on one side keeps it on the other — no surprise data loss
+* conflicts keep **both** versions (`name (conflict <timestamp>)`), and uploads
+  use `create-new-revision`, so the old version stays in Proton's history
+* Proton Docs/Sheets cannot be downloaded by the CLI; they are skipped
+
+Knobs: `PROTON_SYNC_LOCAL`, `PROTON_SYNC_REMOTE`, `PROTON_SYNC_INTERVAL`
+(seconds, default 300), `PROTON_SYNC_DELETES`, `PROTON_SYNC_WORKERS`,
+`PROTON_SYNC_INOTIFY=0` (disable the fast path). Uninstall:
+`./scripts/install-sync.sh uninstall` (folder and state are kept).
+
 ## Distro notes
 
 Both upstream binaries require only **glibc ≥ 2.17**, so the same AppImage runs
@@ -129,6 +161,8 @@ build.sh          reproducible build script (download -> verify -> package -> va
 upstream.lock     VERSION + Proton's published SHA-512s - written by check-upstream.sh only
 scripts/check-upstream.sh   parse proton.me, refresh upstream.lock (CI runs this)
 scripts/release-notes.sh    render release-notes.md.tmpl for the built artifacts
+scripts/proton-sync.py      two-way folder sync on top of the official CLI (stdlib only)
+scripts/install-sync.sh     install/uninstall the sync as a systemd user service
 release-notes.md.tmpl       release notes template (hashes filled in at build time)
 .github/workflows/release.yml  scheduled upstream check + build + publish
 install-command.sh  symlink the built AppImage into ~/.local/bin
@@ -185,6 +219,11 @@ equal the component id. Change the string in `build.sh` (`DESKTOP_ID`,
   takes binaries straight from Proton.
 
 ## The GUI question
+
+**Short answer for daily use: the folder sync** (see
+[Folder sync](#folder-sync-google-drive-style) above) gives you a `~/ProtonDrive`
+folder in Dolphin/Nautilus — drag & drop, double-click to open, just like a
+local drive — on top of the official CLI only.
 
 Proton ships **no Linux desktop app** — only this CLI. For a Linux GUI, **no
 reverse engineering is needed**: Proton publishes the sources of its clients at
