@@ -1,28 +1,17 @@
 #!/usr/bin/env python3
 """
-proton-sync-gui.py - "Proton Drive" desktop app for Linux (unofficial), v2.
+proton-sync-gui.py - "Proton Drive" desktop app for Linux (unofficial), v3.
 
-Part of Proton-Drive-Linux-Cli (MIT). A Qt6 front-end for the two-way folder
-sync service (proton-sync.py) on top of the OFFICIAL Proton Drive CLI.
+Part of Proton-Drive-Linux-Cli (MIT). A friendly Qt6 desktop app for the
+two-way folder sync (proton-sync.py) on top of the OFFICIAL Proton Drive CLI.
 
-Design ideas are taken from how professional desktop cloud-drive clients
-(Proton Drive on Windows, Google Drive on Windows) behave and which settings
-they offer - the implementation is 100% original MIT-licensed code in this
-repository; no code, assets or trademarks of those products are used.
+This v3 is designed for everyday users, not terminal people: a big friendly
+status hero, plain language, one obvious button per job. All technical knobs
+(service, retries, logs, paths) live behind "Advanced" and the About page.
 
-Pages
------
-  Dashboard  live status, next-check countdown, account, file count/size,
-             Sync now / Open folder / Pause (15 min, 1 hour, until resumed)
-  Changes    parsed transfer history (uploaded / downloaded / conflicts)
-  Activity   raw live service log with filter
-  Settings   sync, selective sync (folder picker), exclusions, notifications,
-             startup, appearance, advanced environment
-  Details    service/health statistics, paths, quick actions
-  About      versions, links, license + legal notes
-
-The engine writes ~/.local/state/proton-sync/health.json every cycle; the
-dashboard reads that (instant) instead of parsing the journal each tick.
+The design takes ideas from how polished desktop cloud-drive apps look and
+behave; the implementation is 100% original MIT-licensed code in this
+repository - no code, assets or trademarks of other products are used.
 
 Run:  python3 scripts/proton-sync-gui.py      (or the proton-drive-gui shim)
 """
@@ -39,19 +28,22 @@ import sys
 import traceback
 from pathlib import Path
 
-from PyQt6.QtCore import (QLockFile, QPoint, QSettings, QUrl, Qt, QThread,
-                          QTimer, pyqtSignal as Signal)
-from PyQt6.QtGui import (QCloseEvent, QColor, QDesktopServices, QIcon,
-                         QPainter, QPalette, QPen, QPixmap)
+from PyQt6.QtCore import (QLockFile, QPoint, QSettings, QRectF, QUrl, Qt,
+                          QThread, QTimer, pyqtSignal as Signal)
+from PyQt6.QtGui import (QBrush, QCloseEvent, QColor, QDesktopServices,
+                         QFont, QIcon, QLinearGradient, QPainter, QPalette,
+                         QPen, QPixmap, QRadialGradient)
 from PyQt6.QtSvg import QSvgRenderer
-from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog,
-                             QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox,
+                             QGraphicsDropShadowEffect, QFileDialog, QFrame,
+                             QHBoxLayout, QLabel, QLineEdit, QListWidget,
                              QMenu, QMessageBox, QPlainTextEdit, QPushButton,
-                             QScrollArea, QSizePolicy, QSpinBox, QStackedWidget,
-                             QStyle, QSystemTrayIcon, QTreeWidget,
-                             QTreeWidgetItem, QVBoxLayout, QWidget)
+                             QScrollArea, QSizePolicy, QSpinBox,
+                             QStackedWidget, QStyle, QSystemTrayIcon,
+                             QTreeWidget, QTreeWidgetItem, QVBoxLayout,
+                             QWidget)
 
-GUI_VERSION = "2.0.0"
+GUI_VERSION = "3.0.0"
 
 REPO_URL = "https://github.com/zhafribs/Proton-Drive-Linux-Cli"
 CONF_FILE = Path.home() / ".config" / "proton-sync.conf"
@@ -74,17 +66,34 @@ CONF_DEFAULTS = {
     "PROTON_SYNC_EXCLUDE": "",
 }
 
+# friendly "check every ..." choices -> seconds
+INTERVAL_CHOICES = [("Every minute", 60), ("Every 5 minutes", 300),
+                    ("Every 15 minutes", 900), ("Every 30 minutes", 1800),
+                    ("Every hour", 3600)]
+
 ACCENT = "#6D4AFF"
-STATUS_COLORS = {"synced": "#2e9e5b", "syncing": ACCENT, "paused": "#d9822b",
-                 "error": "#d04444", "unknown": "#8a90a0"}
-STATUS_LABELS = {"synced": "Up to date", "syncing": "Syncing...", "paused": "Paused",
-                 "error": "Needs attention", "unknown": "Checking..."}
+ACCENT_LIGHT = "#8b6cff"
+SUCCESS = "#16a34a"
+WARNING = "#d97706"
+ERROR = "#dc2626"
+INFO = "#2563eb"
+MUTED_GRAY = "#9ca3af"
+
+# status -> (orb color, title, subtitle-template)
+STATUS_TEXT = {
+    "synced":    (SUCCESS, "You're up to date", ""),
+    "syncing":   (ACCENT, "Syncing your files...", "This can take a moment"),
+    "paused":    (WARNING, "Sync is paused",
+                  "Nothing new is being synced right now. Your files are safe."),
+    "error":     (ERROR, "Couldn't sync", "{error}"),
+    "unknown":   (MUTED_GRAY, "Checking your files...", ""),
+}
 
 # --------------------------------------------------------------------------- helpers
 
 
 def resolve_cli() -> str:
-    """The same binary the service uses (unit Environment=, else PATH)."""
+    """The same binary the sync uses (from the unit file, else PATH)."""
     try:
         text = UNIT_FILE.read_text(encoding="utf-8")
         m = re.search(r"^Environment=PROTON_DRIVE_BIN=(.+)$", text, re.M)
@@ -112,7 +121,6 @@ def read_conf() -> dict:
 
 
 def read_conf_extras() -> list:
-    """KEY=VALUE lines in the conf that are not managed by this app."""
     out = []
     try:
         for line in CONF_FILE.read_text(encoding="utf-8").splitlines():
@@ -127,8 +135,8 @@ def read_conf_extras() -> list:
 
 def write_conf(values: dict, extras: list = None):
     CONF_FILE.parent.mkdir(parents=True, exist_ok=True)
-    parts = ["# proton-sync settings - editable by hand or with the Proton Drive GUI\n",
-             "# changes apply after the service restarts\n"]
+    parts = ["# Proton Drive sync settings\n",
+             "# (edited by the app - changes apply after a restart)\n"]
     for k, v in CONF_DEFAULTS.items():
         parts.append(f"{k}={values.get(k, v)}\n")
     for e in (extras or []):
@@ -166,7 +174,7 @@ def service_active() -> bool:
         return False
 
 
-ISO_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4})")
+ISO_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:?\d{2})")
 
 
 def journal_lines(n=400) -> list:
@@ -205,13 +213,13 @@ def read_health() -> dict:
 
 def rel_time(dt) -> str:
     if dt is None:
-        return "never"
+        return ""
     now = datetime.datetime.now(dt.tzinfo)
     secs = max(0, int((now - dt).total_seconds()))
-    if secs < 60:
+    if secs < 45:
         return "just now"
     if secs < 3600:
-        return f"{secs // 60} min ago"
+        return f"{max(1, secs // 60)} min ago"
     if secs < 86400:
         return f"{secs // 3600} h ago"
     return f"{secs // 86400} d ago"
@@ -247,13 +255,16 @@ def svg_pixmap(path: str, size: int) -> QPixmap:
 
 
 def tray_icon(base: QPixmap, status: str) -> QIcon:
+    color = {"synced": SUCCESS, "syncing": ACCENT, "paused": WARNING,
+             "error": ERROR}.get(status, MUTED_GRAY)
     pm = QPixmap(72, 72)
     pm.fill(Qt.GlobalColor.transparent)
     p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
     p.drawPixmap(6, 6, base.scaled(54, 54, Qt.AspectRatioMode.KeepAspectRatio,
                                    Qt.TransformationMode.SmoothTransformation))
-    p.setPen(QPen(QColor("#ffffff"), 4))
-    p.setBrush(QColor(STATUS_COLORS.get(status, "#8a90a0")))
+    p.setPen(QPen(QColor("#ffffff"), 5))
+    p.setBrush(QColor(color))
     p.drawEllipse(48, 48, 22, 22)
     p.end()
     return QIcon(pm)
@@ -263,7 +274,7 @@ def tray_icon(base: QPixmap, status: str) -> QIcon:
 
 
 class Worker(QThread):
-    """Run a slow function off the GUI thread."""
+    """Run a slow function off the interface thread."""
     done = Signal(object)
 
     def __init__(self, fn):
@@ -273,16 +284,15 @@ class Worker(QThread):
     def run(self):
         try:
             self.done.emit(self.fn())
-        except Exception as e:  # noqa: BLE001 - report anything to the UI
+        except Exception as e:  # noqa: BLE001
             self.done.emit(e)
 
 
 def fetch_identity() -> dict:
-    """CLI version + account email (one slow CLI call)."""
     out = {"version": "?", "email": None, "logged_in": False}
     cli = resolve_cli()
     if not cli:
-        out["error"] = "official CLI not found"
+        out["error"] = "not found"
         return out
     try:
         r = subprocess.run([cli, "--version"], capture_output=True, text=True, timeout=60)
@@ -329,59 +339,94 @@ def fetch_remote_folders(remote_root: str, rel_path: str) -> list:
     return sorted(out, key=lambda f: f["name"].lower())
 
 
-# --------------------------------------------------------------------------- styles
+# --------------------------------------------------------------------------- design
 
-LIGHT = dict(BG="#f2f3f7", CARD="#ffffff", FG="#1c2029", MUTED="#6b7280",
-             BORDER="#e4e6ec", SIDE="#171b26", SIDE_FG="#c9cdd8", SIDE_MUTED="#7d8494",
-             INPUT="#ffffff", HOVER="#eceef4")
-DARK = dict(BG="#14161c", CARD="#1d2029", FG="#e7e9ee", MUTED="#9aa1ad",
-            BORDER="#2a2e3a", SIDE="#101218", SIDE_FG="#c9cdd8", SIDE_MUTED="#767d8c",
-            INPUT="#161a22", HOVER="#242935")
+
+PALETTES = {
+    "light": dict(WINDOW="#f3f4fb", CARD="#ffffff", SIDE="#161129", SIDE_FG="#b9b2d6",
+                  SIDE_ACTIVE_FG="#ffffff", TEXT="#14161f", MUTED="#6b7280",
+                  INPUT="#f6f7fc", HOVER="#eceef6", SELECT="#ece7ff", BORDER="#e7e8f2"),
+    "dark": dict(WINDOW="#0e1016", CARD="#171a23", SIDE="#0b0a14", SIDE_FG="#9d96bd",
+                 SIDE_ACTIVE_FG="#ffffff", TEXT="#eceef4", MUTED="#9aa1ad",
+                 INPUT="#1e2230", HOVER="#232733", SELECT="#262140", BORDER="#262b38"),
+}
 
 QSS = """
-QWidget {{ font-size: 13px; color: {FG}; }}
+QWidget {{ font-size: 13.5px; color: {TEXT}; }}
+QWidget#main {{ background: {WINDOW}; }}
 QFrame#sidebar {{ background: {SIDE}; border: none; }}
-QLabel#appName {{ font-size: 17px; font-weight: 700; color: #ffffff; }}
-QLabel#appSub {{ font-size: 11px; color: {SIDE_MUTED}; }}
-QListWidget#nav {{ background: transparent; border: none; outline: none; }}
-QListWidget#nav::item {{ padding: 10px 14px; margin: 3px 10px; border-radius: 8px;
+QLabel#appName {{ font-size: 18px; font-weight: 700; color: #ffffff; letter-spacing: 0.2px; }}
+QLabel#appSub {{ font-size: 11px; color: {SIDE_FG}; }}
+QListWidget#nav {{ background: transparent; border: none; outline: none; font-size: 14px; }}
+QListWidget#nav::item {{ padding: 11px 16px; margin: 3px 12px; border-radius: 11px;
                          color: {SIDE_FG}; }}
-QListWidget#nav::item:hover {{ background: {HOVER}; }}
-QListWidget#nav::item:selected {{ background: {ACCENT}; color: #ffffff; font-weight: 600; }}
+QListWidget#nav::item:hover {{ background: rgba(255,255,255,0.07); color: #ffffff; }}
+QListWidget#nav::item:selected {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                                    stop:0 {ACCENT_L}, stop:1 {ACCENT}); color: #ffffff; }}
 QLabel#sideStatus {{ color: {SIDE_FG}; font-size: 12px; }}
-QFrame#statusDot {{ border-radius: 6px; background: #8a90a0; min-width: 12px; max-width: 12px;
-                    min-height: 12px; max-height: 12px; }}
-QLabel#pageTitle {{ font-size: 22px; font-weight: 700; }}
-QLabel#pageSub {{ color: {MUTED}; font-size: 12px; }}
-QFrame#card {{ background: {CARD}; border: 1px solid {BORDER}; border-radius: 12px; }}
-QLabel#cardTitle {{ color: {MUTED}; font-size: 11px; font-weight: 600; }}
-QLabel#cardValue {{ font-size: 20px; font-weight: 700; }}
-QLabel#statusTitle {{ font-size: 20px; font-weight: 700; }}
-QLabel#statusDetail, QLabel#hint {{ color: {MUTED}; }}
-QLabel#badge {{ padding: 3px 10px; border-radius: 10px; font-size: 11px; font-weight: 600; }}
-QLabel#legal {{ color: {MUTED}; font-size: 12px; }}
-QLabel#sectionHead {{ font-size: 14px; font-weight: 700; }}
-QPushButton {{ background: {CARD}; border: 1px solid {BORDER}; border-radius: 8px;
-               padding: 7px 14px; font-weight: 600; }}
+QLabel#pageTitle {{ font-size: 26px; font-weight: 700; }}
+QLabel#heroTitle {{ font-size: 27px; font-weight: 700; }}
+QLabel#heroSub {{ font-size: 14px; color: {MUTED}; }}
+QLabel#cardTitle {{ color: {MUTED}; font-size: 12px; font-weight: 700;
+                    letter-spacing: 0.6px; }}
+QLabel#h2 {{ font-size: 17px; font-weight: 700; }}
+QLabel#muted {{ color: {MUTED}; }}
+QLabel#small {{ font-size: 12px; color: {MUTED}; }}
+QFrame#card {{ background: {CARD}; border-radius: 18px; }}
+QLabel#pill {{ padding: 4px 12px; border-radius: 10px; font-size: 12px; font-weight: 700; }}
+QPushButton {{ background: transparent; border: none; border-radius: 11px;
+               padding: 9px 18px; font-weight: 600; font-size: 13.5px; }}
 QPushButton:hover {{ background: {HOVER}; }}
-QPushButton:disabled {{ color: {MUTED}; }}
-QPushButton#primary {{ background: {ACCENT}; border: none; color: #ffffff; }}
-QPushButton#primary:hover {{ background: #5b3ce0; }}
-QPushButton#danger {{ color: #d04444; }}
+QPushButton:disabled {{ color: {MUTED}; background: transparent; }}
+QPushButton#primary {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                        stop:0 {ACCENT_L}, stop:1 {ACCENT}); color: #ffffff;
+                       border-radius: 22px; padding: 12px 28px; font-size: 14px; }}
+QPushButton#primary:hover {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
+                             stop:0 #9d84ff, stop:1 #7c5cff); }}
+QPushButton#primary:disabled {{ background: {HOVER}; color: {MUTED}; }}
+QPushButton#secondary {{ background: {CARD}; border: 1px solid {BORDER};
+                         border-radius: 22px; padding: 11px 24px; font-size: 14px; }}
+QPushButton#secondary:hover {{ background: {HOVER}; }}
+QPushButton#ghostDanger {{ color: {ERROR}; }}
+QPushButton#seg {{ border-radius: 10px; padding: 7px 16px; color: {MUTED}; }}
+QPushButton#seg:checked {{ background: {CARD}; color: {TEXT}; }}
 QLineEdit, QSpinBox, QPlainTextEdit, QComboBox, QTreeWidget {{
-    background: {INPUT}; border: 1px solid {BORDER}; border-radius: 8px;
-    padding: 6px 10px; selection-background-color: {ACCENT}; }}
-QComboBox::drop-down {{ border: none; width: 22px; }}
-QPlainTextEdit {{ font-family: "JetBrains Mono", "Fira Code", monospace; font-size: 12px; }}
-QLineEdit:focus, QSpinBox:focus, QPlainTextEdit:focus, QTreeWidget:focus {{
-    border: 1px solid {ACCENT}; }}
-QCheckBox {{ spacing: 8px; }}
-QCheckBox::indicator {{ width: 17px; height: 17px; }}
-QTreeWidget {{ border: 1px solid {BORDER}; border-radius: 8px; }}
-QTreeWidget::item {{ padding: 4px 2px; }}
-QHeaderView::section {{ background: transparent; border: none; border-bottom: 1px solid {BORDER};
-                        padding: 6px 8px; font-weight: 600; color: {MUTED}; }}
+    background: {INPUT}; border: 1px solid transparent; border-radius: 12px;
+    padding: 8px 12px; selection-background-color: {ACCENT}; font-size: 13.5px; }}
+QLineEdit:focus, QSpinBox:focus, QTreeWidget:focus {{ border: 1px solid {ACCENT}; }}
+QComboBox {{ padding: 9px 14px; }}
+QComboBox::drop-down {{ border: none; width: 26px; }}
+QComboBox QAbstractItemView {{ background: {CARD}; border: 1px solid {BORDER};
+                               border-radius: 10px; padding: 6px;
+                               selection-background-color: {SELECT};
+                               selection-color: {TEXT}; }}
+QPlainTextEdit {{ font-family: "JetBrains Mono", "Fira Code", monospace;
+                  font-size: 12px; }}
+QCheckBox {{ spacing: 11px; font-size: 13.5px; padding: 3px 0; }}
+QCheckBox::indicator {{ width: 40px; height: 22px; }}
+QCheckBox::indicator:unchecked {{ background: {BORDER}; border-radius: 11px; }}
+QCheckBox::indicator:checked {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
+                                 stop:0 {ACCENT_L}, stop:1 {ACCENT}); border-radius: 11px; }}
+QTreeWidget {{ border: none; outline: none; }}
+QTreeWidget::item {{ padding: 7px 4px; border-radius: 8px; }}
+QTreeWidget::item:selected {{ background: {SELECT}; color: {TEXT}; }}
+QHeaderView::section {{ background: transparent; border: none;
+                        border-bottom: 1px solid {BORDER}; padding: 8px;
+                        font-weight: 700; color: {MUTED}; font-size: 12px; }}
 QScrollArea {{ border: none; }}
+QScrollArea > QWidget {{ background: transparent; }}
+QScrollArea > QWidget > QWidget {{ background: transparent; }}
+QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
+QScrollBar::handle:vertical {{ background: {BORDER}; border-radius: 5px;
+                               min-height: 30px; }}
+QScrollBar::handle:vertical:hover {{ background: {MUTED}; }}
+QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
+QMenu {{ background: {CARD}; border: 1px solid {BORDER}; border-radius: 12px;
+         padding: 6px; }}
+QMenu::item {{ padding: 9px 22px; border-radius: 8px; }}
+QMenu::item:selected {{ background: {SELECT}; }}
+QToolTip {{ background: {CARD}; color: {TEXT}; border: 1px solid {BORDER};
+            padding: 6px; border-radius: 8px; }}
 """
 
 
@@ -390,10 +435,16 @@ def is_system_dark(app: QApplication) -> bool:
     return (0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()) < 128
 
 
-def build_qss(dark: bool) -> str:
-    v = dict(DARK if dark else LIGHT)
-    v["ACCENT"] = ACCENT
-    return QSS.format(**v)
+def apply_theme(name: str):
+    app = QApplication.instance()
+    if not app:
+        return
+    dark = is_system_dark(app) if name == "system" else (name == "dark")
+    p = dict(PALETTES["dark" if dark else "light"])
+    p["ACCENT"] = ACCENT
+    p["ACCENT_L"] = ACCENT_LIGHT
+    p["ERROR"] = ERROR
+    app.setStyleSheet(QSS.format(**p))
 
 
 # --------------------------------------------------------------------------- widgets
@@ -410,12 +461,128 @@ def guard_slot(fn):
     return wrapper
 
 
-def card(title: str) -> tuple:
+class StatusOrb(QWidget):
+    """The big round status icon on the home page (animated while syncing)."""
+
+    def __init__(self, size=104):
+        super().__init__()
+        self.setFixedSize(size, size)
+        self._color = QColor(MUTED_GRAY)
+        self._status = "unknown"
+        self._angle = 0
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._spin)
+
+    def set_status(self, status: str):
+        color = STATUS_TEXT.get(status, (MUTED_GRAY, "", ""))[0]
+        self._status = status
+        self._color = QColor(color)
+        if status == "syncing":
+            if not self._timer.isActive():
+                self._timer.start(70)
+        else:
+            self._timer.stop()
+        self.update()
+
+    def _spin(self):
+        self._angle = (self._angle - 12) % 360
+        self.update()
+
+    def paintEvent(self, event):  # noqa: N802 - Qt naming
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w = self.width()
+        c = w / 2
+        halo = QRadialGradient(c, c, c)
+        halo.setColorAt(0.0, QColor(self._color))
+        halo.setColorAt(0.72, QColor(self._color))
+        halo.setColorAt(1.0, QColor(self._color).lighter(120))
+        p.setBrush(QBrush(halo))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setOpacity(0.16)
+        p.drawEllipse(0, 0, w, w)
+        p.setOpacity(1.0)
+        p.setBrush(QBrush(QColor(self._color)))
+        p.drawEllipse(int(c * 0.42), int(c * 0.42), int(w * 0.58), int(w * 0.58))
+
+        pen = QPen(QColor("#ffffff"))
+        pen.setWidth(max(4, w // 16))
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        s = w * 0.28  # glyph half-size
+        if self._status == "synced":
+            p.drawPolyline([QPoint(int(c - s), int(c + s * 0.05)),
+                            QPoint(int(c - s * 0.25), int(c + s * 0.7)),
+                            QPoint(int(c + s), int(c - s * 0.6))])
+        elif self._status == "syncing":
+            rect_off = c * 0.62
+            r = QRectF(rect_off, rect_off, w - 2 * rect_off, w - 2 * rect_off)
+            p.drawArc(r, self._angle * 16, 80 * 16)
+            p.setOpacity(0.45)
+            p.drawArc(r, (self._angle + 180) * 16, 50 * 16)
+        elif self._status == "paused":
+            bw = max(4, w // 10)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawRoundedRect(int(c - s * 0.7), int(c - s), bw, int(s * 2), bw // 2, bw // 2)
+            p.drawRoundedRect(int(c + s * 0.7 - bw), int(c - s), bw, int(s * 2), bw // 2, bw // 2)
+        elif self._status == "error":
+            p.drawLine(int(c), int(c - s), int(c), int(c + s * 0.35))
+            p.drawPoint(int(c), int(c + s * 0.8))
+        else:  # unknown
+            p.setOpacity(0.9)
+            p.drawEllipse(int(c - s * 0.6), int(c - s * 0.6), int(s * 1.2), int(s * 1.2))
+        p.end()
+
+
+class Avatar(QWidget):
+    """Round initial badge for the signed-in account."""
+
+    def __init__(self, size=40):
+        super().__init__()
+        self.setFixedSize(size, size)
+        self._letter = "?"
+
+    def set_email(self, email):
+        self._letter = (email or "?")[0].upper()
+        self.update()
+
+    def paintEvent(self, event):  # noqa: N802 - Qt naming
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        g = QLinearGradient(0, 0, self.width(), self.height())
+        g.setColorAt(0, QColor(ACCENT_LIGHT))
+        g.setColorAt(1, QColor(ACCENT))
+        p.setBrush(g)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(0, 0, self.width(), self.height())
+        p.setPen(QColor("#ffffff"))
+        f = p.font()
+        f.setBold(True)
+        f.setPixelSize(int(self.width() * 0.44))
+        p.setFont(f)
+        p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._letter)
+        p.end()
+
+
+def shadow_on(widget: QWidget, dark: bool):
+    if dark:
+        return
+    sh = QGraphicsDropShadowEffect(widget)
+    sh.setBlurRadius(34)
+    sh.setOffset(0, 5)
+    sh.setColor(QColor(30, 25, 70, 26))
+    widget.setGraphicsEffect(sh)
+
+
+def card(title: str = "", shadow: bool = True) -> tuple:
     frame = QFrame()
     frame.setObjectName("card")
+    shadow_on(frame, is_system_dark(QApplication.instance())
+              if QApplication.instance() else False)
     lay = QVBoxLayout(frame)
-    lay.setContentsMargins(18, 14, 18, 14)
-    lay.setSpacing(6)
+    lay.setContentsMargins(24, 20, 24, 20)
+    lay.setSpacing(10)
     if title:
         t = QLabel(title.upper())
         t.setObjectName("cardTitle")
@@ -423,56 +590,91 @@ def card(title: str) -> tuple:
     return frame, lay
 
 
-def stat_card(title: str, value: QLabel) -> QFrame:
-    frame, lay = card(title)
-    value.setObjectName("cardValue")
-    value.setWordWrap(True)
-    lay.addWidget(value)
-    frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-    return frame
-
-
-def page_header(title: str, sub: str) -> QFrame:
-    box = QFrame()
-    lay = QVBoxLayout(box)
-    lay.setContentsMargins(0, 0, 0, 4)
-    lay.setSpacing(2)
-    t = QLabel(title)
-    t.setObjectName("pageTitle")
-    s = QLabel(sub)
-    s.setObjectName("pageSub")
-    lay.addWidget(t)
-    lay.addWidget(s)
-    return box
-
-
-def scroll_page(inner: QWidget) -> QScrollArea:
-    sc = QScrollArea()
-    sc.setWidgetResizable(True)
-    sc.setWidget(inner)
-    sc.setFrameShape(QFrame.Shape.NoFrame)
-    return sc
-
-
-def path_label(text: str) -> QLabel:
+def section_label(text: str) -> QLabel:
     lab = QLabel(text)
-    lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-    lab.setObjectName("hint")
-    lab.setWordWrap(True)
+    lab.setObjectName("cardTitle")
     return lab
 
 
-# --------------------------------------------------------------------------- window
+def toggle_row(title: str, sub: str = "") -> tuple:
+    """A settings row with an iOS-style switch. Returns (container, checkbox)."""
+    box = QWidget()
+    lay = QHBoxLayout(box)
+    lay.setContentsMargins(0, 2, 0, 2)
+    lay.setSpacing(12)
+    col = QVBoxLayout()
+    col.setSpacing(1)
+    t = QLabel(title)
+    col.addWidget(t)
+    if sub:
+        s = QLabel(sub)
+        s.setObjectName("small")
+        s.setWordWrap(True)
+        col.addWidget(s)
+    lay.addLayout(col, 1)
+    chk = QCheckBox()
+    lay.addWidget(chk)
+    return box, chk
+
 
 CHANGE_RE = re.compile(r"\b(UPLOAD|DOWNLOAD|MKDIR|TRASH|CONFLICT)\s*(.*)$")
+
+DIR_STYLE = {"up": (SUCCESS, "\u2191"), "down": (INFO, "\u2193"),
+             "warn": (WARNING, "!"), "other": (MUTED_GRAY, "\u00d7")}
+
+
+def make_move_row(direction: str, name: str, path: str, action: str,
+                  when: str) -> QWidget:
+    """One 'file moved' row: colored arrow pill, name, path, action, time."""
+    color, glyph = DIR_STYLE.get(direction, DIR_STYLE["other"])
+    row = QWidget()
+    lay = QHBoxLayout(row)
+    lay.setContentsMargins(4, 7, 4, 7)
+    lay.setSpacing(14)
+    row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    orb = QLabel(glyph)
+    orb.setFixedSize(34, 34)
+    orb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    orb.setStyleSheet(f"background: {color}1f; color: {color}; border-radius: 17px;"
+                      "font-weight: 700; font-size: 15px;")
+    lay.addWidget(orb)
+
+    col = QVBoxLayout()
+    col.setSpacing(0)
+    name_lab = QLabel(name)
+    name_lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+    col.addWidget(name_lab)
+    if path:
+        sub = QLabel(path)
+        sub.setObjectName("small")
+        col.addWidget(sub)
+    lay.addLayout(col, 1)
+
+    right = QVBoxLayout()
+    right.setSpacing(0)
+    act = QLabel(action)
+    act.setObjectName("small")
+    act.setStyleSheet(f"color: {color}; font-weight: 600;")
+    act.setAlignment(Qt.AlignmentFlag.AlignRight)
+    right.addWidget(act)
+    tm = QLabel(when)
+    tm.setObjectName("small")
+    tm.setAlignment(Qt.AlignmentFlag.AlignRight)
+    right.addWidget(tm)
+    lay.addLayout(right)
+    return row
+
+
+# --------------------------------------------------------------------------- window
 
 
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Proton Drive")
-        self.setMinimumSize(980, 680)
-        self.resize(1060, 720)
+        self.setMinimumSize(1000, 700)
+        self.resize(1080, 760)
         self._quitting = False
         self._tray_warned = False
         self._identity = {"version": "?", "email": None, "logged_in": False}
@@ -485,6 +687,8 @@ class MainWindow(QWidget):
         self._prev_health_status = None
         self._selection = []
         self._remote_root = "/my-files"
+        self._home_status = "unknown"
+        self._sel_updating = False
 
         self.setWindowIcon(QIcon(svg_pixmap(find_icon(), 64)))
 
@@ -500,8 +704,8 @@ class MainWindow(QWidget):
         self._log_timer.start(3000)
 
         self._counts_timer = QTimer(self)
-        self._counts_timer.timeout.connect(self.refresh_counts)
-        self._counts_timer.start(15000)
+        self._counts_timer.timeout.connect(self.refresh_folder_stats)
+        self._counts_timer.start(20000)
 
         self._tick_timer = QTimer(self)
         self._tick_timer.timeout.connect(self.update_countdown)
@@ -509,8 +713,7 @@ class MainWindow(QWidget):
 
         self.refresh_status()
         self.refresh_logs()
-        self.refresh_counts()
-        self.refresh_details()
+        self.refresh_folder_stats()
         self.load_identity()
         self.load_settings()
 
@@ -520,191 +723,185 @@ class MainWindow(QWidget):
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
+        self.setObjectName("main")
 
         side = QFrame()
         side.setObjectName("sidebar")
-        side.setFixedWidth(216)
+        side.setFixedWidth(232)
         sl = QVBoxLayout(side)
-        sl.setContentsMargins(14, 18, 14, 16)
+        sl.setContentsMargins(16, 26, 16, 20)
         sl.setSpacing(4)
 
         head = QHBoxLayout()
-        head.setSpacing(10)
+        head.setSpacing(11)
         glyph = QLabel()
-        glyph.setPixmap(svg_pixmap(find_icon(), 30))
+        glyph.setPixmap(svg_pixmap(find_icon(), 34))
         head.addWidget(glyph)
         titles = QVBoxLayout()
         titles.setSpacing(0)
         name = QLabel("Proton Drive")
         name.setObjectName("appName")
-        sub = QLabel("unofficial  ·  official CLI")
+        sub = QLabel("for Linux")
         sub.setObjectName("appSub")
         titles.addWidget(name)
         titles.addWidget(sub)
         head.addLayout(titles)
         head.addStretch(1)
         sl.addLayout(head)
-        sl.addSpacing(18)
+        sl.addSpacing(26)
 
         self.nav = QListWidget()
         self.nav.setObjectName("nav")
-        self.nav.setFixedHeight(200)
-        for label in ("Dashboard", "Changes", "Activity", "Settings", "Details", "About"):
+        self.nav.setFixedHeight(190)
+        for label in ("Home", "Activity", "Settings", "About"):
             self.nav.addItem(label)
         self.nav.currentRowChanged.connect(self._switch_page)
         sl.addWidget(self.nav)
         sl.addStretch(1)
 
         foot = QHBoxLayout()
-        foot.setSpacing(8)
-        self.side_dot = QFrame()
-        self.side_dot.setObjectName("statusDot")
+        foot.setSpacing(9)
+        self.side_dot = QLabel()
+        self.side_dot.setFixedSize(10, 10)
+        self.side_dot.setStyleSheet("background: %s; border-radius: 5px;" % MUTED_GRAY)
         foot.addWidget(self.side_dot)
         self.side_status = QLabel("Checking...")
         self.side_status.setObjectName("sideStatus")
         foot.addWidget(self.side_status)
         foot.addStretch(1)
         sl.addLayout(foot)
-        self.side_version = QLabel("")
-        self.side_version.setObjectName("appSub")
-        sl.addWidget(self.side_version)
+        unofficial = QLabel("Unofficial community app")
+        unofficial.setObjectName("appSub")
+        unofficial.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        sl.addWidget(unofficial)
 
         root.addWidget(side)
 
         self.stack = QStackedWidget()
         root.addWidget(self.stack, 1)
-        self.stack.addWidget(self._dashboard_page())
-        self.stack.addWidget(self._changes_page())
+        self.stack.addWidget(self._home_page())
         self.stack.addWidget(self._activity_page())
         self.stack.addWidget(self._settings_page())
-        self.stack.addWidget(self._details_page())
         self.stack.addWidget(self._about_page())
         self.nav.setCurrentRow(0)
 
-    # ---- dashboard ----------------------------------------------------------
+    # ---- home ---------------------------------------------------------------
 
-    def _dashboard_page(self) -> QWidget:
+    def _home_page(self) -> QWidget:
         page = QWidget()
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(26, 22, 26, 18)
-        outer.setSpacing(14)
-        outer.addWidget(page_header("Dashboard", "Your Proton Drive at a glance"))
+        outer.setContentsMargins(36, 30, 36, 20)
+        outer.setSpacing(18)
 
         inner = QWidget()
         col = QVBoxLayout(inner)
-        col.setContentsMargins(0, 0, 6, 0)
-        col.setSpacing(14)
+        col.setContentsMargins(0, 0, 8, 0)
+        col.setSpacing(18)
 
-        banner = QFrame()
-        banner.setObjectName("card")
-        bl = QHBoxLayout(banner)
-        bl.setContentsMargins(20, 16, 20, 16)
+        # --- hero
+        hero = QFrame()
+        hero_l = QHBoxLayout(hero)
+        hero_l.setContentsMargins(0, 0, 0, 0)
+        hero_l.setSpacing(26)
+        self.orb = StatusOrb()
+        hero_l.addWidget(self.orb, 0, Qt.AlignmentFlag.AlignTop)
         textcol = QVBoxLayout()
-        textcol.setSpacing(3)
-        self.status_title = QLabel("Checking...")
-        self.status_title.setObjectName("statusTitle")
-        self.status_detail = QLabel("")
-        self.status_detail.setObjectName("statusDetail")
-        textcol.addWidget(self.status_title)
-        textcol.addWidget(self.status_detail)
-        bl.addLayout(textcol, 1)
+        textcol.setSpacing(6)
+        self.hero_title = QLabel("Checking your files...")
+        self.hero_title.setObjectName("heroTitle")
+        self.hero_sub = QLabel("")
+        self.hero_sub.setObjectName("heroSub")
+        self.hero_sub.setWordWrap(True)
+        textcol.addWidget(self.hero_title)
+        textcol.addWidget(self.hero_sub)
 
         btns = QHBoxLayout()
-        btns.setSpacing(8)
-        self.btn_sync = QPushButton(" Sync now")
+        btns.setSpacing(12)
+        self.btn_open = QPushButton("  Open my folder")
+        self.btn_open.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
+        self.btn_open.setObjectName("primary")
+        self.btn_open.clicked.connect(self.open_folder)
+        self.btn_sync = QPushButton("  Sync now")
         self.btn_sync.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
-        self.btn_sync.setObjectName("primary")
+        self.btn_sync.setObjectName("secondary")
         self.btn_sync.clicked.connect(self.sync_now)
-        self.btn_folder = QPushButton(" Open folder")
-        self.btn_folder.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
-        self.btn_folder.clicked.connect(self.open_folder)
-        self.btn_pause = QPushButton(" Pause")
+        self.btn_pause = QPushButton("Pause")
         self.btn_pause.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause))
+        self.btn_pause.setObjectName("secondary")
         self.btn_pause.clicked.connect(self._pause_clicked)
-        for b in (self.btn_sync, self.btn_folder, self.btn_pause):
-            btns.addWidget(b)
-        bl.addLayout(btns)
-        col.addWidget(banner)
+        btns.addWidget(self.btn_open)
+        btns.addWidget(self.btn_sync)
+        btns.addWidget(self.btn_pause)
+        btns.addStretch(1)
+        textcol.addLayout(btns)
+        textcol.addStretch(1)
+        hero_l.addLayout(textcol, 1)
+        col.addWidget(hero)
 
-        cards = QHBoxLayout()
-        cards.setSpacing(12)
-        self.val_files = QLabel("-")
-        self.val_size = QLabel("-")
-        self.val_sync = QLabel("-")
-        self.val_service = QLabel("-")
-        cards.addWidget(stat_card("Files in folder", self.val_files))
-        cards.addWidget(stat_card("Folder size", self.val_size))
-        cards.addWidget(stat_card("Last sync", self.val_sync))
-        cards.addWidget(stat_card("Service", self.val_service))
-        col.addLayout(cards)
-
-        acct, al = card("Account")
+        # --- account
+        acct, al = card()
+        al.setSpacing(0)
         arow = QHBoxLayout()
-        self.val_email = QLabel("...")
-        self.val_email.setWordWrap(True)
-        self.badge_login = QLabel("checking")
-        self.badge_login.setObjectName("badge")
-        arow.addWidget(self.val_email, 1)
-        arow.addWidget(self.badge_login)
-        self.btn_login = QPushButton("Log in")
+        arow.setSpacing(14)
+        self.avatar = Avatar(44)
+        arow.addWidget(self.avatar)
+        acol = QVBoxLayout()
+        acol.setSpacing(1)
+        self.val_email = QLabel("Checking your account...")
+        self.val_email.setObjectName("h2")
+        self.badge_login = QLabel(" ")
+        self.badge_login.setObjectName("small")
+        acol.addWidget(self.val_email)
+        acol.addWidget(self.badge_login)
+        arow.addLayout(acol, 1)
+        self.btn_login = QPushButton("Sign in")
+        self.btn_login.setObjectName("secondary")
         self.btn_login.clicked.connect(self.login_terminal)
-        self.btn_logout = QPushButton("Log out")
-        self.btn_logout.setObjectName("danger")
+        self.btn_logout = QPushButton("Sign out")
+        self.btn_logout.setObjectName("ghostDanger")
         self.btn_logout.clicked.connect(self.logout)
+        self.btn_logout.setVisible(False)
         arow.addWidget(self.btn_login)
         arow.addWidget(self.btn_logout)
         al.addLayout(arow)
         col.addWidget(acct)
 
-        act, cl = card("Recent activity")
-        self.preview = QPlainTextEdit()
-        self.preview.setReadOnly(True)
-        self.preview.document().setMaximumBlockCount(8)
-        self.preview.setMinimumHeight(120)
-        cl.addWidget(self.preview)
-        col.addWidget(act)
+        # --- folder
+        folder, fl = card("Your folder on this computer")
+        frow = QHBoxLayout()
+        frow.setSpacing(16)
+        ficon = QLabel()
+        ficon.setPixmap(self.style().standardIcon(
+            QStyle.StandardPixmap.SP_DirOpenIcon).pixmap(30, 30))
+        frow.addWidget(ficon)
+        fcol = QVBoxLayout()
+        fcol.setSpacing(1)
+        self.folder_name = QLabel("ProtonDrive")
+        self.folder_name.setObjectName("h2")
+        self.val_path = QLabel("")
+        self.val_path.setObjectName("small")
+        fcol.addWidget(self.folder_name)
+        fcol.addWidget(self.val_path)
+        frow.addLayout(fcol, 1)
+        self.val_stats = QLabel("")
+        self.val_stats.setObjectName("muted")
+        frow.addWidget(self.val_stats)
+        fl.addLayout(frow)
+        col.addWidget(folder)
+
+        # --- recent
+        recent, rl = card("Recently synced")
+        rl.setSpacing(2)
+        self.recent_box = QVBoxLayout()
+        self.recent_box.setSpacing(0)
+        rl.addLayout(self.recent_box)
+        self.recent_empty = QLabel("Files you change will show up here.")
+        self.recent_empty.setObjectName("muted")
+        rl.addWidget(self.recent_empty)
+        col.addWidget(recent)
 
         col.addStretch(1)
         outer.addWidget(scroll_page(inner), 1)
-        return page
-
-    # ---- changes ------------------------------------------------------------
-
-    def _changes_page(self) -> QWidget:
-        page = QWidget()
-        outer = QVBoxLayout(page)
-        outer.setContentsMargins(26, 22, 26, 18)
-        outer.setSpacing(14)
-        outer.addWidget(page_header("Changes", "What the sync has moved recently"))
-
-        bar = QHBoxLayout()
-        bar.setSpacing(8)
-        self.ch_filter = QLineEdit()
-        self.ch_filter.setPlaceholderText("filter by path...")
-        self.ch_filter.textChanged.connect(self.render_changes)
-        bar.addWidget(self.ch_filter, 1)
-        self.ch_kind = QComboBox()
-        self.ch_kind.addItems(["All changes", "Uploaded", "Downloaded", "Other"])
-        self.ch_kind.currentIndexChanged.connect(self.render_changes)
-        bar.addWidget(self.ch_kind)
-        self.ch_count = QLabel("")
-        self.ch_count.setObjectName("hint")
-        bar.addWidget(self.ch_count)
-        btn_copy = QPushButton("Copy list")
-        btn_copy.clicked.connect(self.copy_changes)
-        bar.addWidget(btn_copy)
-        outer.addLayout(bar)
-
-        self.ch_view = QTreeWidget()
-        self.ch_view.setColumnCount(3)
-        self.ch_view.setHeaderLabels(["When", "Action", "Path"])
-        self.ch_view.setRootIsDecorated(False)
-        self.ch_view.setAlternatingRowColors(True)
-        self.ch_view.setUniformRowHeights(True)
-        self.ch_view.header().setStretchLastSection(True)
-        self.ch_view.setColumnWidth(0, 130)
-        self.ch_view.setColumnWidth(1, 110)
-        outer.addWidget(self.ch_view, 1)
         return page
 
     # ---- activity -----------------------------------------------------------
@@ -712,339 +909,415 @@ class MainWindow(QWidget):
     def _activity_page(self) -> QWidget:
         page = QWidget()
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(26, 22, 26, 18)
-        outer.setSpacing(14)
-        outer.addWidget(page_header("Activity", "Live raw log of the sync service"))
+        outer.setContentsMargins(36, 30, 36, 20)
+        outer.setSpacing(18)
 
+        head = QHBoxLayout()
+        title = QLabel("Activity")
+        title.setObjectName("pageTitle")
+        head.addWidget(title)
+        head.addStretch(1)
+        segbox = QFrame()
+        segbox.setStyleSheet("background: rgba(127,127,127,0.12); border-radius: 12px;")
+        seg = QHBoxLayout(segbox)
+        seg.setContentsMargins(5, 5, 5, 5)
+        seg.setSpacing(2)
+        self.seg_files = QPushButton("Files moved")
+        self.seg_files.setCheckable(True)
+        self.seg_files.setChecked(True)
+        self.seg_files.setObjectName("seg")
+        self.seg_files.setAutoExclusive(True)
+        self.seg_files.clicked.connect(lambda: self._seg_switch(0))
+        self.seg_log = QPushButton("Technical log")
+        self.seg_log.setCheckable(True)
+        self.seg_log.setObjectName("seg")
+        self.seg_log.setAutoExclusive(True)
+        self.seg_log.clicked.connect(lambda: self._seg_switch(1))
+        seg.addWidget(self.seg_files)
+        seg.addWidget(self.seg_log)
+        head.addWidget(segbox)
+        outer.addLayout(head)
+
+    # --- tab 1: friendly list
+        self.tab_files = QWidget()
+        tf = QVBoxLayout(self.tab_files)
+        tf.setContentsMargins(0, 0, 0, 0)
+        tf.setSpacing(12)
         bar = QHBoxLayout()
-        bar.setSpacing(8)
-        self.log_filter = QLineEdit()
-        self.log_filter.setPlaceholderText("filter log lines...")
-        self.log_filter.textChanged.connect(self.render_logs)
-        bar.addWidget(self.log_filter, 1)
-        self.chk_auto = QCheckBox("auto-refresh")
-        self.chk_auto.setChecked(True)
-        bar.addWidget(self.chk_auto)
-        btn_copy = QPushButton("Copy all")
-        btn_copy.clicked.connect(self.copy_logs)
-        bar.addWidget(btn_copy)
-        btn_refresh = QPushButton("Refresh")
-        btn_refresh.clicked.connect(self.refresh_logs)
-        bar.addWidget(btn_refresh)
-        outer.addLayout(bar)
+        bar.setSpacing(10)
+        self.ch_filter = QLineEdit()
+        self.ch_filter.setPlaceholderText("Search file names...")
+        self.ch_filter.textChanged.connect(self.render_changes)
+        bar.addWidget(self.ch_filter, 1)
+        self.ch_kind = QComboBox()
+        self.ch_kind.addItems(["Everything", "Uploaded", "Downloaded", "Other"])
+        self.ch_kind.currentIndexChanged.connect(self.render_changes)
+        bar.addWidget(self.ch_kind)
+        self.ch_count = QLabel("")
+        self.ch_count.setObjectName("small")
+        bar.addWidget(self.ch_count)
+        tf.addLayout(bar)
 
+        scroll_files = QScrollArea()
+        scroll_files.setWidgetResizable(True)
+        scroll_files.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_files.viewport().setAutoFillBackground(False)
+        self.moves_box = QVBoxLayout()
+        self.moves_box.setSpacing(0)
+        moves_wrap = QWidget()
+        moves_wrap.setLayout(self.moves_box)
+        scroll_files.setWidget(moves_wrap)
+        tf.addWidget(scroll_files, 1)
+        self.moves_empty = QLabel("Nothing has moved yet - change a file and it will "
+                                  "appear here.")
+        self.moves_empty.setObjectName("muted")
+        tf.addWidget(self.moves_empty)
+
+    # --- tab 2: technical log
+        self.tab_log = QWidget()
+        tl = QVBoxLayout(self.tab_log)
+        tl.setContentsMargins(0, 0, 0, 0)
+        tl.setSpacing(12)
+        bar2 = QHBoxLayout()
+        self.log_filter = QLineEdit()
+        self.log_filter.setPlaceholderText("Filter log lines...")
+        self.log_filter.textChanged.connect(self.render_logs)
+        bar2.addWidget(self.log_filter, 1)
+        btn_copy = QPushButton("Copy log")
+        btn_copy.clicked.connect(self.copy_logs)
+        bar2.addWidget(btn_copy)
+        tl.addLayout(bar2)
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.document().setMaximumBlockCount(600)
-        outer.addWidget(self.log_view, 1)
+        tl.addWidget(self.log_view, 1)
+
+        self.act_stack = QStackedWidget()
+        self.act_stack.addWidget(self.tab_files)
+        self.act_stack.addWidget(self.tab_log)
+        outer.addWidget(self.act_stack, 1)
         return page
+
+    def _seg_switch(self, idx: int):
+        self.act_stack.setCurrentIndex(idx)
 
     # ---- settings -----------------------------------------------------------
 
     def _settings_page(self) -> QWidget:
         page = QWidget()
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(26, 22, 26, 18)
-        outer.setSpacing(14)
-        outer.addWidget(page_header("Settings", "Stored in ~/.config/proton-sync.conf"))
+        outer.setContentsMargins(36, 30, 36, 20)
+        outer.setSpacing(18)
+        title = QLabel("Settings")
+        title.setObjectName("pageTitle")
+        outer.addWidget(title)
 
         inner = QWidget()
         col = QVBoxLayout(inner)
-        col.setContentsMargins(0, 0, 6, 0)
-        col.setSpacing(14)
+        col.setContentsMargins(0, 0, 8, 0)
+        col.setSpacing(16)
 
-        # --- sync
-        box, form = card("Sync")
-        form.setSpacing(10)
-
+        # --- folder
+        box, form = card("Where your files live")
         row = QHBoxLayout()
-        row.setSpacing(8)
-        row.addWidget(QLabel("Local folder"))
+        row.setSpacing(14)
+        ficon = QLabel()
+        ficon.setPixmap(self.style().standardIcon(
+            QStyle.StandardPixmap.SP_DirOpenIcon).pixmap(28, 28))
+        row.addWidget(ficon)
+        fcol = QVBoxLayout()
+        fcol.setSpacing(0)
         self.ed_local = QLineEdit()
-        row.addWidget(self.ed_local, 1)
-        btn_browse = QPushButton("Browse...")
+        self.ed_local.setReadOnly(True)
+        self.ed_local.setCursorPosition(0)
+        fcol.addWidget(self.ed_local)
+        folder_hint = QLabel("Everything in this folder stays in sync with your "
+                             "cloud. Nothing else on your computer is touched.")
+        folder_hint.setObjectName("small")
+        fcol.addWidget(folder_hint)
+        row.addLayout(fcol, 1)
+        btn_browse = QPushButton("Choose folder...")
         btn_browse.clicked.connect(self._browse)
         row.addWidget(btn_browse)
         form.addLayout(row)
-
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        row.addWidget(QLabel("Remote folder"))
-        self.ed_remote = QLineEdit()
-        self.ed_remote.setPlaceholderText("/my-files")
-        row.addWidget(self.ed_remote, 1)
-        form.addLayout(row)
-
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        row.addWidget(QLabel("Check for remote changes every"))
-        self.sp_interval = QSpinBox()
-        self.sp_interval.setRange(30, 3600)
-        self.sp_interval.setSuffix(" seconds")
-        row.addWidget(self.sp_interval)
-        row.addStretch(1)
-        form.addLayout(row)
-
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        row.addWidget(QLabel("Parallel scan connections"))
-        self.sp_workers = QSpinBox()
-        self.sp_workers.setRange(1, 16)
-        row.addWidget(self.sp_workers)
-        row.addSpacing(20)
-        row.addWidget(QLabel("Retries per folder"))
-        self.sp_retries = QSpinBox()
-        self.sp_retries.setRange(1, 10)
-        row.addWidget(self.sp_retries)
-        row.addStretch(1)
-        form.addLayout(row)
-
-        self.chk_inotify = QCheckBox("Upload local changes instantly (watch the folder)")
-        form.addWidget(self.chk_inotify)
-        self.chk_deletes = QCheckBox("Also sync deletions (files deleted on one side get"
-                                     " trashed on the other side)")
-        form.addWidget(self.chk_deletes)
-        hint = QLabel("Off = a file deleted on one side stays safely on the other side.")
-        hint.setObjectName("hint")
-        form.addWidget(hint)
         col.addWidget(box)
 
-        # --- selective sync
-        box, form = card("Selective sync")
-        form.setSpacing(10)
-        self.chk_selective = QCheckBox("Only sync selected folders (instead of everything)")
+        # --- what to sync
+        box, form = card("What gets synced")
+        form.setSpacing(14)
+        self.chk_selective = QCheckBox("Only sync the folders I pick (instead of "
+                                       "everything)")
         form.addWidget(self.chk_selective)
-        hint = QLabel("Checked folders are mirrored. Unchecked folders stay only in the "
-                      "cloud and are not downloaded. Deselecting never deletes local files.")
-        hint.setObjectName("hint")
+        hint = QLabel("Pick folders from the cloud that should appear on this "
+                      "computer. Everything else stays safely online only.")
+        hint.setObjectName("small")
         hint.setWordWrap(True)
         form.addWidget(hint)
         self.sel_tree = QTreeWidget()
         self.sel_tree.setHeaderHidden(True)
-        self.sel_tree.setMinimumHeight(180)
+        self.sel_tree.setMinimumHeight(160)
         self.sel_tree.itemExpanded.connect(self._sel_expand)
+        self.sel_tree.itemChanged.connect(self._sel_item_changed)
         form.addWidget(self.sel_tree)
         row = QHBoxLayout()
-        btn_reload = QPushButton("Reload folder list")
+        btn_reload = QPushButton("Refresh folder list")
         btn_reload.clicked.connect(self._sel_load_root)
         row.addWidget(btn_reload)
         self.sel_hint = QLabel("")
-        self.sel_hint.setObjectName("hint")
+        self.sel_hint.setObjectName("small")
         row.addWidget(self.sel_hint, 1)
         form.addLayout(row)
-        col.addWidget(box)
 
-        # --- exclusions
-        box, form = card("Exclusions")
-        form.setSpacing(10)
+        form.addSpacing(6)
+        form.addWidget(section_label("NEVER SYNC FILES MATCHING"))
         self.ed_exclude = QLineEdit()
-        self.ed_exclude.setPlaceholderText("*.tmp, .cache, node_modules, *.iso")
+        self.ed_exclude.setPlaceholderText("For example:  *.tmp, .cache, *.iso")
         form.addWidget(self.ed_exclude)
-        hint = QLabel("Comma-separated patterns, matched against file names and paths. "
-                      "Matching files are neither uploaded nor downloaded.")
-        hint.setObjectName("hint")
-        hint.setWordWrap(True)
-        form.addWidget(hint)
+        ex_hint = QLabel("Separate patterns with commas. Matching files are simply "
+                         "ignored - they are never uploaded or downloaded.")
+        ex_hint.setObjectName("small")
+        ex_hint.setWordWrap(True)
+        form.addWidget(ex_hint)
         col.addWidget(box)
 
-        # --- notifications + startup
-        box, form = card("Notifications and startup")
-        form.setSpacing(8)
-        self.chk_note_errors = QCheckBox("Notify me about sync errors")
-        self.chk_note_conflicts = QCheckBox("Notify me about conflicts (both sides changed)")
-        self.chk_note_done = QCheckBox("Notify me when a sync round finished with changes")
-        self.chk_autostart = QCheckBox("Start syncing automatically at login")
-        self.chk_starttray = QCheckBox("Start this app minimized in the tray")
-        for w in (self.chk_note_errors, self.chk_note_conflicts, self.chk_note_done,
-                  self.chk_autostart, self.chk_starttray):
-            form.addWidget(w)
+        # --- how often
+        box, form = card("How often")
+        form.setSpacing(12)
+        row_t, self.chk_inotify = toggle_row(
+            "Upload my changes right away",
+            "When you save a file, it is sent to the cloud within seconds.")
+        form.addWidget(row_t)
+        form.addSpacing(4)
         row = QHBoxLayout()
-        btn_test = QPushButton("Test notification")
+        row.setSpacing(10)
+        lab = QLabel("Look for changes in the cloud")
+        row.addWidget(lab)
+        self.cmb_interval = QComboBox()
+        for label, _secs in INTERVAL_CHOICES:
+            self.cmb_interval.addItem(label)
+        row.addWidget(self.cmb_interval)
+        row.addStretch(1)
+        form.addLayout(row)
+        row_d, self.chk_deletes = toggle_row(
+            "Also remove files I delete",
+            "If I delete a file here, it is moved to Proton's trash too (and the "
+            "other way around). Leave this off for extra safety.")
+        form.addWidget(row_d)
+        col.addWidget(box)
+
+        # --- notifications
+        box, form = card("Notifications")
+        form.setSpacing(6)
+        self.chk_note_errors = QCheckBox("Tell me if something fails to sync")
+        self.chk_note_conflicts = QCheckBox("Tell me if a file was edited in two "
+                                            "places at once")
+        self.chk_note_done = QCheckBox("Tell me when syncing finished")
+        form.addWidget(self.chk_note_errors)
+        form.addWidget(self.chk_note_conflicts)
+        form.addWidget(self.chk_note_done)
+        row = QHBoxLayout()
+        btn_test = QPushButton("Send a test notification")
         btn_test.clicked.connect(
             lambda: self.tray and self.tray.showMessage(
-                "Proton Drive", "Notifications work.",
-                QSystemTrayIcon.MessageIcon.Information, 3000))
+                "Proton Drive",
+                "This is what notifications look like.",
+                QSystemTrayIcon.MessageIcon.Information, 4000))
         row.addWidget(btn_test)
-        self.start_hint = QLabel("")
-        self.start_hint.setObjectName("hint")
-        row.addWidget(self.start_hint, 1)
+        row.addStretch(1)
         form.addLayout(row)
         col.addWidget(box)
 
-        # --- appearance
-        box, form = card("Appearance")
+        # --- startup + theme
+        box, form = card("Start-up and looks")
+        form.setSpacing(6)
+        row_a, self.chk_autostart = toggle_row("Start syncing when I log in")
+        form.addWidget(row_a)
+        row_s, self.chk_starttray = toggle_row(
+            "Start quietly in the tray",
+            "Open as a small icon instead of a window.")
+        form.addWidget(row_s)
+        form.addSpacing(6)
         row = QHBoxLayout()
-        row.setSpacing(8)
-        row.addWidget(QLabel("Theme"))
+        row.setSpacing(10)
+        row.addWidget(QLabel("Appearance"))
         self.cmb_theme = QComboBox()
-        self.cmb_theme.addItems(["System", "Light", "Dark"])
+        self.cmb_theme.addItems(["Match my system", "Light", "Dark"])
         self.cmb_theme.currentIndexChanged.connect(self._theme_changed)
         row.addWidget(self.cmb_theme)
         row.addStretch(1)
         form.addLayout(row)
         col.addWidget(box)
 
-        # --- advanced
-        box, form = card("Advanced: extra environment variables")
-        form.setSpacing(8)
-        self.ed_extra = QPlainTextEdit()
-        self.ed_extra.setPlaceholderText("HTTPS_PROXY=http://proxy:3128\nFOO=bar")
-        self.ed_extra.setMinimumHeight(70)
-        form.addWidget(self.ed_extra)
-        hint = QLabel("One KEY=VALUE per line, passed to the sync service "
-                      "(e.g. a proxy). Lines you do not manage here are preserved.")
-        hint.setObjectName("hint")
-        hint.setWordWrap(True)
-        form.addWidget(hint)
-        col.addWidget(box)
+        # --- advanced (hidden)
+        self.btn_adv = QPushButton("Advanced and troubleshooting")
+        self.btn_adv.setCheckable(True)
+        self.btn_adv.clicked.connect(self._toggle_advanced)
+        col.addWidget(self.btn_adv, 0, Qt.AlignmentFlag.AlignLeft)
 
-        btns = QHBoxLayout()
-        btns.setSpacing(8)
-        self.btn_save = QPushButton("Save settings")
-        self.btn_save.setObjectName("primary")
-        self.btn_save.clicked.connect(self.save_settings)
-        btn_discard = QPushButton("Discard changes")
-        btn_discard.clicked.connect(self.load_settings)
-        btns.addWidget(self.btn_save)
-        btns.addWidget(btn_discard)
-        self.save_hint = QLabel("")
-        self.save_hint.setObjectName("hint")
-        btns.addWidget(self.save_hint)
-        btns.addStretch(1)
-        col.addLayout(btns)
-        col.addStretch(1)
+        self.advanced = QWidget()
+        adv = QVBoxLayout(self.advanced)
+        adv.setContentsMargins(0, 0, 0, 0)
+        adv.setSpacing(16)
 
-        outer.addWidget(scroll_page(inner))
-        return page
-
-    # ---- details ------------------------------------------------------------
-
-    def _details_page(self) -> QWidget:
-        page = QWidget()
-        outer = QVBoxLayout(page)
-        outer.setContentsMargins(26, 22, 26, 18)
-        outer.setSpacing(14)
-        outer.addWidget(page_header("Details", "Service health, statistics and paths"))
-
-        inner = QWidget()
-        col = QVBoxLayout(inner)
-        col.setContentsMargins(0, 0, 6, 0)
-        col.setSpacing(14)
-
-        box, form = card("Service")
-        form.setSpacing(6)
-        self.det_service = QLabel("-")
-        self.det_cycle = QLabel("-")
-        self.det_entries = QLabel("-")
-        self.det_next = QLabel("-")
-        for lab in (self.det_service, self.det_cycle, self.det_entries, self.det_next):
-            lab.setWordWrap(True)
-            form.addWidget(lab)
+        box, form = card("Fine-tuning")
+        form.setSpacing(12)
         row = QHBoxLayout()
-        row.setSpacing(8)
-        btn_restart = QPushButton("Restart service now")
-        btn_restart.clicked.connect(self.restart_service)
-        row.addWidget(btn_restart)
-        btn_open_conf = QPushButton("Open config file")
-        btn_open_conf.clicked.connect(
-            lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(CONF_FILE))))
-        row.addWidget(btn_open_conf)
-        btn_journal = QPushButton("Copy log command")
-        btn_journal.clicked.connect(
-            lambda: (QApplication.clipboard().setText("journalctl --user -u proton-sync -f"),
-                     self.sel_hint.setText("copied")))
-        row.addWidget(btn_journal)
+        row.setSpacing(10)
+        row.addWidget(QLabel("Parallel connections"))
+        self.sp_workers = QSpinBox()
+        self.sp_workers.setRange(1, 16)
+        row.addWidget(self.sp_workers)
+        row.addSpacing(24)
+        row.addWidget(QLabel("Retries per folder"))
+        self.sp_retries = QSpinBox()
+        self.sp_retries.setRange(1, 10)
+        row.addWidget(self.sp_retries)
         row.addStretch(1)
         form.addLayout(row)
-        col.addWidget(box)
+        adv.addWidget(box)
 
-        box, form = card("Paths")
-        form.setSpacing(4)
-        for title, value in (
-                ("Sync folder", self._local_path()),
-                ("Settings file", str(CONF_FILE)),
-                ("Health / state", str(STATE_DIR)),
-                ("Service unit", str(UNIT_FILE)),
-        ):
-            form.addWidget(QLabel(title))
-            form.addWidget(path_label(value))
-        col.addWidget(box)
+        box2, form2 = card("If something goes wrong")
+        form2.setSpacing(10)
+        row2 = QHBoxLayout()
+        row2.setSpacing(10)
+        btn_restart = QPushButton("Restart syncing now")
+        btn_restart.clicked.connect(self.restart_service)
+        row2.addWidget(btn_restart)
+        btn_conf = QPushButton("Open settings file")
+        btn_conf.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(CONF_FILE))))
+        row2.addWidget(btn_conf)
+        btn_log = QPushButton("Copy the log command")
+        btn_log.clicked.connect(
+            lambda: (QApplication.clipboard().setText(
+                "journalctl --user -u proton-sync -f"),
+                self.sel_hint.setText("copied to clipboard")))
+        row2.addWidget(btn_log)
+        row2.addStretch(1)
+        form2.addLayout(row2)
+        tip = QLabel("The technical log is also on the Activity page "
+                     "(switch to 'Technical log').")
+        tip.setObjectName("small")
+        form2.addWidget(tip)
+        adv.addWidget(box2)
 
-        box, form = card("Versions")
-        form.setSpacing(4)
-        self.det_versions = QLabel("-")
-        self.det_versions.setWordWrap(True)
-        form.addWidget(self.det_versions)
-        col.addWidget(box)
+        box3, form3 = card("Extra environment variables")
+        form3.setSpacing(8)
+        self.ed_extra = QPlainTextEdit()
+        self.ed_extra.setPlaceholderText("One KEY=VALUE per line, e.g.\nHTTPS_PROXY=http://proxy:3128")
+        self.ed_extra.setMinimumHeight(70)
+        form3.addWidget(self.ed_extra)
+        e3 = QLabel("Advanced: passed to the sync engine. Lines you add here are "
+                    "kept when settings are saved.")
+        e3.setObjectName("small")
+        e3.setWordWrap(True)
+        form3.addWidget(e3)
+        adv.addWidget(box3)
+        adv.addStretch(1)
+        self.advanced.setVisible(False)
+        col.addWidget(self.advanced)
 
+        # --- save bar
+        saver = QHBoxLayout()
+        self.btn_save = QPushButton("  Save changes")
+        self.btn_save.setObjectName("primary")
+        self.btn_save.clicked.connect(self.save_settings)
+        saver.addWidget(self.btn_save)
+        btn_discard = QPushButton("Discard")
+        btn_discard.clicked.connect(self.load_settings)
+        saver.addWidget(btn_discard)
+        self.save_hint = QLabel("")
+        self.save_hint.setObjectName("muted")
+        saver.addWidget(self.save_hint)
+        saver.addStretch(1)
+        col.addLayout(saver)
         col.addStretch(1)
-        outer.addWidget(scroll_page(inner))
+
+        outer.addWidget(scroll_page(inner), 1)
         return page
+
+    def _toggle_advanced(self, checked: bool):
+        self.advanced.setVisible(checked)
+        self.btn_adv.setText("Advanced and troubleshooting \u25be" if checked
+                             else "Advanced and troubleshooting \u25b8")
 
     # ---- about --------------------------------------------------------------
 
     def _about_page(self) -> QWidget:
         page = QWidget()
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(26, 22, 26, 18)
-        outer.setSpacing(14)
-        outer.addWidget(page_header("About", "Proton Drive folder app for Linux"))
+        outer.setContentsMargins(36, 30, 36, 20)
+        outer.setSpacing(18)
+        title = QLabel("About")
+        title.setObjectName("pageTitle")
+        outer.addWidget(title)
 
         inner = QWidget()
         col = QVBoxLayout(inner)
-        col.setContentsMargins(0, 0, 6, 0)
-        col.setSpacing(14)
+        col.setContentsMargins(0, 0, 8, 0)
+        col.setSpacing(16)
 
-        box, lay = card("This app")
-        line = QHBoxLayout()
-        line.setSpacing(14)
+        box, lay = card()
+        hero = QHBoxLayout()
+        hero.setSpacing(20)
         big = QLabel()
-        big.setPixmap(svg_pixmap(find_icon(), 56))
-        line.addWidget(big)
+        big.setPixmap(svg_pixmap(find_icon(), 72))
+        hero.addWidget(big)
         texts = QVBoxLayout()
-        texts.setSpacing(2)
-        t = QLabel("Proton Drive")
-        t.setObjectName("cardValue")
-        self.about_version = QLabel("GUI " + GUI_VERSION + "  ·  loading CLI version...")
-        self.about_version.setObjectName("hint")
+        texts.setSpacing(3)
+        t = QLabel("Proton Drive for Linux")
+        t.setObjectName("heroTitle")
+        self.about_version = QLabel("Version " + GUI_VERSION)
+        self.about_version.setObjectName("muted")
         texts.addWidget(t)
         texts.addWidget(self.about_version)
-        line.addLayout(texts, 1)
-        btn_repo = QPushButton("Open GitHub repository")
+        hero.addLayout(texts, 1)
+        btn_repo = QPushButton("Visit the website")
         btn_repo.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(REPO_URL)))
-        line.addWidget(btn_repo)
-        btn_copy = QPushButton("Copy link")
-        btn_copy.clicked.connect(lambda: QApplication.clipboard().setText(REPO_URL))
-        line.addWidget(btn_copy)
-        lay.addLayout(line)
-        how = QLabel(
-            "This window is a friendly front-end for the <b>official Proton Drive CLI</b> "
-            "and the sync service that keeps <b>~/ProtonDrive</b> equal to your cloud. "
-            "Its feature set is modeled on what professional desktop cloud-drive clients "
-            "do - the code is original MIT-licensed work in this repository.")
-        how.setObjectName("legal")
-        how.setWordWrap(True)
-        lay.addWidget(how)
+        hero.addWidget(btn_repo)
+        lay.addLayout(hero)
         col.addWidget(box)
 
-        legal, ll = card("License and legal")
-        txt = QLabel(
-            "<b>Unofficial.</b> Not affiliated with, endorsed, sponsored or supported by "
-            "Proton AG, Google LLC or Microsoft Corporation. This app talks to the official "
-            "Proton Drive CLI (its payload is MIT, Copyright (c) 2025-2026 Proton AG; source: "
-            "github.com/ProtonDriveApps/sdk). This repository's own scripts, including this "
-            "GUI, are MIT (see LICENSE in the repo). 'Proton' and 'Proton Drive' are "
-            "trademarks of Proton AG, used here only to identify the product being packaged. "
-            "References to other products are feature comparisons only - no code, assets or "
-            "configuration of those products is used. No AUR, no third-party binaries."
-            "<br><br>Not legal advice.")
-        txt.setObjectName("legal")
-        txt.setWordWrap(True)
-        ll.addWidget(txt)
-        col.addWidget(legal)
+        box, lay = card("What is this?")
+        what = QLabel(
+            "This app keeps a folder on your computer equal to your Proton Drive, "
+            "automatically - like the official desktop apps on Windows and macOS, "
+            "but for Linux. It is built by the community on top of Proton's official "
+            "command-line tool. Your files are encrypted and decrypted only on your "
+            "device; this app never sees your password.")
+        what.setWordWrap(True)
+        lay.addWidget(what)
+        col.addWidget(box)
+
+        box, lay = card("Good to know")
+        for text in (
+            "Files you delete are kept safe unless you turn on removal syncing in Settings.",
+            "If a file changes in two places at once, both versions are kept - nothing is lost.",
+            "Proton's online documents (Docs, Sheets) cannot be mirrored here; they stay online.",
+            "Your Proton session stays on this computer until you sign out.",
+        ):
+            line = QLabel("•  " + text)
+            line.setWordWrap(True)
+            lay.addWidget(line)
+        col.addWidget(box)
+
+        box, lay = card("Legal")
+        legal = QLabel(
+            "Unofficial. Not affiliated with, endorsed, sponsored or supported by "
+            "Proton AG, Google LLC or Microsoft Corporation. This app uses the official "
+            "Proton Drive CLI (payload MIT, Copyright (c) 2025-2026 Proton AG; source: "
+            "github.com/ProtonDriveApps/sdk). All scripts in this repository, including "
+            "this app, are MIT-licensed (see LICENSE). 'Proton' and 'Proton Drive' are "
+            "trademarks of Proton AG, used here only to identify the product being "
+            "packaged. Mentions of other products are feature comparisons only - no code, "
+            "assets or configurations of those products are used. Not legal advice.")
+        legal.setObjectName("small")
+        legal.setWordWrap(True)
+        lay.addWidget(legal)
+        col.addWidget(box)
         col.addStretch(1)
 
-        outer.addWidget(scroll_page(inner))
+        outer.addWidget(scroll_page(inner), 1)
         return page
 
     # ------------------------------------------------------------------ tray
@@ -1056,12 +1329,12 @@ class MainWindow(QWidget):
         self.tray = QSystemTrayIcon(tray_icon(svg_pixmap(find_icon(), 64), "unknown"), self)
         self.tray.setToolTip("Proton Drive")
         menu = QMenu()
-        act_show = menu.addAction("Show window")
+        act_show = menu.addAction("Open Proton Drive")
         act_show.triggered.connect(self.show_normal)
         menu.addSeparator()
         self.act_sync = menu.addAction("Sync now")
         self.act_sync.triggered.connect(self.sync_now)
-        act_folder = menu.addAction("Open folder")
+        act_folder = menu.addAction("Open my folder")
         act_folder.triggered.connect(self.open_folder)
         menu.addSeparator()
         self.act_pause = menu.addAction("Pause sync")
@@ -1100,43 +1373,43 @@ class MainWindow(QWidget):
             status = {"ok": "synced", "syncing": "syncing", "error": "error"}[hstatus]
         else:
             status = "unknown"
-        color = STATUS_COLORS.get(status, STATUS_COLORS["unknown"])
+        self._home_status = status
 
-        self.status_title.setText(STATUS_LABELS.get(status, status))
-        if status == "error":
-            detail = str(health.get("error") or "see Activity page for details")
-        elif status == "paused":
-            detail = "Sync is paused. Press Resume to continue."
+        color, title, sub_tpl = STATUS_TEXT.get(status, STATUS_TEXT["unknown"])
+        self.orb.set_status(status)
+        self.hero_title.setText(title)
+
+        if status == "synced":
+            last = ""
+            try:
+                last = rel_time(datetime.datetime.fromisoformat(str(health.get("ts"))))
+            except ValueError:
+                pass
+            sub = f"All your files are in sync." + (f"  Last checked {last}." if last else "")
         elif status == "syncing":
-            started = str(health.get("started", ""))[11:19]
-            detail = f"checking and syncing since {started}" if started else "working..."
+            sub = sub_tpl
+        elif status == "paused":
+            sub = sub_tpl
+        elif status == "error":
+            sub = str(health.get("error") or "See the Activity page for details.")
         else:
-            detail = self._next_poll_text()
-        self.status_detail.setText(detail[:220])
-        self.status_title.setStyleSheet(f"color: {color};")
+            sub = "Reading the latest status..."
+        self.hero_sub.setText(sub[:300])
 
-        self.side_dot.setStyleSheet(
-            f"border-radius: 6px; background: {color}; min-width:12px; max-width:12px;"
-            "min-height:12px; max-height:12px;")
-        self.side_status.setText(STATUS_LABELS.get(status, status))
+        self.side_dot.setStyleSheet(f"background: {color}; border-radius: 5px;")
+        self.side_status.setText(title)
 
-        self.val_service.setText("running" if active else "stopped")
-        try:
-            ts = datetime.datetime.fromisoformat(str(health.get("ts")))
-            self.val_sync.setText(rel_time(ts) if hstatus == "ok" else "-")
-        except ValueError:
-            self.val_sync.setText("-")
-
-        self.btn_pause.setText(" Pause" if active else " Resume")
+        self.btn_pause.setText("Pause" if active else "Resume")
         self.btn_pause.setIcon(self.style().standardIcon(
-            QStyle.StandardPixmap.SP_MediaPause if active else QStyle.StandardPixmap.SP_MediaPlay))
+            QStyle.StandardPixmap.SP_MediaPause if active
+            else QStyle.StandardPixmap.SP_MediaPlay))
         self.btn_sync.setEnabled(active)
         self.act_sync.setEnabled(active)
         self.act_pause.setText("Pause sync" if active else "Resume sync")
 
         if self.tray:
             self.tray.setIcon(tray_icon(svg_pixmap(find_icon(), 64), status))
-            self.tray.setToolTip(f"Proton Drive - {STATUS_LABELS.get(status, status)}")
+            self.tray.setToolTip(f"Proton Drive - {title}")
 
         self._poll_notifications(health)
         self._prev_health_status = hstatus
@@ -1146,39 +1419,33 @@ class MainWindow(QWidget):
         try:
             nxt = datetime.datetime.fromisoformat(str(health.get("next_poll")))
             secs = max(0, int((nxt - datetime.datetime.now(nxt.tzinfo)).total_seconds()))
-            return f"next check in ~{secs // 60}m {secs % 60:02d}s  ·  in sync"
+            return f"Next check in about {secs // 60} min {secs % 60:02d} s"
         except ValueError:
-            return "in sync"
+            return ""
 
     @guard_slot
     def update_countdown(self):
-        if self.status_title.text() == STATUS_LABELS["synced"]:
-            self.status_detail.setText(self._next_poll_text())
-        if self.stack.currentWidget() is not None and self.nav.currentRow() == 4:
-            self.det_next.setText("Next check: " + self._next_poll_text())
+        if self._home_status == "synced":
+            tail = self._next_poll_text()
+            base = "All your files are in sync."
+            try:
+                health = read_health()
+                last = rel_time(datetime.datetime.fromisoformat(str(health.get("ts"))))
+                if last:
+                    base += f"  Last checked {last}."
+            except ValueError:
+                pass
+            self.hero_sub.setText((base + ("  " + tail if tail else ""))[:300])
 
     @guard_slot
     def refresh_logs(self):
         self._log_lines = journal_lines(400)
-        self.preview.setPlainText("\n".join(self._log_lines[-8:]) or "(no activity yet)")
         self._parse_changes()
-        if self.chk_auto.isChecked():
+        self.render_changes()
+        if self.act_stack.currentIndex() == 1:
             self.render_logs()
-        if self.nav.currentRow() == 1:
-            self.render_changes()
 
-    def render_logs(self):
-        needle = self.log_filter.text().strip().lower()
-        lines = [ln for ln in self._log_lines if needle in ln.lower()] if needle else self._log_lines
-        at_bottom = (self.log_view.verticalScrollBar().value()
-                     >= self.log_view.verticalScrollBar().maximum() - 4)
-        self.log_view.setPlainText("\n".join(lines[-600:]))
-        if at_bottom or needle:
-            sb = self.log_view.verticalScrollBar()
-            sb.setValue(sb.maximum())
-
-    def copy_logs(self):
-        QApplication.clipboard().setText("\n".join(self._log_lines))
+    # ---- activity rendering
 
     def _parse_changes(self):
         changes = []
@@ -1197,17 +1464,26 @@ class MainWindow(QWidget):
             elif kind == "MKDIR":
                 label, direction = "Folder created", "up"
             elif kind == "TRASH":
-                label, direction = "Trashed", "other"
+                label, direction = "Removed", "other"
             else:
-                label, direction = "Conflict", "warn"
+                label, direction = "Conflict - both kept", "warn"
             rest = re.sub(r"\s*\(.*\)$", "", rest)
             changes.append({"ts": ts, "label": label, "dir": direction, "path": rest})
         self._changes = changes[-300:]
 
-    def render_changes(self):
-        kind = self.ch_kind.currentIndex()
-        needle = self.ch_filter.text().strip().lower()
-        self.ch_view.clear()
+    @guard_slot
+    def render_changes(self, *_):
+        if not hasattr(self, "moves_box"):
+            return
+        # clear old rows
+        while self.moves_box.count():
+            item = self.moves_box.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        kind = self.ch_kind.currentIndex() if hasattr(self, "ch_kind") else 0
+        needle = self.ch_filter.text().strip().lower() if hasattr(self, "ch_filter") else ""
         shown = 0
         for c in reversed(self._changes):
             if kind == 1 and c["dir"] != "up":
@@ -1218,26 +1494,51 @@ class MainWindow(QWidget):
                 continue
             if needle and needle not in c["path"].lower():
                 continue
-            when = c["ts"].strftime("%d %b %H:%M:%S") if c["ts"] else "?"
-            item = QTreeWidgetItem([when, c["label"], c["path"]])
-            color = {"up": "#2e9e5b", "down": "#3b6fd4", "warn": "#d9822b",
-                     "other": "#8a90a0"}.get(c["dir"], "#8a90a0")
-            item.setForeground(1, QColor(color))
-            self.ch_view.addTopLevelItem(item)
+            full = c["path"].rstrip("/")
+            name = full.rsplit("/", 1)[-1] or full
+            parent = full[:len(full) - len(name)].rstrip("/")
+            when = rel_time(c["ts"]) if c["ts"] else ""
+            self.moves_box.addWidget(
+                make_move_row(c["dir"], name, parent or "/", c["label"], when))
             shown += 1
-            if shown >= 300:
+            if shown >= 120:
                 break
-        self.ch_count.setText(f"{shown} entries")
+        self.moves_box.addStretch(1)
+        self.ch_count.setText(f"{shown} items" if shown else "")
+        self.moves_empty.setVisible(shown == 0)
+        self._render_recent()
 
-    def copy_changes(self):
-        text = "\n".join(f"{c['ts'].strftime('%Y-%m-%d %H:%M:%S') if c['ts'] else ''}"
-                         f"\t{c['label']}\t{c['path']}" for c in reversed(self._changes))
-        QApplication.clipboard().setText(text)
-        self.ch_count.setText("copied")
+    def _render_recent(self):
+        while self.recent_box.count():
+            item = self.recent_box.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        for c in self._changes[-6:][::-1]:
+            full = c["path"].rstrip("/")
+            name = full.rsplit("/", 1)[-1] or full
+            when = rel_time(c["ts"]) if c["ts"] else ""
+            self.recent_box.addWidget(make_move_row(c["dir"], name, "", c["label"], when))
+        self.recent_empty.setVisible(not self._changes)
+
+    def render_logs(self, *_):
+        needle = self.log_filter.text().strip().lower()
+        lines = [ln for ln in self._log_lines if needle in ln.lower()] if needle else self._log_lines
+        at_bottom = (self.log_view.verticalScrollBar().value()
+                     >= self.log_view.verticalScrollBar().maximum() - 4)
+        self.log_view.setPlainText("\n".join(lines[-600:]))
+        if at_bottom or needle:
+            sb = self.log_view.verticalScrollBar()
+            sb.setValue(sb.maximum())
+
+    def copy_logs(self):
+        QApplication.clipboard().setText("\n".join(self._log_lines))
 
     @guard_slot
-    def refresh_counts(self):
-        root = Path(self.ed_local.text().strip() or CONF_DEFAULTS["PROTON_SYNC_LOCAL"]).expanduser()
+    def refresh_folder_stats(self):
+        root = Path(self.ed_local.text().strip()
+                    if hasattr(self, "ed_local") and self.ed_local.text().strip()
+                    else CONF_DEFAULTS["PROTON_SYNC_LOCAL"]).expanduser()
         files = 0
         total = 0
         try:
@@ -1250,59 +1551,25 @@ class MainWindow(QWidget):
                         pass
         except OSError:
             pass
-        self.val_files.setText(f"{files:,}")
-        self.val_size.setText(f"{total / 1_048_576:,.0f} MiB")
-
-    @guard_slot
-    def refresh_details(self):
-        active = service_active()
-        health = read_health()
-        self.det_service.setText(
-            "Service: " + ("running" if active else "stopped")
-            + f"   ·   state: {health.get('status', '?')}")
-        bits = []
-        if "cycle_seconds" in health:
-            bits.append(f"last cycle took {health['cycle_seconds']} s")
-        if "actions" in health:
-            bits.append(f"{health['actions']} action(s), {health.get('failed', 0)} failed")
-        if "uploaded" in health or "downloaded" in health:
-            bits.append(f"last round: {health.get('uploaded', 0)} uploaded, "
-                        f"{health.get('downloaded', 0)} downloaded, "
-                        f"{health.get('conflicts', 0)} conflicts")
-        if "holds" in health:
-            bits.append(f"{health['holds']} unchanged")
-        self.det_cycle.setText("   ·   ".join(bits) or "-")
-        self.det_entries.setText(
-            f"counted: {health.get('remote_entries', '?')} remote / "
-            f"{health.get('local_entries', '?')} local / "
-            f"{health.get('state_records', '?')} state records")
-        self.det_next.setText("Next check: " + self._next_poll_text())
-        self.det_versions.setText(
-            f"GUI {GUI_VERSION}  ·  CLI {self._identity.get('version', '?')}  ·  "
-            f"Python {sys.version.split()[0]}  ·  Qt {self._qt_version()}")
-
-    @staticmethod
-    def _qt_version() -> str:
-        from PyQt6.QtCore import QT_VERSION_STR
-        return QT_VERSION_STR
+        size = (f"{total / 1_073_741_824:.2f} GB" if total >= 1_073_741_824
+                else f"{total / 1_048_576:,.0f} MB")
+        self.val_stats.setText(f"{files:,} files  ·  {size}")
+        self.folder_name.setText(root.name or "ProtonDrive")
 
     # ------------------------------------------------------------------ actions
 
     def sync_now(self):
         if not service_active():
-            QMessageBox.information(self, "Sync paused",
-                                    "The sync service is paused. Press Resume first.")
+            QMessageBox.information(self, "Sync is paused",
+                                    "Syncing is paused. Press Resume first.")
             return
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         WAKE_FILE.touch()
-        self.status_detail.setText("manual sync requested...")
-
-    def _local_path(self) -> str:
-        return self.ed_local.text().strip() if hasattr(self, "ed_local") \
-            else read_conf()["PROTON_SYNC_LOCAL"]
+        self.hero_sub.setText("On it - checking for new changes...")
 
     def open_folder(self):
-        root = Path(self._local_path() or CONF_DEFAULTS["PROTON_SYNC_LOCAL"]).expanduser()
+        conf = read_conf()
+        root = Path(conf["PROTON_SYNC_LOCAL"]).expanduser()
         root.mkdir(parents=True, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(root)))
 
@@ -1324,25 +1591,21 @@ class MainWindow(QWidget):
 
     def pause_for(self, minutes):
         systemctl("stop", JOURNAL_UNIT)
+        systemctl("stop", "proton-sync-autoresume.timer", "proton-sync-autoresume.service")
         if minutes:
-            systemctl("stop", "proton-sync-autoresume.timer", "proton-sync-autoresume.service")
             systemd_run(f"--on-active={minutes * 60}", "--unit=proton-sync-autoresume",
-                         shutil.which("systemctl") or "systemctl", "--user", "start", JOURNAL_UNIT)
-            self.status_detail.setText(f"paused for {minutes} minute(s)")
-        else:
-            systemctl("stop", "proton-sync-autoresume.timer", "proton-sync-autoresume.service")
-            self.status_detail.setText("paused")
-        QTimer.singleShot(600, self.refresh_status)
+                         shutil.which("systemctl") or "systemctl", "--user",
+                         "start", JOURNAL_UNIT)
+        QTimer.singleShot(700, self.refresh_status)
 
     def resume_now(self):
         systemctl("stop", "proton-sync-autoresume.timer", "proton-sync-autoresume.service")
         systemctl("start", JOURNAL_UNIT)
-        QTimer.singleShot(600, self.refresh_status)
+        QTimer.singleShot(700, self.refresh_status)
 
     def restart_service(self):
         systemctl("restart", JOURNAL_UNIT)
-        QTimer.singleShot(800, self.refresh_status)
-        self.det_service.setText("Service: restarting...")
+        QTimer.singleShot(900, self.refresh_status)
 
     # ------------------------------------------------------------------ settings
 
@@ -1350,9 +1613,11 @@ class MainWindow(QWidget):
     def load_settings(self):
         c = read_conf()
         self.ed_local.setText(c["PROTON_SYNC_LOCAL"])
-        self.ed_remote.setText(c["PROTON_SYNC_REMOTE"])
         self._remote_root = c["PROTON_SYNC_REMOTE"] or "/my-files"
-        self.sp_interval.setValue(int(c["PROTON_SYNC_INTERVAL"]))
+        secs = int(c["PROTON_SYNC_INTERVAL"])
+        best = min(range(len(INTERVAL_CHOICES)),
+                   key=lambda i: abs(INTERVAL_CHOICES[i][1] - secs))
+        self.cmb_interval.setCurrentIndex(best)
         self.chk_inotify.setChecked(c["PROTON_SYNC_INOTIFY"] == "1")
         self.chk_deletes.setChecked(c["PROTON_SYNC_DELETES"] == "1")
         self.sp_workers.setValue(int(c["PROTON_SYNC_WORKERS"]))
@@ -1363,11 +1628,10 @@ class MainWindow(QWidget):
         self.ed_extra.setPlainText("\n".join(read_conf_extras()))
         self.save_hint.setText("")
 
-        # preferences (GUI-only, stored via QSettings)
         theme = self._prefs.value("theme", "system")
         self.cmb_theme.blockSignals(True)
-        self.cmb_theme.setCurrentText({"system": "System", "light": "Light",
-                                       "dark": "Dark"}.get(theme, "System"))
+        self.cmb_theme.setCurrentText({"system": "Match my system", "light": "Light",
+                                       "dark": "Dark"}.get(theme, "Match my system"))
         self.cmb_theme.blockSignals(False)
         self.chk_starttray.setChecked(self._prefs.value("start_in_tray", False, type=bool))
         self.chk_note_errors.setChecked(self._prefs.value("notify_errors", True, type=bool))
@@ -1378,8 +1642,8 @@ class MainWindow(QWidget):
         enabled = False
         if exe:
             try:
-                enabled = subprocess.run([exe, "--user", "is-enabled", "--quiet", JOURNAL_UNIT],
-                                         timeout=10).returncode == 0
+                enabled = subprocess.run([exe, "--user", "is-enabled", "--quiet",
+                                          JOURNAL_UNIT], timeout=10).returncode == 0
             except (subprocess.TimeoutExpired, FileNotFoundError):
                 pass
         self.chk_autostart.blockSignals(True)
@@ -1391,13 +1655,14 @@ class MainWindow(QWidget):
     def save_settings(self):
         local = self.ed_local.text().strip()
         if not local.startswith("/"):
-            QMessageBox.warning(self, "Invalid folder", "The local folder must be an absolute path.")
+            QMessageBox.warning(self, "Folder missing",
+                                "Please choose a folder to sync first.")
             return
         selection = self._derive_selection() if self.chk_selective.isChecked() else []
         values = {
             "PROTON_SYNC_LOCAL": local,
-            "PROTON_SYNC_REMOTE": self.ed_remote.text().strip() or "/my-files",
-            "PROTON_SYNC_INTERVAL": str(self.sp_interval.value()),
+            "PROTON_SYNC_REMOTE": self._remote_root or "/my-files",
+            "PROTON_SYNC_INTERVAL": str(INTERVAL_CHOICES[self.cmb_interval.currentIndex()][1]),
             "PROTON_SYNC_DELETES": "1" if self.chk_deletes.isChecked() else "0",
             "PROTON_SYNC_INOTIFY": "1" if self.chk_inotify.isChecked() else "0",
             "PROTON_SYNC_WORKERS": str(self.sp_workers.value()),
@@ -1409,9 +1674,8 @@ class MainWindow(QWidget):
                   if l.strip() and not l.strip().startswith("#")
                   and "=" in l and l.split("=", 1)[0].strip() not in CONF_DEFAULTS]
         answer = QMessageBox.question(
-            self, "Save settings",
-            "Save and restart the sync service now?\n\n"
-            "(An upload or download in progress will simply continue in the next cycle.)")
+            self, "Save changes",
+            "Save your settings and restart syncing now?")
         if answer != QMessageBox.StandardButton.Yes:
             return
         write_conf(values, extras)
@@ -1422,26 +1686,18 @@ class MainWindow(QWidget):
             pass
         restarted = systemctl("restart", JOURNAL_UNIT)
         if outdated:
-            self.save_hint.setText("saved, but the service unit is old - run "
-                                   "./scripts/install-sync.sh in the repo")
+            self.save_hint.setText("Saved. Your install is from an older version - "
+                                   "run scripts/install-sync.sh once to update it.")
         elif restarted:
-            self.save_hint.setText("saved - service restarted")
+            self.save_hint.setText("Saved. Syncing restarted.")
         else:
-            self.save_hint.setText("saved, but the service could not be restarted")
-        QTimer.singleShot(800, self.refresh_status)
+            self.save_hint.setText("Saved, but syncing could not be restarted.")
+        QTimer.singleShot(900, self.refresh_status)
 
     def _theme_changed(self, index: int):
         name = ["system", "light", "dark"][max(0, min(2, index))]
         self._prefs.setValue("theme", name)
-        self.apply_theme(name)
-
-    @staticmethod
-    def apply_theme(name: str):
-        app = QApplication.instance()
-        if not app:
-            return
-        dark = is_system_dark(app) if name == "system" else (name == "dark")
-        app.setStyleSheet(build_qss(dark))
+        apply_theme(name)
 
     # --- selective sync tree
 
@@ -1450,16 +1706,16 @@ class MainWindow(QWidget):
         c = read_conf()
         self._remote_root = c["PROTON_SYNC_REMOTE"] or "/my-files"
         self._selection = [s for s in c["PROTON_SYNC_SUBFOLDERS"].split(",") if s]
-        root = QTreeWidgetItem([f"My files  ({self._remote_root})"])
+        root = QTreeWidgetItem([f"All files in your cloud ({self._remote_root})"])
         root.setData(0, Qt.ItemDataRole.UserRole, "")
         root.setFlags(root.flags() | Qt.ItemFlag.ItemIsUserCheckable
-                      | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsAutoTristate)
+                      | Qt.ItemFlag.ItemIsEnabled)
         root.setCheckState(0, Qt.CheckState.Unchecked if self._selection
                            else Qt.CheckState.Checked)
         self.sel_tree.addTopLevelItem(root)
         placeholder = QTreeWidgetItem(root, ["Loading..."])
         placeholder.setData(0, Qt.ItemDataRole.UserRole, None)
-        self.sel_hint.setText("loading folder list...")
+        self.sel_hint.setText("loading your cloud folders...")
 
         w = Worker(lambda: fetch_remote_folders(self._remote_root, ""))
         w.done.connect(lambda r: self._sel_populate(root, r))
@@ -1469,23 +1725,60 @@ class MainWindow(QWidget):
     def _sel_populate(self, item, folders):
         if isinstance(folders, Exception):
             folders = []
-        item.takeChildren()
-        sel = set(self._selection)
-        for f in folders:
-            child = QTreeWidgetItem(item, [f["name"]])
-            child.setData(0, Qt.ItemDataRole.UserRole, f["rel"])
-            child.setData(0, Qt.ItemDataRole.UserRole + 1, True)
-            child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable
-                           | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsAutoTristate)
-            child.setCheckState(0, Qt.CheckState.Checked if f["rel"] in sel
-                                else Qt.CheckState.Unchecked)
-            QTreeWidgetItem(child, ["..."]).setData(0, Qt.ItemDataRole.UserRole, None)
+        self._sel_updating = True
+        try:
+            item.takeChildren()
+            sel = set(self._selection)
+            parent_checked = item.checkState(0) == Qt.CheckState.Checked
+            for f in folders:
+                child = QTreeWidgetItem(item, [f["name"]])
+                child.setData(0, Qt.ItemDataRole.UserRole, f["rel"])
+                child.setData(0, Qt.ItemDataRole.UserRole + 1, True)
+                child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable
+                               | Qt.ItemFlag.ItemIsEnabled)
+                checked = parent_checked or f["rel"] in sel
+                child.setCheckState(0, Qt.CheckState.Checked if checked
+                                    else Qt.CheckState.Unchecked)
+                QTreeWidgetItem(child, ["..."]).setData(0, Qt.ItemDataRole.UserRole, None)
+        finally:
+            self._sel_updating = False
         if item is self.sel_tree.topLevelItem(0):
-            self.sel_hint.setText(f"{len(folders)} top-level folder(s) - expand to choose")
+            self.sel_hint.setText(f"{len(folders)} top folders - expand to choose more")
+
+    def _sel_item_changed(self, item):
+        """Manual tri-state: check cascades down, parents reflect children."""
+        if self._sel_updating:
+            return
+        self._sel_updating = True
+        try:
+            state = item.checkState(0)
+            if state in (Qt.CheckState.Checked, Qt.CheckState.Unchecked):
+                stack = [item]
+                while stack:
+                    it = stack.pop()
+                    for i in range(it.childCount()):
+                        c = it.child(i)
+                        if c.data(0, Qt.ItemDataRole.UserRole) is None:
+                            continue  # placeholder
+                        c.setCheckState(0, state)
+                        stack.append(c)
+            p = item.parent()
+            while p is not None:
+                states = [p.child(i).checkState(0) for i in range(p.childCount())
+                          if p.child(i).data(0, Qt.ItemDataRole.UserRole) is not None]
+                if states and all(s == Qt.CheckState.Checked for s in states):
+                    p.setCheckState(0, Qt.CheckState.Checked)
+                elif any(s != Qt.CheckState.Unchecked for s in states):
+                    p.setCheckState(0, Qt.CheckState.PartiallyChecked)
+                else:
+                    p.setCheckState(0, Qt.CheckState.Unchecked)
+                p = p.parent()
+        finally:
+            self._sel_updating = False
 
     def _sel_expand(self, item):
         if item.data(0, Qt.ItemDataRole.UserRole + 1):
-            return  # already loaded
+            return
         rel = item.data(0, Qt.ItemDataRole.UserRole) or ""
         w = Worker(lambda: fetch_remote_folders(self._remote_root, rel))
         w.done.connect(lambda r, item=item: self._sel_populate(item, r))
@@ -1514,15 +1807,15 @@ class MainWindow(QWidget):
         walk(root)
         return out
 
-    # --- preference toggles
-
     def _autostart_toggled(self, checked: bool):
         exe = shutil.which("systemctl")
         if not exe:
             return
         ok = subprocess.run([exe, "--user", "enable" if checked else "disable",
-                             JOURNAL_UNIT], capture_output=True, timeout=15).returncode == 0
-        self.start_hint.setText("starts at login" if ok else "could not change autostart")
+                             JOURNAL_UNIT],
+                            capture_output=True, timeout=15).returncode == 0
+        self.save_hint.setText("Will start when you log in." if ok
+                               else "Could not change start-up.")
 
     # ------------------------------------------------------------------ account
 
@@ -1538,36 +1831,43 @@ class MainWindow(QWidget):
         self._identity = result
         email = result.get("email")
         logged_in = result.get("logged_in")
-        self.val_email.setText(email or (result.get("error") or "not logged in"))
-        self.badge_login.setText("logged in" if logged_in else "not logged in")
-        color = "#2e9e5b" if logged_in else "#d9822b"
-        self.badge_login.setStyleSheet(f"background: {color}22; color: {color};")
+        self.avatar.set_email(email)
+        self.val_email.setText(email or "You're not signed in yet")
+        self.badge_login.setText("Signed in to Proton" if logged_in else
+                                 "Sign in to start syncing your cloud files")
         self.btn_login.setVisible(not logged_in)
         self.btn_logout.setVisible(logged_in)
         ver = result.get("version", "?")
-        self.side_version.setText("CLI " + ver)
-        self.about_version.setText(f"GUI {GUI_VERSION}  ·  CLI {ver}")
-        self.refresh_details()
+        self.about_version.setText(f"Version {GUI_VERSION}  ·  Engine {ver}")
 
     def login_terminal(self):
         cli = resolve_cli()
         if not cli:
-            QMessageBox.warning(self, "CLI not found", "The official CLI was not found.")
+            QMessageBox.warning(self, "Not found",
+                                "The Proton command-line tool is missing. "
+                                "Reinstall the app and try again.")
             return
         for name, args in (("konsole", ["-e"]), ("kitty", []), ("alacritty", ["-e"]),
                            ("xfce4-terminal", ["-e"]), ("gnome-terminal", ["--"]),
                            ("xterm", ["-e"])):
             exe = shutil.which(name)
             if exe:
-                script = f'{shlex.quote(cli)} auth login; echo; echo "You can close this window."'
+                script = (f'{shlex.quote(cli)} auth login; echo; '
+                          'echo "You can close this window now."')
                 subprocess.Popen([exe, *args, "sh", "-c", script])
-                QTimer.singleShot(8000, self.load_identity)
+                QTimer.singleShot(10000, self.load_identity)
                 return
-        QMessageBox.information(self, "No terminal found",
-                                "Open a terminal and run:\n  proton-drive auth login")
+        QMessageBox.information(
+            self, "Sign in",
+            "A terminal window could not be opened automatically.\n\n"
+            "Please open a terminal yourself and run:\n\n"
+            "    proton-drive auth login")
 
     def logout(self):
-        if QMessageBox.question(self, "Log out", "Log out of Proton Drive on this machine?") \
+        if QMessageBox.question(
+                self, "Sign out",
+                "Sign out of Proton on this computer?\n\n"
+                "Your synced files stay on this computer.") \
                 != QMessageBox.StandardButton.Yes:
             return
         cli = resolve_cli()
@@ -1586,7 +1886,7 @@ class MainWindow(QWidget):
 
     def _notify(self, title: str, msg: str):
         if self.tray:
-            self.tray.showMessage(title, msg, QSystemTrayIcon.MessageIcon.Information, 4000)
+            self.tray.showMessage(title, msg, QSystemTrayIcon.MessageIcon.Information, 4500)
 
     def _poll_notifications(self, health: dict):
         lines = journal_lines(60)
@@ -1596,21 +1896,22 @@ class MainWindow(QWidget):
                 continue
             self._last_seen_ts = ts
             body = journal_body(ln)
+            m = CHANGE_RE.search(body)
+            name = (m.group(2).strip().split("/")[-1] if m else "")[:60]
             if "CONFLICT" in body and self.chk_note_conflicts.isChecked() \
                     and self._cool_ok("conflict"):
-                self._notify("Proton Drive - conflict",
-                             re.sub(r"^CONFLICT\s+", "", body)[:150])
-            elif ("ERROR" in body or "FAILED" in body) and self.chk_note_errors.isChecked() \
-                    and self._cool_ok("error"):
-                self._notify("Proton Drive - sync error", body[:150])
-        # finished round with real work done
+                self._notify("Two versions were kept",
+                             f"'{name}' changed in two places - both copies are safe.")
+            elif ("ERROR" in body or "FAILED" in body) \
+                    and self.chk_note_errors.isChecked() and self._cool_ok("error"):
+                self._notify("Sync problem", body[:150])
         if (self._prev_health_status == "syncing" and health.get("status") == "ok"
                 and self.chk_note_done.isChecked()
                 and (health.get("uploaded", 0) or health.get("downloaded", 0))
                 and self._cool_ok("done", 60)):
-            self._notify("Proton Drive - synced",
-                         f"{health.get('uploaded', 0)} uploaded, "
-                         f"{health.get('downloaded', 0)} downloaded")
+            self._notify("All done",
+                         f"{health.get('uploaded', 0)} file(s) uploaded, "
+                         f"{health.get('downloaded', 0)} downloaded.")
 
     # ------------------------------------------------------------------ window
 
@@ -1627,10 +1928,20 @@ class MainWindow(QWidget):
             if not self._tray_warned:
                 self._tray_warned = True
                 self.tray.showMessage("Proton Drive",
-                                      "Still running in the tray - right-click to quit.",
-                                      QSystemTrayIcon.MessageIcon.Information, 3000)
+                                      "Still running - syncing continues in the "
+                                      "background. Right-click the tray icon to quit.",
+                                      QSystemTrayIcon.MessageIcon.Information, 4000)
             return
         event.accept()
+
+
+def scroll_page(inner: QWidget) -> QScrollArea:
+    sc = QScrollArea()
+    sc.setWidgetResizable(True)
+    sc.setWidget(inner)
+    sc.setFrameShape(QFrame.Shape.NoFrame)
+    sc.viewport().setAutoFillBackground(False)
+    return sc
 
 
 # --------------------------------------------------------------------------- main
@@ -1645,19 +1956,22 @@ def main() -> int:
     app.setApplicationName("Proton Drive")
     app.setOrganizationName("ProtonDriveCLI")
     app.setStyle("Fusion")
+    font = QFont("Inter")
+    font.setPointSize(10)
+    app.setFont(font)
 
     prefs = QSettings("ProtonDriveCLI", "ProtonDriveGUI")
     theme = prefs.value("theme", "system")
-    MainWindow.apply_theme(theme if theme in ("system", "light", "dark") else "system")
+    apply_theme(theme if theme in ("system", "light", "dark") else "system")
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     lock = QLockFile(str(LOCK_FILE))
     if not smoke and not lock.tryLock(100):
-        QMessageBox.information(None, "Already running", "The Proton Drive app is already open.")
+        QMessageBox.information(None, "Already running",
+                                "Proton Drive is already open.")
         return 0
 
     win = MainWindow()
-    # preferences that act immediately
     win.chk_autostart.toggled.connect(win._autostart_toggled)
     win.chk_starttray.toggled.connect(
         lambda v: win._prefs.setValue("start_in_tray", v))
@@ -1669,9 +1983,10 @@ def main() -> int:
     if smoke or not prefs.value("start_in_tray", False, type=bool):
         win.show()
     else:
-        win.tray and win.tray.showMessage(
-            "Proton Drive", "Started in the tray - click the icon to open.",
-            QSystemTrayIcon.MessageIcon.Information, 3000)
+        if win.tray:
+            win.tray.showMessage("Proton Drive",
+                                 "Running quietly in the tray. Click the icon to open.",
+                                 QSystemTrayIcon.MessageIcon.Information, 4000)
 
     if smoke:
         QTimer.singleShot(2500, app.quit)

@@ -44,6 +44,8 @@ CLI contract (verified against Proton Drive CLI 0.9.0)
 
 Environment knobs
 -----------------
+  These are read from the environment, falling back to the settings file
+  ~/.config/proton-sync.conf, so a manual run matches the service exactly.
   PROTON_DRIVE_BIN       path to the official CLI (default: proton-drive on PATH)
   PROTON_SYNC_LOCAL      local folder           (default ~/ProtonDrive)
   PROTON_SYNC_REMOTE     remote folder          (default /my-files)
@@ -84,20 +86,47 @@ log = logging.getLogger("proton-sync")
 
 # ---------------------------------------------------------------- configuration
 
+
+def _conf_file_values() -> dict:
+    """~/.config/proton-sync.conf (the file the GUI edits; systemd loads it as
+    EnvironmentFile, so inside the service the same values arrive as env vars).
+    Reading it here keeps manual runs (e.g. --dry-run) consistent with the
+    service. Real environment variables always win over the file."""
+    out = {}
+    p = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "proton-sync.conf"
+    try:
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                out[k.strip()] = v.strip()
+    except OSError:
+        pass
+    return out
+
+
+_FILE_CONF = _conf_file_values()
+
+
+def cfg(key: str, default: str = "") -> str:
+    v = os.environ.get(key)
+    return v if v is not None else _FILE_CONF.get(key, default)
+
+
 BIN = os.environ.get("PROTON_DRIVE_BIN") or shutil.which("proton-drive")
-LOCAL_ROOT = Path(os.environ.get("PROTON_SYNC_LOCAL", str(Path.home() / "ProtonDrive"))).expanduser()
-REMOTE_ROOT = os.environ.get("PROTON_SYNC_REMOTE", "/my-files").rstrip("/") or "/my-files"
-INTERVAL = int(os.environ.get("PROTON_SYNC_INTERVAL", "300"))
-SCAN_WORKERS = int(os.environ.get("PROTON_SYNC_WORKERS", "8"))
-SCAN_RETRIES = int(os.environ.get("PROTON_SYNC_RETRIES", "3"))
-TRANSFER_TIMEOUT = int(os.environ.get("PROTON_SYNC_TIMEOUT", "3600"))
-META_TIMEOUT = int(os.environ.get("PROTON_SYNC_META_TIMEOUT", "120"))
-PROPAGATE_DELETES = os.environ.get("PROTON_SYNC_DELETES", "0") == "1"
-INOTIFY_ENABLED = os.environ.get("PROTON_SYNC_INOTIFY", "1") == "1"
+LOCAL_ROOT = Path(cfg("PROTON_SYNC_LOCAL", str(Path.home() / "ProtonDrive"))).expanduser()
+REMOTE_ROOT = cfg("PROTON_SYNC_REMOTE", "/my-files").rstrip("/") or "/my-files"
+INTERVAL = int(cfg("PROTON_SYNC_INTERVAL", "300"))
+SCAN_WORKERS = int(cfg("PROTON_SYNC_WORKERS", "8"))
+SCAN_RETRIES = int(cfg("PROTON_SYNC_RETRIES", "3"))
+TRANSFER_TIMEOUT = int(cfg("PROTON_SYNC_TIMEOUT", "3600"))
+META_TIMEOUT = int(cfg("PROTON_SYNC_META_TIMEOUT", "120"))
+PROPAGATE_DELETES = cfg("PROTON_SYNC_DELETES", "0") == "1"
+INOTIFY_ENABLED = cfg("PROTON_SYNC_INOTIFY", "1") == "1"
 # selective sync: only these remote subfolders are mirrored ("" = everything)
-SUBFOLDERS = [s.strip("/") for s in os.environ.get("PROTON_SYNC_SUBFOLDERS", "").split(",") if s.strip()]
+SUBFOLDERS = [s.strip("/") for s in cfg("PROTON_SYNC_SUBFOLDERS", "").split(",") if s.strip()]
 # comma-separated globs matched against rel path and file name (e.g. "*.tmp,.cache")
-EXCLUDE = [p.strip() for p in os.environ.get("PROTON_SYNC_EXCLUDE", "").split(",") if p.strip()]
+EXCLUDE = [p.strip() for p in cfg("PROTON_SYNC_EXCLUDE", "").split(",") if p.strip()]
 SKIP_NAME = re.compile(r"^\.Trash-\d+$")   # trash folders desktop apps leave behind
 
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "proton-sync"

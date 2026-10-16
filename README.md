@@ -80,24 +80,23 @@ Settings live in `~/.config/proton-sync.conf` - edit by hand or with the app.
 proton-drive-gui             # or search "Proton Drive" in your app menu
 ```
 
-A Qt6 front-end for the sync service (PyQt6 from the **official repos** -
-no AUR, no bundled toolkits):
+A friendly Qt6 desktop app for the sync service (PyQt6 from the **official
+repos** - no AUR, no bundled toolkits), designed for everyday users:
 
-* **Dashboard** - live status with next-check countdown, account, file
-  count/size, one-click *Sync now*, *Open folder* and *Pause* (15 minutes,
-  1 hour, or until you resume)
-* **Changes** - transfer history: what was uploaded, downloaded, trashed or
-  conflicted, with path/kind filters and copy
-* **Activity** - live raw service log with filter, auto-scroll and copy
-* **Settings** - sync folder, interval, instant-upload watch, deletion
-  syncing, **selective sync** (browse the cloud and pick which folders
-  mirror), **exclusions** (`*.tmp`-style skip patterns), **notifications**
-  (errors, conflicts, finished rounds) with a test button, **start at
-  login**, start-minimized-in-tray, **light/dark/system theme**, and an
-  advanced box for extra environment variables (e.g. proxies); saving
-  writes `~/.config/proton-sync.conf` and restarts the service
-* **Details** - service health, last-cycle statistics, versions, paths and
-  quick actions (restart service, open config, copy log command)
+* **Home** - a big friendly status ("You're up to date" / "Syncing..." /
+  "Sync is paused") with an animated status orb, one-click *Open my
+  folder*, *Sync now* and *Pause* (15 minutes, 1 hour, or until you
+  resume), your account, folder size and recently synced files
+* **Activity** - what moved recently (uploaded / downloaded / removed /
+  conflicts) with search and filters, plus a technical log tab
+* **Settings** - plain-language options: which folder syncs, selective
+  sync (browse the cloud and pick folders), never-sync patterns
+  (`*.tmp`-style), instant upload, sync frequency, notifications with a
+  test button, start at login, start-minimized-in-tray, light/dark/system
+  theme - and an *Advanced* section for power users (connections, retries,
+  extra environment variables, log access). Saving writes
+  `~/.config/proton-sync.conf` and restarts syncing.
+* **About** - what the app is, the good-to-know rules and the legal notes
 * **tray icon** - status at a glance plus desktop notifications; closing
   the window keeps it running (right-click the tray icon to quit)
 
