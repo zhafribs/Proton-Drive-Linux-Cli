@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="console-application">
+  <id>io.github.zhafrisbs.ProtonDriveCLI</id>
+  <name>Proton Drive CLI</name>
+  <summary>Proton Drive command-line client, packaged as an AppImage</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <description>
+    <p>
+      Unofficial AppImage packaging of the official Proton Drive CLI published by
+      Proton AG. The binary inside is the unmodified upstream
+      linux build, verified against the SHA-512 checksum published on
+      proton.me before it is packaged.
+    </p>
+    <p>
+      Proton Drive CLI supports authentication, filesystem operations (upload,
+      download, sync-style moves), sharing and invitations, albums and photos,
+      and Google Takeout import. Run it with --help for the full command list.
+    </p>
+    <p>
+      This package is not produced or endorsed by Proton AG: it is unofficial
+      and is not affiliated with, sponsored by, or supported by Proton AG.
+      "Proton Drive" and the Proton Drive CLI are trademarks of Proton AG. The
+      payload is MIT-licensed, Copyright (c) 2025-2026 Proton AG, and its
+      license notice ships inside this package at
+      usr/share/licenses/proton-drive/LICENSE. Source of the build recipe lives
+      next to this file.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.zhafrisbs.ProtonDriveCLI.desktop</launchable>
+  <provides>
+    <binary>proton-drive</binary>
+  </provides>
+  <url type="homepage">https://proton.me/download/drive/cli/index.html</url>
+  <url type="vcs-browser">https://github.com/ProtonDriveApps</url>
+  <developer id="proton.me">
+    <name>Proton AG (upstream binary)</name>
+  </developer>
+  <categories>
+    <category>Network</category>
+    <category>FileTransfer</category>
+    <category>Utility</category>
+  </categories>
+  <releases>
+    <release version="0.9.0" date="2026-10-05"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+  <custom>
+    <value key="Package">AppImage</value>
+  </custom>
+</component>

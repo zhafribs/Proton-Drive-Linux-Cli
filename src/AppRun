@@ -1,0 +1,12 @@
+#!/bin/sh
+# Proton Drive CLI AppImage entry point.
+# Keeps argv untouched so the AppImage behaves exactly like the upstream binary.
+
+HERE="$(CDPATH='' cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)"
+
+if [ ! -x "$HERE/usr/bin/proton-drive" ]; then
+    echo "proton-drive: payload missing from AppImage ($HERE/usr/bin/proton-drive)" >&2
+    exit 127
+fi
+
+exec "$HERE/usr/bin/proton-drive" "$@"

@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Proton Drive CLI
+GenericName=Cloud Storage Client
+Comment=Official Proton Drive command-line client, packaged as an AppImage
+Exec=proton-drive
+Icon=proton-drive
+Terminal=true
+Categories=Network;FileTransfer;
+Keywords=proton;drive;cloud;sync;storage;cli;
+StartupNotify=false
+X-AppImage-Name=Proton Drive CLI
+X-AppImage-Version=0.9.0

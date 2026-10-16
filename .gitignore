@@ -1,0 +1,16 @@
+# Upstream Proton binaries and auto-fetched build tools (recreated by build.sh)
+download/
+tools/
+
+# Generated build artifacts
+build/
+dist/
+
+# Extracted AppImages / squashfs trees
+squashfs-root/
+*.AppImage
+*.zsync
+
+# Editor/OS noise
+.DS_Store
+*.swp
