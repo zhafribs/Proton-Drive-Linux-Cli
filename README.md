@@ -67,6 +67,27 @@ Knobs: `PROTON_SYNC_LOCAL`, `PROTON_SYNC_REMOTE`, `PROTON_SYNC_INTERVAL`
 (seconds, default 300), `PROTON_SYNC_DELETES`, `PROTON_SYNC_WORKERS`,
 `PROTON_SYNC_INOTIFY=0` (disable the fast path). Uninstall:
 `./scripts/install-sync.sh uninstall` (folder and state are kept).
+Settings live in `~/.config/proton-sync.conf` - edit by hand or with the app.
+
+## Desktop app (GUI)
+
+```bash
+./scripts/install-sync.sh    # the sync service first (see above)
+./scripts/install-gui.sh     # then the app: menu entry + icon + launcher
+proton-drive-gui             # or search "Proton Drive" in your app menu
+```
+
+A Qt6 front-end for the sync service (PyQt6 from the **official repos** -
+no AUR, no bundled toolkits):
+
+* **Dashboard** - live status, account, file count/size, one-click
+  *Sync now*, *Open folder*, *Pause/Resume*
+* **Activity** - live service log with filter
+* **Settings** - sync folder, remote folder, interval, instant-upload watch,
+  deletion syncing; saving writes `~/.config/proton-sync.conf` and restarts
+  the service
+* **tray icon** - status at a glance; closing the window keeps it running
+  (right-click the tray icon to quit)
 
 ## Distro notes
 
@@ -163,6 +184,8 @@ scripts/check-upstream.sh   parse proton.me, refresh upstream.lock (CI runs this
 scripts/release-notes.sh    render release-notes.md.tmpl for the built artifacts
 scripts/proton-sync.py      two-way folder sync on top of the official CLI (stdlib only)
 scripts/install-sync.sh     install/uninstall the sync as a systemd user service
+scripts/proton-sync-gui.py  Qt6 desktop app (dashboard, logs, settings, tray)
+scripts/install-gui.sh      install the app: launcher + menu entry + icon
 release-notes.md.tmpl       release notes template (hashes filled in at build time)
 .github/workflows/release.yml  scheduled upstream check + build + publish
 install-command.sh  symlink the built AppImage into ~/.local/bin

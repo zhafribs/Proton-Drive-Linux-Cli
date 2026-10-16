@@ -94,6 +94,8 @@ SKIP_NAME = re.compile(r"^\.Trash-\d+$")   # trash folders desktop apps leave be
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "proton-sync"
 STATE_FILE = STATE_DIR / "state.json"
 LOCK_FILE = STATE_DIR / "sync.lock"
+# dropping this file requests an immediate cycle (the GUI's "Sync now" button)
+WAKE_FILE = STATE_DIR / "wake"
 
 # minimum spacing between cycles + how long events must be quiet first
 MIN_CYCLE_GAP = 30
@@ -715,10 +717,15 @@ def loop_forever():
             log.exception("cycle crashed (next try in %ds)", INTERVAL)
         wake.clear()
 
-        # sleep until the interval expires or something changes locally
+        # sleep until the interval expires, a local change, or a wake request
         deadline = time.time() + INTERVAL
         while time.time() < deadline:
-            if wake.wait(timeout=1):
+            triggered = wake.wait(timeout=1)
+            if WAKE_FILE.exists():
+                WAKE_FILE.unlink(missing_ok=True)
+                log.info("manual sync requested (wake)")
+                triggered = True
+            if triggered:
                 # debounce: wait until events stop for a while, respect min spacing
                 quiet = time.time() + DEBOUNCE_QUIET
                 while time.time() < quiet:

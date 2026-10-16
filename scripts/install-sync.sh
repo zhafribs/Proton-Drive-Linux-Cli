@@ -32,6 +32,20 @@ case "${1:-install}" in
     [ -f "$SYNC" ] || { echo "missing $SYNC" >&2; exit 1; }
 
     mkdir -p "$UNIT_DIR"
+    CONF="$HOME/.config/proton-sync.conf"
+    if [ ! -f "$CONF" ]; then
+        cat > "$CONF" <<EOF
+# proton-sync settings - editable by hand or with the Proton Drive GUI
+# (scripts/install-gui.sh). Changes apply after: systemctl --user restart proton-sync
+PROTON_SYNC_LOCAL=$HOME/ProtonDrive
+PROTON_SYNC_REMOTE=/my-files
+PROTON_SYNC_INTERVAL=300
+PROTON_SYNC_DELETES=0
+PROTON_SYNC_INOTIFY=1
+PROTON_SYNC_WORKERS=8
+EOF
+        echo "created default settings at $CONF"
+    fi
     cat > "$UNIT" <<EOF
 [Unit]
 Description=Proton Drive folder sync (official CLI, two-way)
@@ -39,6 +53,7 @@ Description=Proton Drive folder sync (official CLI, two-way)
 [Service]
 Type=simple
 Environment=PROTON_DRIVE_BIN=$BIN_PATH
+EnvironmentFile=-$CONF
 ExecStart=$PY "$SYNC" --loop
 Restart=on-failure
 RestartSec=15
