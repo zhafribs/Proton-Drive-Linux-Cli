@@ -175,15 +175,18 @@ def scan_remote():
     """Walk REMOTE_ROOT in parallel -> {relpath: {type, mtime, size, uid, doc}} ('' = root)."""
     tree = {}
     rel_of = {REMOTE_ROOT: ""}
-    # each BFS round lists all pending folders in parallel
+    visited = set()
+    # each BFS round lists ALL pending folders in parallel; next_dirs accumulates
+    # the child folders of the whole round (reset once per round, not per folder!)
     pending = [REMOTE_ROOT]
     with ThreadPoolExecutor(max_workers=SCAN_WORKERS) as pool:
         while pending:
+            next_dirs = []
             for rpath, entries, err in pool.map(_list_folder, pending):
                 if err:
                     raise CliError(f"cannot list {rpath}: {err}")
+                visited.add(rpath)
                 rel = rel_of[rpath]
-                next_dirs = []
                 for e in entries:
                     if "type" not in e:                       # pseudo-sections (/, /trash, ...)
                         continue
@@ -205,8 +208,9 @@ def scan_remote():
                     tree[child_rel] = node
                     if node["type"] == "dir":
                         child_rpath = f"{rpath}/{escape(name)}"
-                        rel_of[child_rpath] = child_rel
-                        next_dirs.append(child_rpath)
+                        if child_rpath not in visited:
+                            rel_of[child_rpath] = child_rel
+                            next_dirs.append(child_rpath)
             pending = next_dirs   # next BFS round lists all of these in parallel
     return tree
 
@@ -290,7 +294,14 @@ def ensure_remote_dir(rel, tree, created):
     if parent:
         ensure_remote_dir(parent, tree, created)
     name = rel.rsplit("/", 1)[1]
-    cli(["fs", "create-folder", remote_parent(rel), escape(name)], timeout=META_TIMEOUT)
+    try:
+        cli(["fs", "create-folder", remote_parent(rel), escape(name)], timeout=META_TIMEOUT)
+    except CliError as e:
+        # defense in depth: if the scan under-reported, the folder may already
+        # exist - that is fine, adopt it instead of failing the whole batch
+        if "already exists" not in str(e):
+            raise
+        log.debug("remote folder %s already exists (scan gap?) - adopting", rel)
     tree[rel] = {"type": "dir", "mtime": None, "uid": None, "size": 0, "doc": False}
     created.add(rel)
     log.info("MKDIR  remote %s", rel)
