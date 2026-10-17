@@ -113,12 +113,12 @@ fetch_payload() {
 }
 
 render_icon() {
-    # simple-icons "protondrive" glyph, tinted with Proton brand purple
+    # original cloud-upload glyph (src/protondrive-icon.svg), Proton-purple
+    # gradient baked into the SVG - rendered straight to PNG for the AppDir
     [ -f "$SRC/protondrive-icon.svg" ] || die "missing $SRC/protondrive-icon.svg"
     command -v rsvg-convert >/dev/null || die "rsvg-convert not found (pacman -S librsvg / apt install librsvg2-bin / dnf install librsvg2-tools)"
-    sed 's|<svg |<svg fill="#6D4AFF" |' "$SRC/protondrive-icon.svg" > "$BUILD/protondrive-tinted.svg"
-    rsvg-convert -w 256 -h 256 "$BUILD/protondrive-tinted.svg" -o "$BUILD/icon-256.png"
-    rsvg-convert -w 512 -h 512 "$BUILD/protondrive-tinted.svg" -o "$BUILD/icon-512.png"
+    rsvg-convert -w 256 -h 256 "$SRC/protondrive-icon.svg" -o "$BUILD/icon-256.png"
+    rsvg-convert -w 512 -h 512 "$SRC/protondrive-icon.svg" -o "$BUILD/icon-512.png"
 }
 
 make_appdir() {
