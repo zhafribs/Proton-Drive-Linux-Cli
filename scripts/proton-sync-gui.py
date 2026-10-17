@@ -45,7 +45,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox,
                              QTreeWidget, QTreeWidgetItem, QVBoxLayout,
                              QWidget)
 
-GUI_VERSION = "3.4.0"
+GUI_VERSION = "3.5.0"
 
 REPO_URL = "https://github.com/zhafribs/Proton-Drive-Linux-Cli"
 CONF_FILE = Path.home() / ".config" / "proton-sync.conf"
@@ -70,9 +70,9 @@ CONF_DEFAULTS = {
 }
 
 # friendly "check every ..." choices -> seconds
-INTERVAL_CHOICES = [("Every minute", 60), ("Every 5 minutes", 300),
-                    ("Every 15 minutes", 900), ("Every 30 minutes", 1800),
-                    ("Every hour", 3600)]
+INTERVAL_CHOICES = [("Instant (30 seconds)", 30), ("Every minute", 60),
+                    ("Every 5 minutes", 300), ("Every 15 minutes", 900),
+                    ("Every 30 minutes", 1800), ("Every hour", 3600)]
 
 ACCENT = "#6D4AFF"
 ACCENT_LIGHT = "#8b6cff"

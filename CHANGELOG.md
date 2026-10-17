@@ -1,3 +1,11 @@
+## 3.5.0 — 2026-10-17
+
+- New "Instant (30 seconds)" option for cloud checks — files added on the
+  Proton Drive website or phone reach the PC within about half a minute
+  (Proton's API has no push/notify, so polling is the fastest physically
+  possible; one cloud listing takes only ~0.2 s, so 30-second checks stay
+  light). Local changes were already near-instant via inotify.
+
 ## 3.4.0 — 2026-10-17
 
 - **One release per update from now on**: every new CLI or app version gets its
