@@ -917,7 +917,8 @@ class MainWindow(QWidget):
 
         self.nav = QListWidget()
         self.nav.setObjectName("nav")
-        self.nav.setFixedHeight(190)
+        # natural height: a hardcoded one made the 4 items overflow into a
+        # scrollbar; the stretch below absorbs the remaining sidebar space.
         for label in ("Home", "Activity", "Settings", "About"):
             self.nav.addItem(label)
         self.nav.currentRowChanged.connect(self._switch_page)
