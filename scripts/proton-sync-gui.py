@@ -45,7 +45,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox,
                              QTreeWidget, QTreeWidgetItem, QVBoxLayout,
                              QWidget)
 
-GUI_VERSION = "3.0.0"
+GUI_VERSION = "3.1.0"
 
 REPO_URL = "https://github.com/zhafribs/Proton-Drive-Linux-Cli"
 CONF_FILE = Path.home() / ".config" / "proton-sync.conf"
@@ -63,7 +63,7 @@ CONF_DEFAULTS = {
     "PROTON_SYNC_INTERVAL": "300",
     "PROTON_SYNC_DELETES": "0",
     "PROTON_SYNC_INOTIFY": "1",
-    "PROTON_SYNC_WORKERS": "8",
+    "PROTON_SYNC_WORKERS": "12",
     "PROTON_SYNC_RETRIES": "3",
     "PROTON_SYNC_SUBFOLDERS": "",
     "PROTON_SYNC_EXCLUDE": "",
@@ -85,9 +85,9 @@ MUTED_GRAY = "#9ca3af"
 # status -> (orb color, title, subtitle-template)
 STATUS_TEXT = {
     "synced":    (SUCCESS, "You're up to date", ""),
-    "syncing":   (ACCENT, "Syncing your files...", "This can take a moment"),
+    "syncing":   (ACCENT, "Syncing your files...", "Just a moment..."),
     "paused":    (WARNING, "Sync is paused",
-                  "Nothing new is being synced right now. Your files are safe."),
+                  "Nothing is syncing. Your files are safe."),
     "error":     (ERROR, "Couldn't sync", "{error}"),
     "unknown":   (MUTED_GRAY, "Checking your files...", ""),
 }
@@ -819,6 +819,7 @@ class MainWindow(QWidget):
         self._home_status = "unknown"
         self._sel_updating = False
         self._release = None
+        self._logged_in = False
 
         self.setWindowIcon(QIcon(svg_pixmap(find_icon(), 64)))
 
@@ -1161,8 +1162,7 @@ class MainWindow(QWidget):
         self.ed_local.setReadOnly(True)
         self.ed_local.setCursorPosition(0)
         fcol.addWidget(self.ed_local)
-        folder_hint = QLabel("Everything in this folder stays in sync with your "
-                             "cloud. Nothing else on your computer is touched.")
+        folder_hint = QLabel("Only this folder is synced.")
         folder_hint.setObjectName("small")
         fcol.addWidget(folder_hint)
         row.addLayout(fcol, 1)
@@ -1178,11 +1178,6 @@ class MainWindow(QWidget):
         self.chk_selective = QCheckBox("Only sync the folders I pick (instead of "
                                        "everything)")
         form.addWidget(self.chk_selective)
-        hint = QLabel("Pick folders from the cloud that should appear on this "
-                      "computer. Everything else stays safely online only.")
-        hint.setObjectName("small")
-        hint.setWordWrap(True)
-        form.addWidget(hint)
         self.sel_tree = QTreeWidget()
         self.sel_tree.setHeaderHidden(True)
         self.sel_tree.setMinimumHeight(160)
@@ -1203,19 +1198,12 @@ class MainWindow(QWidget):
         self.ed_exclude = QLineEdit()
         self.ed_exclude.setPlaceholderText("For example:  *.tmp, .cache, *.iso")
         form.addWidget(self.ed_exclude)
-        ex_hint = QLabel("Separate patterns with commas. Matching files are simply "
-                         "ignored - they are never uploaded or downloaded.")
-        ex_hint.setObjectName("small")
-        ex_hint.setWordWrap(True)
-        form.addWidget(ex_hint)
         col.addWidget(box)
 
         # --- how often
         box, form = card("How often")
         form.setSpacing(12)
-        row_t, self.chk_inotify = toggle_row(
-            "Upload my changes right away",
-            "When you save a file, it is sent to the cloud within seconds.")
+        row_t, self.chk_inotify = toggle_row("Upload my changes right away")
         form.addWidget(row_t)
         form.addSpacing(4)
         row = QHBoxLayout()
@@ -1229,9 +1217,7 @@ class MainWindow(QWidget):
         row.addStretch(1)
         form.addLayout(row)
         row_d, self.chk_deletes = toggle_row(
-            "Also remove files I delete",
-            "If I delete a file here, it is moved to Proton's trash too (and the "
-            "other way around). Leave this off for extra safety.")
+            "Also remove files I delete", "Both sides stay equal.")
         form.addWidget(row_d)
         col.addWidget(box)
 
@@ -1261,19 +1247,13 @@ class MainWindow(QWidget):
         box, form = card("Running in the background")
         form.setSpacing(6)
         row_b, self.chk_close_tray = toggle_row(
-            "Keep running when I close the window",
-            "Closing the window hides it to the tray instead of quitting, so "
-            "syncing never stops.")
+            "Keep running when I close the window")
         form.addWidget(row_b)
-        row_s, self.chk_starttray = toggle_row(
-            "Start quietly in the tray",
-            "Open as a small icon instead of a window.")
+        row_s, self.chk_starttray = toggle_row("Start quietly in the tray")
         form.addWidget(row_s)
         row_a, self.chk_autostart = toggle_row("Start syncing when I log in")
         form.addWidget(row_a)
-        row_la, self.chk_appstart = toggle_row(
-            "Open Proton Drive when I log in",
-            "Starts this app itself at login (quietly, if the setting above is on).")
+        row_la, self.chk_appstart = toggle_row("Open Proton Drive when I log in")
         form.addWidget(row_la)
         col.addWidget(box)
 
@@ -1293,9 +1273,7 @@ class MainWindow(QWidget):
         # --- updates
         box, form = card("Updates")
         form.setSpacing(8)
-        row_u, self.chk_updates = toggle_row(
-            "Check for new versions automatically",
-            "The app checks GitHub once an hour and tells you in the tray.")
+        row_u, self.chk_updates = toggle_row("Check for new versions automatically")
         form.addWidget(row_u)
         self.lbl_update = QLabel("")
         self.lbl_update.setObjectName("small")
@@ -1335,14 +1313,6 @@ class MainWindow(QWidget):
         row.addWidget(btn_uninst)
         row.addStretch(1)
         form.addLayout(row)
-        hint = QLabel("Adds a menu entry and icon for your user only - no "
-                      "administrator rights, nothing system-wide. The app itself "
-                      "stays wherever you keep it (e.g. your Downloads folder as "
-                      "an AppImage). Debian, Fedora and Arch all launch it the "
-                      "same way.")
-        hint.setObjectName("small")
-        hint.setWordWrap(True)
-        form.addWidget(hint)
         col.addWidget(box)
 
         # --- advanced (hidden)
@@ -1392,10 +1362,6 @@ class MainWindow(QWidget):
         row2.addWidget(btn_log)
         row2.addStretch(1)
         form2.addLayout(row2)
-        tip = QLabel("The technical log is also on the Activity page "
-                     "(switch to 'Technical log').")
-        tip.setObjectName("small")
-        form2.addWidget(tip)
         adv.addWidget(box2)
 
         box3, form3 = card("Extra environment variables")
@@ -1404,11 +1370,6 @@ class MainWindow(QWidget):
         self.ed_extra.setPlaceholderText("One KEY=VALUE per line, e.g.\nHTTPS_PROXY=http://proxy:3128")
         self.ed_extra.setMinimumHeight(70)
         form3.addWidget(self.ed_extra)
-        e3 = QLabel("Advanced: passed to the sync engine. Lines you add here are "
-                    "kept when settings are saved.")
-        e3.setObjectName("small")
-        e3.setWordWrap(True)
-        form3.addWidget(e3)
         adv.addWidget(box3)
         adv.addStretch(1)
         self.advanced.setVisible(False)
@@ -1477,21 +1438,19 @@ class MainWindow(QWidget):
 
         box, lay = card("What is this?")
         what = QLabel(
-            "This app keeps a folder on your computer equal to your Proton Drive, "
-            "automatically - like the official desktop apps on Windows and macOS, "
-            "but for Linux. It is built by the community on top of Proton's official "
-            "command-line tool. Your files are encrypted and decrypted only on your "
-            "device; this app never sees your password.")
+            "Keeps a folder on this computer equal to your Proton Drive, "
+            "automatically. Built by the community on top of Proton's official "
+            "command-line tool. Encryption happens only on your device.")
         what.setWordWrap(True)
         lay.addWidget(what)
         col.addWidget(box)
 
         box, lay = card("Good to know")
         for text in (
-            "Files you delete are kept safe unless you turn on removal syncing in Settings.",
-            "If a file changes in two places at once, both versions are kept - nothing is lost.",
-            "Proton's online documents (Docs, Sheets) cannot be mirrored here; they stay online.",
-            "Your Proton session stays on this computer until you sign out.",
+            "Deleted files stay safe unless you enable removal syncing.",
+            "Conflicts keep both versions - nothing is lost.",
+            "Proton Docs and Sheets stay online only.",
+            "Your sign-in stays until you sign out.",
         ):
             line = QLabel("•  " + text)
             line.setWordWrap(True)
@@ -1537,6 +1496,8 @@ class MainWindow(QWidget):
         self.act_pause = menu.addAction("Pause sync")
         self.act_pause.triggered.connect(self._pause_clicked)
         menu.addSeparator()
+        self.act_recent_menu = menu.addMenu("Recent files")
+        menu.addSeparator()
         act_quit = menu.addAction("Quit")
         act_quit.triggered.connect(self.quit_app)
         self.tray.setContextMenu(menu)
@@ -1573,25 +1534,20 @@ class MainWindow(QWidget):
         self._home_status = status
 
         color, title, sub_tpl = STATUS_TEXT.get(status, STATUS_TEXT["unknown"])
-        self.orb.set_status(status)
-        self.hero_title.setText(title)
-
-        if status == "synced":
-            last = ""
-            try:
-                last = rel_time(datetime.datetime.fromisoformat(str(health.get("ts"))))
-            except ValueError:
-                pass
-            sub = f"All your files are in sync." + (f"  Last checked {last}." if last else "")
-        elif status == "syncing":
-            sub = sub_tpl
-        elif status == "paused":
-            sub = sub_tpl
-        elif status == "error":
-            sub = str(health.get("error") or "See the Activity page for details.")
+        if not self._logged_in:
+            self.orb.set_status("unknown")
+            self.hero_title.setText("Welcome to Proton Drive")
+            self.hero_sub.setText("Sign in to start - your files will appear here.")
         else:
-            sub = "Reading the latest status..."
-        self.hero_sub.setText(sub[:300])
+            self.orb.set_status(status)
+            self.hero_title.setText(title)
+            if status == "synced":
+                sub = self._synced_line()
+            elif status == "error":
+                sub = str(health.get("error") or "See Activity for details.")
+            else:
+                sub = sub_tpl or "..."
+            self.hero_sub.setText(sub[:200])
 
         self.side_dot.setStyleSheet(f"background: {color}; border-radius: 5px;")
         self.side_status.setText(title)
@@ -1616,31 +1572,60 @@ class MainWindow(QWidget):
         try:
             nxt = datetime.datetime.fromisoformat(str(health.get("next_poll")))
             secs = max(0, int((nxt - datetime.datetime.now(nxt.tzinfo)).total_seconds()))
-            return f"Next check in about {secs // 60} min {secs % 60:02d} s"
+            return f"next in ~{secs // 60}m {secs % 60:02d}s"
         except ValueError:
             return ""
 
+    def _synced_line(self) -> str:
+        parts = ["In sync"]
+        try:
+            last = rel_time(datetime.datetime.fromisoformat(
+                str(read_health().get("ts"))))
+            if last:
+                parts.append(f"checked {last}")
+        except ValueError:
+            pass
+        nxt = self._next_poll_text()
+        if nxt:
+            parts.append(nxt)
+        return "  \u00b7  ".join(parts)
+
     @guard_slot
     def update_countdown(self):
-        if self._home_status == "synced":
-            tail = self._next_poll_text()
-            base = "All your files are in sync."
-            try:
-                health = read_health()
-                last = rel_time(datetime.datetime.fromisoformat(str(health.get("ts"))))
-                if last:
-                    base += f"  Last checked {last}."
-            except ValueError:
-                pass
-            self.hero_sub.setText((base + ("  " + tail if tail else ""))[:300])
+        if self._logged_in and self._home_status == "synced":
+            self.hero_sub.setText(self._synced_line()[:200])
 
     @guard_slot
     def refresh_logs(self):
         self._log_lines = journal_lines(400)
         self._parse_changes()
+        self._rebuild_tray_recent()
         self.render_changes()
         if self.act_stack.currentIndex() == 1:
             self.render_logs()
+
+    def _rebuild_tray_recent(self):
+        if not self.tray:
+            return
+        self.act_recent_menu.clear()
+        recent = self._changes[-5:][::-1]
+        if not recent:
+            empty = self.act_recent_menu.addAction("Nothing yet")
+            empty.setEnabled(False)
+            return
+        for c in recent:
+            full = c["path"].rstrip("/")
+            name = full.rsplit("/", 1)[-1] or full
+            parent = full[:len(full) - len(name)].rstrip("/")
+            when = rel_time(c["ts"]) if c["ts"] else ""
+            act = self.act_recent_menu.addAction(f"{name[:44]}  \u00b7  {when}")
+            act.triggered.connect(lambda _, p=parent: self._open_sync_path(p))
+
+    def _open_sync_path(self, rel: str):
+        root = Path(read_conf()["PROTON_SYNC_LOCAL"]).expanduser()
+        target = (root / rel) if rel else root
+        QDesktopServices.openUrl(QUrl.fromLocalFile(
+            str(target if target.is_dir() else root)))
 
     # ---- activity rendering
 
@@ -1855,7 +1840,7 @@ class MainWindow(QWidget):
         self.chk_appstart.setChecked(autostart_enabled())
         self.chk_appstart.blockSignals(False)
         self.lbl_install.setText(
-            "Installed - look for 'Proton Drive' in your app menu."
+            "Installed in your app menu."
             if menu_installed() else "Not in your app menu yet.")
 
         self._sel_load_root()
@@ -1923,7 +1908,7 @@ class MainWindow(QWidget):
         self.sel_tree.addTopLevelItem(root)
         placeholder = QTreeWidgetItem(root, ["Loading..."])
         placeholder.setData(0, Qt.ItemDataRole.UserRole, None)
-        self.sel_hint.setText("loading your cloud folders...")
+        self.sel_hint.setText("Loading folders...")
 
         w = Worker(lambda: fetch_remote_folders(self._remote_root, ""))
         w.done.connect(lambda r: self._sel_populate(root, r))
@@ -1951,7 +1936,7 @@ class MainWindow(QWidget):
         finally:
             self._sel_updating = False
         if item is self.sel_tree.topLevelItem(0):
-            self.sel_hint.setText(f"{len(folders)} top folders - expand to choose more")
+            self.sel_hint.setText(f"{len(folders)} folders")
 
     def _sel_item_changed(self, item):
         """Manual tri-state: check cascades down, parents reflect children."""
@@ -2031,7 +2016,7 @@ class MainWindow(QWidget):
     def _install_menu(self, on: bool):
         set_menu_installed(on)
         self.lbl_install.setText(
-            "Installed - look for 'Proton Drive' in your app menu." if on
+            "Installed in your app menu." if on
             else "Not in your app menu yet.")
 
     # --- updates
@@ -2098,14 +2083,15 @@ class MainWindow(QWidget):
         self._identity = result
         email = result.get("email")
         logged_in = result.get("logged_in")
+        self._logged_in = bool(logged_in)
         self.avatar.set_email(email)
         self.val_email.setText(email or "You're not signed in yet")
-        self.badge_login.setText("Signed in to Proton" if logged_in else
-                                 "Sign in to start syncing your cloud files")
+        self.badge_login.setText("Signed in" if logged_in else "Not signed in")
         self.btn_login.setVisible(not logged_in)
         self.btn_logout.setVisible(logged_in)
         ver = result.get("version", "?")
         self.about_version.setText(f"Version {GUI_VERSION}  ·  Engine {ver}")
+        self.refresh_status()
 
     def login_terminal(self):
         cli = resolve_cli()

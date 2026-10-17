@@ -107,6 +107,25 @@ repos** - no AUR, no bundled toolkits), designed for everyday users:
     access
 
   Saving writes `~/.config/proton-sync.conf` and restarts syncing.
+
+What the settings mean (the app keeps this short - the details live here):
+
+* **Keep running when I close the window** - the app hides to the tray
+  and syncing never stops. Turn off to fully quit on close.
+* **Start quietly in the tray** - launch as a small tray icon instead of
+  a window.
+* **Start syncing when I log in** - enables the background sync service
+  at login (systemd user service).
+* **Open Proton Drive when I log in** - starts the app itself at login
+  via a per-user autostart entry (`~/.config/autostart/`).
+* **Also remove files I delete** - deletions move to the other side's
+  trash; off by default so nothing disappears by accident.
+* **Updates** - checks the GitHub releases; *Download and restart* only
+  appears when running as an AppImage and replaces it after verifying the
+  SHA256 checksum (the old file is kept as `*.old`).
+* **Installing on Linux** - writes `~/.local/share/applications/
+  proton-drive.desktop` + a user icon; works with the AppImage on Debian,
+  Fedora and Arch, no admin rights.
 * **About** - what the app is, the good-to-know rules and the legal notes
 * **tray icon** - status at a glance plus desktop notifications; closing
   the window keeps it running (right-click the tray icon to quit)
