@@ -45,7 +45,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox,
                              QTreeWidget, QTreeWidgetItem, QVBoxLayout,
                              QWidget)
 
-GUI_VERSION = "3.1.0"
+GUI_VERSION = "3.2.0"
 
 REPO_URL = "https://github.com/zhafribs/Proton-Drive-Linux-Cli"
 CONF_FILE = Path.home() / ".config" / "proton-sync.conf"
@@ -534,12 +534,12 @@ QPushButton:hover {{ background: {HOVER}; }}
 QPushButton:disabled {{ color: {MUTED}; background: transparent; }}
 QPushButton#primary {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
                         stop:0 {ACCENT_L}, stop:1 {ACCENT}); color: #ffffff;
-                       border-radius: 22px; padding: 12px 28px; font-size: 14px; }}
+                       border-radius: 22px; padding: 12px 24px; font-size: 14px; }}
 QPushButton#primary:hover {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
                              stop:0 #9d84ff, stop:1 #7c5cff); }}
 QPushButton#primary:disabled {{ background: {HOVER}; color: {MUTED}; }}
 QPushButton#secondary {{ background: {CARD}; border: 1px solid {BORDER};
-                         border-radius: 22px; padding: 11px 24px; font-size: 14px; }}
+                         border-radius: 22px; padding: 11px 20px; font-size: 14px; }}
 QPushButton#secondary:hover {{ background: {HOVER}; }}
 QPushButton#ghostDanger {{ color: {ERROR}; }}
 QPushButton#seg {{ border-radius: 10px; padding: 7px 16px; color: {MUTED}; }}
@@ -610,6 +610,10 @@ def guard_slot(fn):
     def wrapper(self, *a, **k):
         try:
             return fn(self, *a, **k)
+        except RuntimeError as e:
+            if "has been deleted" in str(e):
+                return  # window torn down with a timer tick still pending
+            traceback.print_exc()
         except Exception:  # noqa: BLE001
             traceback.print_exc()
     return wrapper
@@ -827,8 +831,12 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Proton Drive")
-        self.setMinimumSize(760, 540)
-        self.resize(980, 660)
+        # 960 is the narrowest width where every page fits without a
+        # horizontal scrollbar and the About title/version lines stay single -
+        # verified against the real (x11) styling, with margin for font
+        # differences across distros (pill padding trimmed to help).
+        self.setMinimumSize(960, 540)
+        self.resize(980, 780)
         self._quitting = False
         self._tray_warned = False
         self._identity = {"version": "?", "email": None, "logged_in": False}
@@ -1446,21 +1454,24 @@ class MainWindow(QWidget):
         hero.setSpacing(20)
         big = QLabel()
         big.setPixmap(svg_pixmap(find_icon(), 72))
-        hero.addWidget(big)
+        hero.addWidget(big, 0, Qt.AlignmentFlag.AlignTop)
         texts = QVBoxLayout()
         texts.setSpacing(3)
         t = QLabel("Proton Drive for Linux")
         t.setObjectName("heroTitle")
-        t.setWordWrap(True)
         self.about_version = QLabel("Version " + GUI_VERSION)
         self.about_version.setObjectName("muted")
-        self.about_version.setWordWrap(True)
         texts.addWidget(t)
         texts.addWidget(self.about_version)
-        hero.addLayout(texts, 1)
+        texts.addSpacing(8)
+        brow = QHBoxLayout()
         btn_repo = QPushButton("Visit the website")
         btn_repo.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(REPO_URL)))
-        hero.addWidget(btn_repo)
+        brow.addWidget(btn_repo)
+        brow.addStretch(1)
+        texts.addLayout(brow)
+        texts.addStretch(1)
+        hero.addLayout(texts, 1)
         lay.addLayout(hero)
         col.addWidget(box)
 
@@ -2043,17 +2054,28 @@ class MainWindow(QWidget):
                                else "Could not change start-up.")
 
     def _apply_window_prefs(self):
-        """Compact floating window: remembered size + stay-on-top flag."""
+        """Floating window: remembered size + stay-on-top flag.
+
+        Remembered sizes are floored to the no-scroll layout (960x780) so a
+        window saved before this version never comes back with content cut off.
+        """
         if self._prefs.value("always_on_top", True, type=bool):
             self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        w, h = self.width(), self.height()
         try:
-            w, h = (int(v)
-                    for v in str(self._prefs.value("window_size", "")).split("x"))
-            geo = self.screen().availableGeometry() if self.screen() else None
-            if w >= 700 and h >= 480 and geo:
-                self.resize(min(w, geo.width()), min(h, geo.height()))
+            sw, sh = (int(v)
+                      for v in str(self._prefs.value("window_size", "")).split("x"))
+            if sw >= 700 and sh >= 480:
+                w, h = sw, sh
         except (ValueError, TypeError):
             pass
+        w = max(w, 960)
+        h = max(h, 780)
+        geo = self.screen().availableGeometry() if self.screen() else None
+        if geo:
+            self.resize(min(w, geo.width()), min(h, geo.height()))
+        else:
+            self.resize(w, h)
 
     def _remember_window_size(self):
         self._prefs.setValue("window_size", f"{self.width()}x{self.height()}")

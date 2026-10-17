@@ -14,6 +14,7 @@ verified against Proton's published SHA-512 checksum before it is wrapped.
 | `dist/SHA256SUMS` | checksums of the outputs | |
 
 Upstream version: **0.9.0** (released 2026-10-05), `cli-drive@0.9.0+75612299`.
+Desktop app version: **3.2.0** — every release note ships the app's [development log](CHANGELOG.md).
 
 ## Quick start
 
@@ -78,8 +79,9 @@ Settings live in `~/.config/proton-sync.conf` - edit by hand or with the app.
 |:---:|:---:|:---:|
 | ![Home](docs/screenshots/home.png) | ![Settings](docs/screenshots/settings.png) | ![Activity](docs/screenshots/activity.png) |
 
-*The compact floating window (980x660 default, stays on top, size remembered) -
-light theme shown; dark and system themes included.*
+*The compact floating window (980x780 default, 960x540 minimum - no page ever
+scrolls sideways, stays on top, size remembered) - light theme shown; dark and
+system themes included.*
 
 ```bash
 ./scripts/install-sync.sh    # the sync service first (see above)

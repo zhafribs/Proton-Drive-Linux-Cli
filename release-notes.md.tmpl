@@ -22,6 +22,21 @@ chmod +x ProtonDrive-CLI-{{VERSION}}-x86_64.AppImage
 
 FUSE needed: Arch `pacman -S fuse2` · Debian/Ubuntu `apt install libfuse2t64` · Fedora `dnf install fuse-libs` — or use `APPIMAGE_EXTRACT_AND_RUN=1`.
 
+## What's inside
+
+| Component | Version |
+| --- | --- |
+| Proton Drive CLI (official, unmodified) | `{{VERSION}}` |
+| Desktop app + folder-sync engine (GUI) | **{{GUI_VERSION}}** |
+
+### App development log
+
+{{CHANGELOG}}
+
+Full detail: [README](https://github.com/{{REPO}}#readme) ·
+[CHANGELOG.md](https://github.com/{{REPO}}/blob/main/CHANGELOG.md) ·
+the version above also shows on the app's **About** page.
+
 Upstream `{{VERSION}}` (released {{RELEASE_DATE}}), built {{BUILD_DATE}} — **[full documentation, build guide and legal details](https://github.com/{{REPO}}#readme)**.
 
 ---
