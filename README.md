@@ -9,20 +9,20 @@ verified against Proton's published SHA-512 checksum before it is wrapped.
 
 | Artifact | Arch | Size |
 | --- | --- | --- |
-| `dist/ProtonDrive-CLI-0.9.0-GUI-3.6.0-x86_64.AppImage` | x86_64 (Intel/AMD) | 40 MB |
-| `dist/ProtonDrive-CLI-0.9.0-GUI-3.6.0-aarch64.AppImage` | aarch64 (ARM64) | 39 MB |
+| `dist/ProtonDrive-CLI-0.9.0-GUI-3.7.0-x86_64.AppImage` | x86_64 (Intel/AMD) | 40 MB |
+| `dist/ProtonDrive-CLI-0.9.0-GUI-3.7.0-aarch64.AppImage` | aarch64 (ARM64) | 39 MB |
 | `dist/SHA256SUMS` | checksums of the outputs | |
 
 Upstream version: **0.9.0** (released 2026-10-05), `cli-drive@0.9.0+75612299`.
-Desktop app version: **3.6.0** — every release note ships the app's [development log](CHANGELOG.md).
+Desktop app version: **3.7.0** — every release note ships the app's [development log](CHANGELOG.md).
 
 ## Quick start
 
 ```bash
-chmod +x dist/ProtonDrive-CLI-0.9.0-GUI-3.6.0-x86_64.AppImage
-./dist/ProtonDrive-CLI-0.9.0-GUI-3.6.0-x86_64.AppImage --version
-./dist/ProtonDrive-CLI-0.9.0-GUI-3.6.0-x86_64.AppImage --help
-./dist/ProtonDrive-CLI-0.9.0-GUI-3.6.0-x86_64.AppImage auth login   # first run
+chmod +x dist/ProtonDrive-CLI-0.9.0-GUI-3.7.0-x86_64.AppImage
+./dist/ProtonDrive-CLI-0.9.0-GUI-3.7.0-x86_64.AppImage --version
+./dist/ProtonDrive-CLI-0.9.0-GUI-3.7.0-x86_64.AppImage --help
+./dist/ProtonDrive-CLI-0.9.0-GUI-3.7.0-x86_64.AppImage auth login   # first run
 ```
 
 Put it on your `PATH` as `proton-drive` (creates `~/.local/bin/proton-drive` → symlink):
@@ -97,10 +97,15 @@ repos** - no AUR, no bundled toolkits), designed for everyday users:
   "Sync is paused") with an animated status orb, one-click *Open my
   folder*, *Sync now* and *Pause* (15 minutes, 1 hour, or until you
   resume), your account, folder size and recently synced files
-* **Cloud** - browse your cloud drive like a file manager: click through
-  folders (~0.2 s each), see sizes and dates, download any file with one
-  click; every view is live, so website changes appear the moment you open
-  a folder
+* **Cloud** - a full file manager for your cloud drive, like browsing in a
+  web browser: Back/Forward buttons and clickable breadcrumbs, sortable
+  name/size/date columns (folders always on top), right-click for
+  *Rename*, *Move to...* and *Move to trash* (or press Delete), new
+  folders, uploads of files or whole folders, multi-select for batch
+  download/move/trash, and a **Trash** view with one-click *Restore* -
+  trash is never permanent. Every folder paints instantly from cache
+  while fresh data loads behind it, and every view is live, so website
+  changes appear the moment you open a folder
 * **Activity** - what moved recently (uploaded / downloaded / removed /
   conflicts) with search and filters, plus a technical log tab
 * **Settings** - plain-language options: which folder syncs, selective
@@ -163,9 +168,9 @@ on Debian/Ubuntu, Fedora, Arch/CachyOS and derivatives without bundling libs:
 No FUSE at all (containers, restricted systems, any distro):
 
 ```bash
-APPIMAGE_EXTRACT_AND_RUN=1 ./dist/ProtonDrive-CLI-0.9.0-GUI-3.6.0-x86_64.AppImage --help
+APPIMAGE_EXTRACT_AND_RUN=1 ./dist/ProtonDrive-CLI-0.9.0-GUI-3.7.0-x86_64.AppImage --help
 # or permanently:
-./dist/ProtonDrive-CLI-0.9.0-GUI-3.6.0-x86_64.AppImage --appimage-extract
+./dist/ProtonDrive-CLI-0.9.0-GUI-3.7.0-x86_64.AppImage --appimage-extract
 ```
 
 Desktop menu entry: install [AppImageLauncher](https://github.com/AppImageCommunity/AppImageLauncher)

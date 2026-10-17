@@ -31,15 +31,16 @@ import traceback
 import urllib.request
 from pathlib import Path
 
-from PyQt6.QtCore import (QLockFile, QPoint, QSettings, QRectF, QUrl, Qt,
+from PyQt6.QtCore import (QEvent, QLockFile, QPoint, QSettings, QRectF, QUrl, Qt,
                           QThread, QTimer, pyqtSignal as Signal)
 from PyQt6.QtGui import (QBrush, QCloseEvent, QColor, QDesktopServices,
                          QFont, QIcon, QLinearGradient, QPainter, QPalette,
                          QPen, QPixmap, QRadialGradient)
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox,
-                             QGraphicsDropShadowEffect, QFileDialog, QFrame,
-                             QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+                             QDialog, QFileDialog, QFrame,
+                             QGraphicsDropShadowEffect, QHBoxLayout, QHeaderView,
+                             QInputDialog, QLabel, QLineEdit,
                              QListWidget,
                              QMenu, QMessageBox, QPlainTextEdit, QPushButton,
                              QScrollArea, QSizePolicy, QSpinBox,
@@ -48,7 +49,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox,
                              QWidget)
 from PyQt6.QtGui import QFontMetrics
 
-GUI_VERSION = "3.6.0"
+GUI_VERSION = "3.7.0"
 
 REPO_URL = "https://github.com/zhafribs/Proton-Drive-Linux-Cli"
 CONF_FILE = Path.home() / ".config" / "proton-sync.conf"
@@ -99,7 +100,18 @@ STATUS_TEXT = {
 
 
 def resolve_cli() -> str:
-    """The same binary the sync uses (from the unit file, else PATH)."""
+    """Inside an AppImage: the bundled CLI - a direct native spawn, without
+    re-running the whole AppImage runtime on every call (measured ~1.3s extra
+    per listing otherwise). Elsewhere: the sync service's binary (unit file),
+    else PATH."""
+    appdir = os.environ.get("APPDIR")
+    if appdir:
+        bundled = Path(appdir) / "usr" / "bin" / "proton-drive"
+        try:
+            if os.access(bundled, os.X_OK):
+                return str(bundled)
+        except OSError:
+            pass
     try:
         text = UNIT_FILE.read_text(encoding="utf-8")
         m = re.search(r"^Environment=PROTON_DRIVE_BIN=(.+)$", text, re.M)
@@ -409,6 +421,41 @@ def fetch_remote_entries(remote_root: str, rel_path: str) -> list:
     return out
 
 
+def fetch_trash_entries() -> list:
+    """Items sitting in the Proton trash (flat view) for the Cloud browser.
+
+    Shows when each item was trashed; restore puts it back where it was.
+    Raises on CLI failure so the page can show an honest status line.
+    """
+    cli = resolve_cli()
+    if not cli:
+        raise RuntimeError("proton-drive CLI not found")
+    r = subprocess.run([cli, "fs", "list", "/trash", "--json"],
+                       capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        raise RuntimeError((r.stderr or r.stdout or "list failed").strip()[:200])
+    try:
+        raw = json.loads(r.stdout or "[]")
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"bad JSON from CLI: {e}") from e
+    out = []
+    for e in raw:
+        if not isinstance(e, dict) or "type" not in e:
+            continue
+        name = (e.get("name") or {}).get("value")
+        if not (e.get("name") or {}).get("ok", True) or not name:
+            continue
+        is_dir = e.get("type") == "folder"
+        media = e.get("mediaType") or ""
+        when = (e.get("trashTime") or e.get("modificationTime") or "").replace("T", " ")[:16]
+        out.append({"name": name, "rel": name, "dir": is_dir,
+                    "size": int(((e.get("activeRevision") or {}).get("claimedSize")) or 0),
+                    "mtime": when,
+                    "doc": (not is_dir) and media.startswith("application/vnd.proton")})
+    out.sort(key=lambda x: (0 if x["dir"] else 1, x["name"].lower()))
+    return out
+
+
 # ------------------------------------------------ app install / autostart / updates
 
 MENU_DIR = Path.home() / ".local" / "share" / "applications"
@@ -596,6 +643,9 @@ QPushButton#secondary:hover {{ background: {HOVER}; }}
 QPushButton#ghostDanger {{ color: {ERROR}; }}
 QPushButton#seg {{ border-radius: 10px; padding: 7px 16px; color: {MUTED}; }}
 QPushButton#seg:checked {{ background: {CARD}; color: {TEXT}; }}
+QPushButton#crumb {{ padding: 5px 9px; border-radius: 8px; color: {MUTED};
+                     font-weight: 600; font-size: 12.5px; }}
+QPushButton#crumb:checked {{ color: {TEXT}; background: {HOVER}; }}
 QLineEdit, QSpinBox, QPlainTextEdit, QComboBox, QTreeWidget {{
     background: {INPUT}; border: 1px solid transparent; border-radius: 12px;
     padding: 8px 12px; selection-background-color: {ACCENT}; font-size: 13.5px; }}
@@ -1128,9 +1178,10 @@ class MainWindow(QWidget):
         outer.addWidget(scroll_page(inner), 1)
         return page
 
-    # ---- activity -----------------------------------------------------------
-
     # ---- cloud ----------------------------------------------------------------
+    # A browser-style file manager for the cloud: breadcrumbs, back/forward,
+    # sortable columns, right-click actions (rename / move / trash / restore),
+    # new folder, uploads, downloads - all through the official CLI only.
 
     def _cloud_page(self) -> QWidget:
         page = QWidget()
@@ -1139,17 +1190,30 @@ class MainWindow(QWidget):
         outer.setSpacing(14)
 
         top = QHBoxLayout()
-        top.setSpacing(12)
+        top.setSpacing(8)
         self.cloud_back = QPushButton("←")
         self.cloud_back.setFixedWidth(44)
         self.cloud_back.setToolTip("Go back")
-        self.cloud_back.setEnabled(False)
         self.cloud_back.clicked.connect(self._cloud_back)
         top.addWidget(self.cloud_back)
-        self.cloud_path = QLabel("")
-        self.cloud_path.setObjectName("small")
-        self.cloud_path.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        top.addWidget(self.cloud_path, 1)
+        self.cloud_fwd = QPushButton("→")
+        self.cloud_fwd.setFixedWidth(44)
+        self.cloud_fwd.setToolTip("Go forward")
+        self.cloud_fwd.clicked.connect(self._cloud_fwd_step)
+        top.addWidget(self.cloud_fwd)
+        self.cloud_crumbs_box = QWidget()
+        self.cloud_crumbs = QHBoxLayout(self.cloud_crumbs_box)
+        self.cloud_crumbs.setContentsMargins(6, 0, 6, 0)
+        self.cloud_crumbs.setSpacing(2)
+        self.cloud_crumbs.addStretch(1)
+        self.cloud_crumbs_box.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                            QSizePolicy.Policy.Fixed)
+        top.addWidget(self.cloud_crumbs_box, 1)
+        self.cloud_trash_btn = QPushButton("Trash")
+        self.cloud_trash_btn.setToolTip("Recently deleted items")
+        self.cloud_trash_btn.setCheckable(True)
+        self.cloud_trash_btn.toggled.connect(self._cloud_trash_toggle)
+        top.addWidget(self.cloud_trash_btn)
         btn_refresh = QPushButton("Refresh")
         btn_refresh.clicked.connect(lambda: self._cloud_load(self._cloud_rel, push=False))
         top.addWidget(btn_refresh)
@@ -1162,11 +1226,17 @@ class MainWindow(QWidget):
         self.cloud_list.setUniformRowHeights(True)
         hdr = self.cloud_list.header()
         hdr.setStretchLastSection(False)
+        hdr.setSectionsClickable(True)
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         hdr.resizeSection(1, 96)
         hdr.resizeSection(2, 132)
+        hdr.sectionClicked.connect(self._cloud_sort_clicked)
+        self.cloud_list.setSortingEnabled(False)
+        self.cloud_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.cloud_list.customContextMenuRequested.connect(self._cloud_menu)
+        self.cloud_list.installEventFilter(self)
         outer.addWidget(self.cloud_list, 1)
 
         bottom = QHBoxLayout()
@@ -1178,59 +1248,211 @@ class MainWindow(QWidget):
         self.cloud_dl.setEnabled(False)
         self.cloud_dl.clicked.connect(self._cloud_download)
         bottom.addWidget(self.cloud_dl)
+        self.cloud_newfolder = QPushButton("New folder")
+        self.cloud_newfolder.clicked.connect(self._cloud_new_folder)
+        bottom.addWidget(self.cloud_newfolder)
+        self.cloud_upload = QPushButton("  Upload")
+        self.cloud_upload.clicked.connect(self._cloud_upload_menu)
+        bottom.addWidget(self.cloud_upload)
         outer.addLayout(bottom)
 
         self._cloud_rel = ""
         self._cloud_hist: list = []
+        self._cloud_fwd_hist: list = []
+        self._cloud_trash = False
+        self._cloud_cache: dict = {}
+        self._cloud_entries: list = []
+        self._cloud_sort = [0, Qt.SortOrder.AscendingOrder]
+        self._cloud_busy_flag = False
         self.cloud_list.itemDoubleClicked.connect(self._cloud_open_item)
-        self.cloud_list.itemSelectionChanged.connect(
-            lambda: self.cloud_dl.setEnabled(self.cloud_list.currentItem() is not None))
+        self.cloud_list.itemSelectionChanged.connect(self._cloud_buttons)
+        self._cloud_buttons()
         return page
+
+    # --- navigation
 
     def _cloud_shown(self):
         # re-list on every visit: fresh, and self-heals after an error
-        self._cloud_load(self._cloud_rel, push=False)
+        self._cloud_load_trash() if self._cloud_trash else self._cloud_load(
+            self._cloud_rel, push=False)
 
-    def _cloud_load(self, rel: str, push: bool = True):
+    def _cloud_load(self, rel: str, push: bool = True, announce: bool = True):
         if push and rel != self._cloud_rel:
             self._cloud_hist.append(self._cloud_rel)
+            self._cloud_fwd_hist.clear()
         self._cloud_rel = rel
-        disp = f"/{rel}" if rel else "My Files"
-        self.cloud_path.setToolTip(disp)
-        self._cloud_paint_path()
-        self.cloud_back.setEnabled(bool(self._cloud_hist))
-        self.cloud_list.setEnabled(False)
-        self.cloud_dl.setEnabled(False)
-        self.cloud_status.setText("Opening...")
-        w = Worker(lambda: fetch_remote_entries(self._remote_root or "/my-files", rel))
-        w.done.connect(self._cloud_loaded)
+        self._cloud_trash = False
+        self.cloud_trash_btn.blockSignals(True)
+        self.cloud_trash_btn.setChecked(False)
+        self.cloud_trash_btn.blockSignals(False)
+        self._cloud_paint_crumbs()
+        self._cloud_begin(announce)
+        # browser feel: paint the last listing instantly (clickable) while the
+        # fresh one loads in the background
+        cached = self._cloud_cache.get(rel)
+        if cached is not None:
+            self._cloud_fill(cached, enabled=True)
+        root = self._remote_root or "/my-files"
+        w = Worker(lambda: fetch_remote_entries(root, rel))
+        w.done.connect(lambda r, key=rel: self._cloud_loaded(r, key))
         self._workers.append(w)
         w.start()
 
-    def _cloud_paint_path(self):
-        disp = f"/{self._cloud_rel}" if self._cloud_rel else "My Files"
-        w = self.cloud_path.width()
-        if w > 8:
-            disp = QFontMetrics(self.cloud_path.font()).elidedText(
-                disp, Qt.TextElideMode.ElideMiddle, w)
-        self.cloud_path.setText(disp)
+    def _cloud_load_trash(self, announce: bool = True):
+        self._cloud_trash = True
+        self._cloud_paint_crumbs()
+        self._cloud_begin(announce)
+        cached = self._cloud_cache.get("\x00trash")
+        if cached is not None:
+            self._cloud_fill(cached, enabled=True)
+        w = Worker(fetch_trash_entries)
+        w.done.connect(lambda r: self._cloud_loaded(r, "\x00trash"))
+        self._workers.append(w)
+        w.start()
+
+    def _cloud_begin(self, announce: bool = True):
+        # only the status line changes here: the view stays usable (cache or
+        # empty) so navigation never feels locked - busy applies to mutations.
+        # announce=False keeps a just-finished action message on screen while
+        # the view refreshes underneath it.
+        if announce:
+            self.cloud_status.setText("Opening...")
+        self.cloud_status.setToolTip("")
+
+    def _cloud_trash_toggle(self, checked: bool):
+        if checked:
+            if not self._cloud_trash:
+                self._cloud_hist.append(self._cloud_rel)
+                self._cloud_fwd_hist.clear()
+            self._cloud_load_trash()
+        else:
+            if self._cloud_trash:
+                self._cloud_load(self._cloud_rel, push=False)
+
+    def _cloud_back(self):
+        if self._cloud_hist:
+            prev = self._cloud_hist.pop()
+            if self._cloud_trash:
+                self._cloud_trash = False
+                self.cloud_trash_btn.blockSignals(True)
+                self.cloud_trash_btn.setChecked(False)
+                self.cloud_trash_btn.blockSignals(False)
+            self._cloud_fwd_hist.append(self._cloud_rel)
+            self._cloud_load(prev, push=False)
+
+    def _cloud_fwd_step(self):
+        if self._cloud_fwd_hist:
+            nxt = self._cloud_fwd_hist.pop()
+            self._cloud_hist.append(self._cloud_rel)
+            self._cloud_load(nxt, push=False)
+
+    def _cloud_rpath(self, rel: str) -> str:
+        root = self._remote_root or "/my-files"
+        if not rel:
+            return root
+        return "/".join([root] + [c.replace("/", r"\/") for c in rel.split("/")])
+
+    # --- breadcrumbs
+
+    def _cloud_paint_crumbs(self):
+        while self.cloud_crumbs.count():
+            it = self.cloud_crumbs.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.deleteLater()
+        if self._cloud_trash:
+            self.cloud_crumbs.addStretch(1)
+            b = QPushButton("Trash")
+            b.setObjectName("crumb")
+            b.setCheckable(True)
+            b.setChecked(True)
+            b.setEnabled(False)
+            self.cloud_crumbs.addWidget(b)
+            self.cloud_crumbs.addStretch(1)
+            return
+        segs = ["My Files"] + (self._cloud_rel.split("/") if self._cloud_rel else [])
+        fm = QFontMetrics(self.font())
+        avail = max(160, self.cloud_crumbs_box.width() - 24)
+
+        def est(parts):
+            total = 0
+            for i, s in enumerate(parts):
+                total += fm.horizontalAdvance(s) + (18 if s != "…" else 12) + (14 if i else 0)
+            return total
+
+        while len(segs) > 2 and est(segs) > avail and "…" not in segs:
+            segs.insert(len(segs) // 2, "…")
+        for i, seg in enumerate(segs):
+            if i:
+                sep = QLabel("›")
+                sep.setObjectName("small")
+                self.cloud_crumbs.addWidget(sep)
+            # prefix INCLUDES this segment: clicking a crumb goes to the
+            # folder it names (not its parent), "…" crumbs stay inert
+            parts = [s for s in segs[1:i + 1] if s != "…"]
+            prefix = "/".join(parts)
+            b = QPushButton(seg)
+            b.setObjectName("crumb")
+            b.setToolTip(f"/{prefix}" if prefix else "My Files")
+            b.setCheckable(True)
+            b.setAutoExclusive(True)
+            b.setChecked(i == len(segs) - 1)
+            b.setEnabled(seg != "…")
+            if seg != "…":
+                b.clicked.connect(lambda _=False, p=prefix: self._cloud_load(p))
+            self.cloud_crumbs.addWidget(b)
+        self.cloud_crumbs.addStretch(1)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if getattr(self, "cloud_path", None) is not None:
-            self._cloud_paint_path()
+        if getattr(self, "cloud_crumbs_box", None) is not None:
+            self._cloud_paint_crumbs()
+
+    # --- listing
 
     @guard_slot
-    def _cloud_loaded(self, result):
-        self.cloud_list.setEnabled(True)
-        self.cloud_list.clear()
-        if isinstance(result, Exception):
-            self.cloud_status.setText("Couldn't open this folder.")
-            self.cloud_dl.setEnabled(False)
+    def _cloud_loaded(self, result, key: str):
+        view_key = "\x00trash" if self._cloud_trash else self._cloud_rel
+        if key != view_key:
+            # a slower listing from a folder we already navigated away from -
+            # drop it so the visible folder is never overwritten
             return
+        if isinstance(result, Exception):
+            self.cloud_list.setEnabled(True)
+            self.cloud_status.setText("Couldn't open this folder.")
+            self._cloud_buttons()
+            return
+        self._cloud_cache[key] = result
+        self._cloud_fill(result, enabled=True)
+        # "Opening..." is cleared; a finished action's message (e.g. "Renamed
+        # to X.") is intentionally preserved until the next navigation
+        if self.cloud_status.text() in ("Opening...", ""):
+            if not result:
+                self.cloud_status.setText("Trash is empty." if self._cloud_trash
+                                          else "This folder is empty.")
+            else:
+                self.cloud_status.setText("")
+        self._cloud_buttons()
+
+    def _cloud_fill(self, entries, enabled=True):
+        self._cloud_entries = list(entries)
+        col, order = self._cloud_sort
+        desc = (order == Qt.SortOrder.DescendingOrder)
+        rows = list(self._cloud_entries)
+        # stable sorts: tie-break by name, apply the chosen column, then group
+        # folders first - so folders stay on top even when sorted descending
+        rows.sort(key=lambda e: e["name"].lower())
+        if col == 1:
+            rows.sort(key=lambda e: e["size"], reverse=desc)
+        elif col == 2:
+            rows.sort(key=lambda e: e["mtime"], reverse=desc)
+        else:
+            rows.sort(key=lambda e: e["name"].lower(), reverse=desc)
+        rows.sort(key=lambda e: 0 if e["dir"] else 1)
         folder_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
         file_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
-        for e in result:
+        self.cloud_list.clear()
+        for e in rows:
             item = QTreeWidgetItem([e["name"],
                                     "" if e["dir"] else self._fmt_size(e["size"]),
                                     e["mtime"] or ""])
@@ -1240,7 +1462,17 @@ class MainWindow(QWidget):
             item.setData(0, Qt.ItemDataRole.UserRole + 2, e["doc"])
             item.setData(0, Qt.ItemDataRole.UserRole + 3, e["size"])
             self.cloud_list.addTopLevelItem(item)
-        self.cloud_status.setText("This folder is empty." if not result else "")
+        self.cloud_list.setEnabled(enabled)
+
+    def _cloud_sort_clicked(self, col: int):
+        if self._cloud_sort[0] == col:
+            self._cloud_sort[1] = (Qt.SortOrder.DescendingOrder
+                                   if self._cloud_sort[1] == Qt.SortOrder.AscendingOrder
+                                   else Qt.SortOrder.AscendingOrder)
+        else:
+            self._cloud_sort = [col, Qt.SortOrder.AscendingOrder]
+        self.cloud_list.header().setSortIndicator(self._cloud_sort[0], self._cloud_sort[1])
+        self._cloud_fill(self._cloud_entries, enabled=self.cloud_list.isEnabled())
 
     @staticmethod
     def _fmt_size(n: int) -> str:
@@ -1254,39 +1486,305 @@ class MainWindow(QWidget):
             return f"{n / 1024 ** 2:.1f} MB"
         return f"{n / 1024 ** 3:.1f} GB"
 
+    # --- buttons + context menu
+
+    def _cloud_buttons(self):
+        sel = self.cloud_list.selectedItems()
+        self.cloud_back.setEnabled(bool(self._cloud_hist) and not self._cloud_busy_flag)
+        self.cloud_fwd.setEnabled(bool(self._cloud_fwd_hist) and not self._cloud_busy_flag)
+        docs_only = bool(sel) and all(i.data(0, Qt.ItemDataRole.UserRole + 2) for i in sel)
+        self.cloud_dl.setEnabled(bool(sel) and not docs_only
+                                 and not self._cloud_trash and not self._cloud_busy_flag)
+        self.cloud_newfolder.setEnabled(not self._cloud_trash and not self._cloud_busy_flag)
+        self.cloud_upload.setEnabled(not self._cloud_trash and not self._cloud_busy_flag)
+
+    def _cloud_menu(self, pos):
+        item = self.cloud_list.itemAt(pos)
+        items = self.cloud_list.selectedItems()
+        if item is not None and item not in items:
+            self.cloud_list.setCurrentItem(item)
+            items = [item]
+        menu = QMenu(self)
+        if self._cloud_trash:
+            if items:
+                menu.addAction("Restore", lambda: self._cloud_restore(items))
+        elif not items:
+            menu.addAction("New folder...", self._cloud_new_folder)
+            menu.addAction("Upload files...", self._cloud_upload_files)
+            menu.addAction("Upload folder...", self._cloud_upload_folder)
+            menu.addSeparator()
+            menu.addAction("Refresh", lambda: self._cloud_load(self._cloud_rel, push=False))
+        elif len(items) == 1:
+            it = items[0]
+            if it.data(0, Qt.ItemDataRole.UserRole + 1):
+                menu.addAction("Open", lambda: self._cloud_load(it.data(0, Qt.ItemDataRole.UserRole)))
+            elif not it.data(0, Qt.ItemDataRole.UserRole + 2):
+                menu.addAction("Download", self._cloud_download)
+            menu.addAction("Rename...", lambda: self._cloud_rename(it))
+            menu.addSeparator()
+            menu.addAction("Move to...", self._cloud_move)
+            menu.addAction("Move to trash", self._cloud_trash_items)
+        else:
+            menu.addAction(f"Download ({len(items)} items)", self._cloud_download)
+            menu.addSeparator()
+            menu.addAction("Move to...", self._cloud_move)
+            menu.addAction("Move to trash", self._cloud_trash_items)
+        menu.popup(self.cloud_list.viewport().mapToGlobal(pos))
+
+    def eventFilter(self, obj, ev):
+        if (obj is self.cloud_list
+                and ev.type() == QEvent.Type.KeyPress
+                and ev.key() == Qt.Key.Key_Delete
+                and not self._cloud_trash and self.cloud_list.selectedItems()):
+            self._cloud_trash_items()
+            return True
+        return super().eventFilter(obj, ev)
+
     def _cloud_open_item(self, item, _col):
+        if self._cloud_trash:
+            return
         if item.data(0, Qt.ItemDataRole.UserRole + 1):
             self._cloud_load(item.data(0, Qt.ItemDataRole.UserRole))
         else:
             self._cloud_download()
 
-    def _cloud_back(self):
-        if self._cloud_hist:
-            prev = self._cloud_hist.pop()
-            self._cloud_load(prev, push=False)
+    # --- running CLI mutations
+
+    def _cloud_run(self, args, status, done=None, notify=None, timeout=600):
+        self.cloud_status.setText(status)
+        self._cloud_busy_flag = True
+        self.cloud_list.setEnabled(False)
+        self._cloud_buttons()
+
+        def work():
+            cli = resolve_cli()
+            if not cli:
+                raise RuntimeError("proton-drive CLI not found")
+            r = subprocess.run([cli, *args], capture_output=True, text=True,
+                               timeout=timeout)
+            if r.returncode != 0:
+                raise RuntimeError((r.stderr or r.stdout or "command failed").strip()[:200])
+            return (r.stdout or "").strip()[:200]
+
+        w = Worker(work)
+        w.done.connect(lambda res, done=done, notify=notify:
+                       self._cloud_mutated(res, done, notify))
+        self._workers.append(w)
+        w.start()
+
+    @guard_slot
+    def _cloud_mutated(self, result, done, notify):
+        self._cloud_busy_flag = False
+        self.cloud_list.setEnabled(True)
+        if isinstance(result, Exception):
+            self.cloud_status.setText("That didn't work.")
+            self.cloud_status.setToolTip(str(result))   # reason on hover
+            self._cloud_buttons()
+            return
+        if done:
+            self.cloud_status.setText(done)
+        if notify:
+            desktop_notification(*notify)
+        self._cloud_refresh_current()
+
+    def _cloud_refresh_current(self):
+        self._cloud_cache.clear()
+        if self._cloud_trash:
+            self._cloud_load_trash(announce=False)
+        else:
+            self._cloud_load(self._cloud_rel, push=False, announce=False)
+
+    # --- actions
+
+    @guard_slot
+    def _cloud_rename(self, item):
+        old = item.data(0, Qt.ItemDataRole.UserRole)
+        name = old.rsplit("/", 1)[-1]
+        new, ok = QInputDialog.getText(self, "Rename", "New name:", text=name)
+        new = (new or "").strip()
+        if not ok or not new or new == name or "/" in new:
+            return
+        self._cloud_run(["fs", "rename", self._cloud_rpath(old), new],
+                        "Renaming...", f"Renamed to {new}.")
+
+    @guard_slot
+    def _cloud_new_folder(self):
+        name, ok = QInputDialog.getText(self, "New folder", "Folder name:")
+        name = (name or "").strip()
+        if not ok or not name or "/" in name:
+            return
+        self._cloud_run(["fs", "create-folder", self._cloud_rpath(self._cloud_rel), name],
+                        "Creating...", f"Folder {name} created.")
+
+    @guard_slot
+    def _cloud_upload_menu(self):
+        menu = QMenu(self)
+        menu.addAction("Upload files...", self._cloud_upload_files)
+        menu.addAction("Upload folder...", self._cloud_upload_folder)
+        menu.exec(self.cloud_upload.mapToGlobal(
+            self.cloud_upload.rect().bottomLeft()))
+
+    @guard_slot
+    def _cloud_upload_files(self):
+        files, _ = QFileDialog.getOpenFileNames(self, "Upload files", str(Path.home()))
+        if not files:
+            return
+        self._cloud_run(["fs", "upload", *files, self._cloud_rpath(self._cloud_rel)],
+                        f"Uploading {len(files)} file(s)...",
+                        f"Uploaded {len(files)} file(s).",
+                        notify=("Uploaded", f"{len(files)} file(s)"), timeout=3600)
+
+    @guard_slot
+    def _cloud_upload_folder(self):
+        d = QFileDialog.getExistingDirectory(self, "Upload folder", str(Path.home()))
+        if not d:
+            return
+        self._cloud_run(["fs", "upload", d, self._cloud_rpath(self._cloud_rel)],
+                        "Uploading folder...", f"Uploaded {Path(d).name}.",
+                        notify=("Uploaded", Path(d).name), timeout=3600)
+
+    @guard_slot
+    def _cloud_move(self):
+        items = self.cloud_list.selectedItems()
+        if not items:
+            return
+        target = self._pick_cloud_folder("Move to")
+        if target is None:
+            return
+        rpaths = [self._cloud_rpath(i.data(0, Qt.ItemDataRole.UserRole)) for i in items]
+        self._cloud_run(["fs", "move", *rpaths, self._cloud_rpath(target)],
+                        "Moving...", f"Moved {len(items)} item(s).")
+
+    def _pick_cloud_folder(self, title: str):
+        """Modal picker of a cloud folder. Returns its rel path, or None."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        dlg.resize(430, 480)
+        lay = QVBoxLayout(dlg)
+        tree = QTreeWidget()
+        tree.setHeaderHidden(True)
+        lay.addWidget(tree, 1)
+        root = QTreeWidgetItem([f"My Files ({self._remote_root or '/my-files'})"])
+        root.setData(0, Qt.ItemDataRole.UserRole, "")
+        tree.addTopLevelItem(root)
+
+        def expand(item):
+            if item.data(0, Qt.ItemDataRole.UserRole + 1):
+                return
+            item.setData(0, Qt.ItemDataRole.UserRole + 1, True)
+            rel = item.data(0, Qt.ItemDataRole.UserRole) or ""
+            w = Worker(lambda: fetch_remote_folders(self._remote_root or "/my-files", rel))
+
+            def done(r, item=item):
+                if isinstance(r, Exception):
+                    return
+                try:
+                    for f in r:
+                        c = QTreeWidgetItem([f["name"]])
+                        c.setData(0, Qt.ItemDataRole.UserRole, f["rel"])
+                        # always show the expand arrow: a folder that looks empty
+                        # may still have subfolders (loaded on demand)
+                        c.setChildIndicatorPolicy(
+                            QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator)
+                        item.addChild(c)
+                except RuntimeError:
+                    # dialog was closed while the listing was in flight:
+                    # its items are gone - drop the result quietly
+                    return
+
+            w.done.connect(done)
+            self._workers.append(w)
+            w.start()
+
+        tree.itemExpanded.connect(expand)
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        cancel = QPushButton("Cancel")
+        ok = QPushButton("Choose")
+        ok.setObjectName("secondary")
+        btns.addWidget(cancel)
+        btns.addWidget(ok)
+        lay.addLayout(btns)
+        cancel.clicked.connect(dlg.reject)
+        ok.clicked.connect(dlg.accept)
+        tree.setCurrentItem(root)   # sensible default target: My Files itself
+        root.setExpanded(True)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return None
+        it = tree.currentItem()
+        return it.data(0, Qt.ItemDataRole.UserRole) if it else None
+
+    @guard_slot
+    def _cloud_trash_items(self):
+        items = self.cloud_list.selectedItems()
+        if not items:
+            return
+        n = len(items)
+        word = "this item" if n == 1 else f"these {n} items"
+        ans = QMessageBox.question(
+            self, "Move to trash?",
+            f"Move {word} to the Proton trash? You can restore it later "
+            f"from Trash.")
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+        rpaths = [self._cloud_rpath(i.data(0, Qt.ItemDataRole.UserRole)) for i in items]
+        self._cloud_run(["fs", "trash", *rpaths], "Moving to trash...",
+                        "Moved to trash.",
+                        notify=("Moved to trash", "Restore anytime from Trash"))
+
+    def _cloud_restore(self, items):
+        names = [i.data(0, Qt.ItemDataRole.UserRole) for i in items]
+        self._cloud_run(["fs", "restore", *[f"/trash/{n}" for n in names]],
+                        "Restoring...", f"Restored {len(names)} item(s).")
+
+    # --- downloads
 
     @guard_slot
     def _cloud_download(self):
-        item = self.cloud_list.currentItem()
-        if item is None or item.data(0, Qt.ItemDataRole.UserRole + 1):
+        items = [i for i in self.cloud_list.selectedItems() if i is not None]
+        if not items:
             return
-        if item.data(0, Qt.ItemDataRole.UserRole + 2):
+        plain = [i for i in items if not i.data(0, Qt.ItemDataRole.UserRole + 2)]
+        docs = [i for i in items if i.data(0, Qt.ItemDataRole.UserRole + 2)]
+        if docs and not plain:
             self.cloud_status.setText("Proton documents can't be downloaded.")
             return
-        rel = item.data(0, Qt.ItemDataRole.UserRole)
-        name = rel.rsplit("/", 1)[-1]
+        if len(plain) == 1 and not plain[0].data(0, Qt.ItemDataRole.UserRole + 1):
+            # single file: classic save-as
+            item = plain[0]
+            rel = item.data(0, Qt.ItemDataRole.UserRole)
+            name = rel.rsplit("/", 1)[-1]
+            start = Path.home() / "Downloads"
+            if not start.is_dir():
+                start = Path.home()
+            chosen, _ = QFileDialog.getSaveFileName(self, "Save file", str(start / name))
+            if not chosen:
+                return
+            self.cloud_status.setText("Downloading...")
+            self._cloud_busy_flag = True
+            self.cloud_list.setEnabled(False)
+            self._cloud_buttons()
+            rpath = self._cloud_rpath(rel)
+            w = Worker(lambda: self._cloud_fetch(rpath, Path(chosen)))
+            w.done.connect(lambda r, chosen=chosen: self._cloud_downloaded(r, chosen))
+            self._workers.append(w)
+            w.start()
+            return
+        # folders or several files: pick a destination folder
         start = Path.home() / "Downloads"
         if not start.is_dir():
             start = Path.home()
-        chosen, _ = QFileDialog.getSaveFileName(self, "Save file", str(start / name))
-        if not chosen:
+        dest = QFileDialog.getExistingDirectory(self, "Save to folder", str(start))
+        if not dest:
             return
-        self.cloud_dl.setEnabled(False)
-        self.cloud_status.setText("Downloading...")
-        root = self._remote_root or "/my-files"
-        rpath = "/".join([root] + [c.replace("/", r"\/") for c in rel.split("/")])
-        w = Worker(lambda: self._cloud_fetch(rpath, Path(chosen)))
-        w.done.connect(lambda r, chosen=chosen: self._cloud_downloaded(r, chosen))
+        rpaths = [self._cloud_rpath(i.data(0, Qt.ItemDataRole.UserRole)) for i in plain]
+        n = len(rpaths)
+        self.cloud_status.setText(f"Downloading {n} item(s)...")
+        self._cloud_busy_flag = True
+        self.cloud_list.setEnabled(False)
+        self._cloud_buttons()
+        w = Worker(lambda: self._cloud_fetch_all(rpaths, Path(dest)))
+        w.done.connect(lambda r, n=n: self._cloud_fetched_all(r, n))
         self._workers.append(w)
         w.start()
 
@@ -1313,14 +1811,48 @@ class MainWindow(QWidget):
         shutil.rmtree(tmp, ignore_errors=True)
         return str(dest)
 
+    @staticmethod
+    def _cloud_fetch_all(rpaths: list, dest_dir: Path) -> int:
+        cli = resolve_cli()
+        if not cli:
+            raise RuntimeError("proton-drive CLI not found")
+        tmp = Path(tempfile.mkdtemp(prefix="proton-cloud-"))
+        r = subprocess.run([cli, "fs", "download", *rpaths, str(tmp)],
+                           capture_output=True, text=True, timeout=3600)
+        if r.returncode != 0:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise RuntimeError((r.stderr or r.stdout or "download failed").strip()[:200])
+        produced = list(tmp.iterdir())
+        if not produced:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise RuntimeError("nothing was downloaded")
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        for p in produced:
+            shutil.move(str(p), str(dest_dir / p.name))
+        shutil.rmtree(tmp, ignore_errors=True)
+        return len(produced)
+
     @guard_slot
     def _cloud_downloaded(self, result, dest: str):
-        self.cloud_dl.setEnabled(self.cloud_list.currentItem() is not None)
+        self._cloud_busy_flag = False
+        self.cloud_list.setEnabled(True)
+        self._cloud_buttons()
         if isinstance(result, Exception):
             self.cloud_status.setText("Download failed.")
             return
         self.cloud_status.setText("Saved.")
         desktop_notification("Downloaded", Path(dest).name)
+
+    @guard_slot
+    def _cloud_fetched_all(self, result, n: int):
+        self._cloud_busy_flag = False
+        self.cloud_list.setEnabled(True)
+        self._cloud_buttons()
+        if isinstance(result, Exception):
+            self.cloud_status.setText("Download failed.")
+            return
+        self.cloud_status.setText("Saved.")
+        desktop_notification("Downloaded", f"{n} item(s)")
 
     # ---- activity ---------------------------------------------------------------
 
@@ -2226,6 +2758,7 @@ class MainWindow(QWidget):
         self._workers.append(w)
         w.start()
 
+    @guard_slot
     def _sel_populate(self, item, folders):
         if isinstance(folders, Exception):
             folders = []
@@ -2377,6 +2910,7 @@ class MainWindow(QWidget):
         self._workers.append(w)
         w.start()
 
+    @guard_slot
     def _update_checked(self, result):
         if isinstance(result, Exception):
             self.lbl_update.setText("Could not check for updates right now.")
@@ -2423,6 +2957,7 @@ class MainWindow(QWidget):
         self._workers.append(w)
         w.start()
 
+    @guard_slot
     def _update_downloaded(self, result):
         self.btn_dl_update.setEnabled(True)
         if isinstance(result, Exception):
@@ -2439,6 +2974,7 @@ class MainWindow(QWidget):
         self._workers.append(w)
         w.start()
 
+    @guard_slot
     def _identity_loaded(self, result):
         if isinstance(result, Exception):
             return

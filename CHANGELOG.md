@@ -1,3 +1,25 @@
+## 3.7.0 — 2026-10-17
+
+- **Cloud is now a full file manager, like browsing in a web browser**:
+  right-click anything for **Rename…**, **Move to…** (folder picker included)
+  and **Move to trash**; create folders; **upload files or whole folders**;
+  select several items to download, move or trash them together. A **Delete**
+  key does the same as *Move to trash* — and trash is never permanent.
+- **Back / Forward buttons and clickable breadcrumbs** (My Files › Personel › …)
+  jump straight to any level — no more retracing steps one folder at a time.
+- **Instant navigation**: each folder's last listing paints immediately while
+  fresh data loads behind it, exactly like a browser's back button — going
+  back or up a level no longer waits on the network.
+- Click a column heading to **sort by name, size or date** (ascending or
+  descending); folders always stay on top.
+- **Trash view**: see everything recently deleted (with the time it was
+  trashed) and **restore** it in one click. Files you trash from the app are
+  removed from the cloud; with the default safe settings your local copy
+  stays on disk (deleting is off by default).
+- Download a **whole folder** or several items at once into a folder you
+  choose; cloud calls inside the AppImage now spawn the bundled CLI directly
+  (fewer moving parts per click).
+
 ## 3.6.0 — 2026-10-17
 
 - **New Cloud page**: browse your Proton Drive inside the app like a file
