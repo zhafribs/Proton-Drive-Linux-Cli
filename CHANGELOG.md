@@ -1,3 +1,8 @@
+## 3.5.1 — 2026-10-17
+
+- Engine: a successful cycle now clears any stale error in the health file
+  (an old failure message used to linger forever after recovery).
+
 ## 3.5.0 — 2026-10-17
 
 - New "Instant (30 seconds)" option for cloud checks — files added on the

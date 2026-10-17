@@ -713,6 +713,7 @@ def run_once(dry_run=False):
         log.info("cycle done: in sync")
         write_health(status="ok", cycle_seconds=round(time.time() - t0, 1),
                      actions=0, holds=holds, failed=0, uploaded=0, downloaded=0, conflicts=0,
+                     error="",
                      remote_entries=len(remote), local_entries=len(local),
                      state_records=len(state), interval=INTERVAL)
         return True
@@ -732,7 +733,7 @@ def run_once(dry_run=False):
                  actions=len(actions), holds=holds, failed=len(failed),
                  uploaded=uploaded_n, downloaded=len(downloaded), conflicts=conflicts_n,
                  remote_entries=len(remote), local_entries=len(local),
-                 state_records=len(saved), interval=INTERVAL)
+                 state_records=len(saved), interval=INTERVAL, error="")
     return not failed
 
 
