@@ -7,9 +7,9 @@
     </linearGradient>
   </defs>
   <g fill="url(#pg)">
-    <circle cx="23" cy="31" r="11"/>
-    <circle cx="39" cy="28" r="13.5"/>
-    <rect x="12" y="30" width="38" height="15" rx="7.5"/>
+    <circle cx="20" cy="34" r="14"/>
+    <circle cx="41" cy="29" r="17"/>
+    <rect x="6" y="33" width="52" height="20" rx="10"/>
   </g>
-  <path fill="#ffffff" d="M31 22l8 9h-4.6v7.6a1.6 1.6 0 0 1-1.6 1.6h-3.6a1.6 1.6 0 0 1-1.6-1.6V31H23z"/>
+  <path fill="#ffffff" d="M32 17l11 12h-6.5v10a2.5 2.5 0 0 1-2.5 2.5h-4a2.5 2.5 0 0 1-2.5-2.5V29H21z"/>
 </svg>

@@ -264,11 +264,11 @@ def tray_icon(base: QPixmap, status: str) -> QIcon:
     pm.fill(Qt.GlobalColor.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.drawPixmap(6, 6, base.scaled(54, 54, Qt.AspectRatioMode.KeepAspectRatio,
+    p.drawPixmap(2, 2, base.scaled(66, 66, Qt.AspectRatioMode.KeepAspectRatio,
                                    Qt.TransformationMode.SmoothTransformation))
-    p.setPen(QPen(QColor("#ffffff"), 5))
+    p.setPen(QPen(QColor("#ffffff"), 4))
     p.setBrush(QColor(color))
-    p.drawEllipse(48, 48, 22, 22)
+    p.drawEllipse(52, 52, 18, 18)
     p.end()
     return QIcon(pm)
 
