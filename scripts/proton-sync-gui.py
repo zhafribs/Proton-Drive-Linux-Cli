@@ -18,6 +18,7 @@ Run:  python3 scripts/proton-sync-gui.py      (or the proton-drive-gui shim)
 
 import datetime
 import functools
+import hashlib
 import json
 import os
 import re
@@ -26,6 +27,7 @@ import shutil
 import subprocess
 import sys
 import traceback
+import urllib.request
 from pathlib import Path
 
 from PyQt6.QtCore import (QLockFile, QPoint, QSettings, QRectF, QUrl, Qt,
@@ -52,6 +54,7 @@ STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/stat
 HEALTH_FILE = STATE_DIR / "health.json"
 WAKE_FILE = STATE_DIR / "wake"
 LOCK_FILE = STATE_DIR / "gui.lock"
+AUTOSTART_FILE = Path.home() / ".config" / "autostart" / "proton-drive.desktop"
 JOURNAL_UNIT = "proton-sync"
 
 CONF_DEFAULTS = {
@@ -337,6 +340,132 @@ def fetch_remote_folders(remote_root: str, rel_path: str) -> list:
             continue
         out.append({"name": name, "rel": f"{rel_path}/{name}" if rel_path else name})
     return sorted(out, key=lambda f: f["name"].lower())
+
+
+# ------------------------------------------------ app install / autostart / updates
+
+MENU_DIR = Path.home() / ".local" / "share" / "applications"
+MENU_ENTRY = MENU_DIR / "proton-drive.desktop"
+MENU_ICON_DIR = Path.home() / ".local" / "share" / "icons" / "hicolor" / "scalable" / "apps"
+MENU_ICON = MENU_ICON_DIR / "proton-drive-gui.svg"
+RELEASE_API = ("https://api.github.com/repos/zhafribs/"
+               "Proton-Drive-Linux-Cli/releases/latest")
+RELEASE_PAGE = "https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/latest"
+
+
+def launch_command() -> str:
+    """How this app is started from outside (login autostart, app menu)."""
+    appimage = os.environ.get("APPIMAGE")
+    if appimage and Path(appimage).is_file():
+        return appimage
+    shim = Path.home() / ".local" / "bin" / "proton-drive-gui"
+    if shim.is_file():
+        return str(shim)
+    return f"{sys.executable} {Path(__file__).resolve()}"
+
+
+def _desktop_exec(cmd: str) -> str:
+    return f'"{cmd}"' if " " in cmd else cmd
+
+
+def autostart_enabled() -> bool:
+    return AUTOSTART_FILE.is_file()
+
+
+def set_autostart(on: bool):
+    if on:
+        AUTOSTART_FILE.parent.mkdir(parents=True, exist_ok=True)
+        AUTOSTART_FILE.write_text(
+            "[Desktop Entry]\nType=Application\nName=Proton Drive\n"
+            "Comment=Keep your Proton Drive folder in sync\n"
+            f"Exec={_desktop_exec(launch_command())}\n"
+            "X-GNOME-Autostart-enabled=true\n", encoding="utf-8")
+    else:
+        try:
+            AUTOSTART_FILE.unlink()
+        except OSError:
+            pass
+
+
+def menu_installed() -> bool:
+    return MENU_ENTRY.is_file()
+
+
+def set_menu_installed(on: bool):
+    if on:
+        MENU_DIR.mkdir(parents=True, exist_ok=True)
+        MENU_ENTRY.write_text(
+            "[Desktop Entry]\nType=Application\nName=Proton Drive\n"
+            "Comment=Keep your Proton Drive folder in sync\n"
+            f"Exec={_desktop_exec(launch_command())}\n"
+            f"Icon={MENU_ICON}\nCategories=Utility;Network;\n"
+            "Terminal=false\nStartupNotify=true\n", encoding="utf-8")
+        icon = find_icon()
+        if icon:
+            MENU_ICON_DIR.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(icon, MENU_ICON)
+    else:
+        for p in (MENU_ENTRY, MENU_ICON):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+    exe = shutil.which("update-desktop-database")
+    if exe:
+        subprocess.run([exe, str(MENU_DIR)], capture_output=True, timeout=15)
+
+
+def check_for_release() -> dict:
+    """Latest published release of this project on GitHub."""
+    req = urllib.request.Request(RELEASE_API,
+                                 headers={"User-Agent": "proton-drive-gui"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        data = json.loads(r.read().decode())
+    tag = data.get("tag_name") or ""
+    return {"tag": tag, "version": tag.lstrip("v"),
+            "published": (data.get("published_at") or "")[:10],
+            "assets": {a["name"]: a["browser_download_url"]
+                       for a in data.get("assets", [])}}
+
+
+def download_update(rel: dict, arch: str) -> Path:
+    """Download the AppImage for this machine and verify its checksum."""
+    name = f"ProtonDrive-CLI-{rel['version']}-{arch}.AppImage"
+    url = rel["assets"].get(name)
+    sums = rel["assets"].get("SHA256SUMS")
+    if not url or not sums:
+        raise RuntimeError(f"no build for {arch} in release {rel['tag']}")
+    dest = Path("/tmp") / f"proton-update-{name}"
+    with urllib.request.urlopen(url, timeout=120) as r, open(dest, "wb") as f:
+        shutil.copyfileobj(r, f)
+    with urllib.request.urlopen(sums, timeout=30) as r:
+        text = r.read().decode()
+    want = None
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[-1].lstrip("*") == name:
+            want = parts[0]
+            break
+    if not want:
+        dest.unlink(missing_ok=True)
+        raise RuntimeError("checksum entry not found")
+    if hashlib.sha256(dest.read_bytes()).hexdigest() != want:
+        dest.unlink(missing_ok=True)
+        raise RuntimeError("download corrupted (checksum mismatch)")
+    dest.chmod(0o755)
+    return dest
+
+
+def install_update_and_restart(dl: Path):
+    """Swap the running AppImage for the freshly downloaded one, then relaunch."""
+    target = os.environ.get("APPIMAGE")
+    if not target or not Path(target).is_file():
+        raise RuntimeError("not running as an AppImage")
+    os.replace(dl, target + ".new")
+    os.replace(target, target + ".old")
+    os.replace(target + ".new", target)
+    subprocess.Popen([target], start_new_session=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 # --------------------------------------------------------------------------- design
@@ -689,6 +818,7 @@ class MainWindow(QWidget):
         self._remote_root = "/my-files"
         self._home_status = "unknown"
         self._sel_updating = False
+        self._release = None
 
         self.setWindowIcon(QIcon(svg_pixmap(find_icon(), 64)))
 
@@ -1127,25 +1257,92 @@ class MainWindow(QWidget):
         form.addLayout(row)
         col.addWidget(box)
 
-        # --- startup + theme
-        box, form = card("Start-up and looks")
+        # --- running in the background
+        box, form = card("Running in the background")
         form.setSpacing(6)
-        row_a, self.chk_autostart = toggle_row("Start syncing when I log in")
-        form.addWidget(row_a)
+        row_b, self.chk_close_tray = toggle_row(
+            "Keep running when I close the window",
+            "Closing the window hides it to the tray instead of quitting, so "
+            "syncing never stops.")
+        form.addWidget(row_b)
         row_s, self.chk_starttray = toggle_row(
             "Start quietly in the tray",
             "Open as a small icon instead of a window.")
         form.addWidget(row_s)
-        form.addSpacing(6)
+        row_a, self.chk_autostart = toggle_row("Start syncing when I log in")
+        form.addWidget(row_a)
+        row_la, self.chk_appstart = toggle_row(
+            "Open Proton Drive when I log in",
+            "Starts this app itself at login (quietly, if the setting above is on).")
+        form.addWidget(row_la)
+        col.addWidget(box)
+
+        # --- appearance
+        box, form = card("Appearance")
         row = QHBoxLayout()
         row.setSpacing(10)
-        row.addWidget(QLabel("Appearance"))
+        row.addWidget(QLabel("Theme"))
         self.cmb_theme = QComboBox()
         self.cmb_theme.addItems(["Match my system", "Light", "Dark"])
         self.cmb_theme.currentIndexChanged.connect(self._theme_changed)
         row.addWidget(self.cmb_theme)
         row.addStretch(1)
         form.addLayout(row)
+        col.addWidget(box)
+
+        # --- updates
+        box, form = card("Updates")
+        form.setSpacing(8)
+        row_u, self.chk_updates = toggle_row(
+            "Check for new versions automatically",
+            "The app checks GitHub once an hour and tells you in the tray.")
+        form.addWidget(row_u)
+        self.lbl_update = QLabel("")
+        self.lbl_update.setObjectName("small")
+        self.lbl_update.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        form.addWidget(self.lbl_update)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        btn_check = QPushButton("Check now")
+        btn_check.clicked.connect(self._check_updates_clicked)
+        row.addWidget(btn_check)
+        self.btn_dl_update = QPushButton("Download and restart")
+        self.btn_dl_update.setObjectName("primary")
+        self.btn_dl_update.setVisible(False)
+        self.btn_dl_update.clicked.connect(self._download_update)
+        row.addWidget(self.btn_dl_update)
+        btn_page = QPushButton("Open download page")
+        btn_page.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl(RELEASE_PAGE)))
+        row.addWidget(btn_page)
+        row.addStretch(1)
+        form.addLayout(row)
+        col.addWidget(box)
+
+        # --- installing on linux
+        box, form = card("Installing on Linux")
+        form.setSpacing(8)
+        self.lbl_install = QLabel("")
+        self.lbl_install.setObjectName("small")
+        form.addWidget(self.lbl_install)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        btn_inst = QPushButton("Add to my app menu")
+        btn_inst.clicked.connect(lambda: self._install_menu(True))
+        row.addWidget(btn_inst)
+        btn_uninst = QPushButton("Remove from app menu")
+        btn_uninst.clicked.connect(lambda: self._install_menu(False))
+        row.addWidget(btn_uninst)
+        row.addStretch(1)
+        form.addLayout(row)
+        hint = QLabel("Adds a menu entry and icon for your user only - no "
+                      "administrator rights, nothing system-wide. The app itself "
+                      "stays wherever you keep it (e.g. your Downloads folder as "
+                      "an AppImage). Debian, Fedora and Arch all launch it the "
+                      "same way.")
+        hint.setObjectName("small")
+        hint.setWordWrap(True)
+        form.addWidget(hint)
         col.addWidget(box)
 
         # --- advanced (hidden)
@@ -1650,6 +1847,17 @@ class MainWindow(QWidget):
         self.chk_autostart.setChecked(enabled)
         self.chk_autostart.blockSignals(False)
 
+        self.chk_close_tray.setChecked(
+            self._prefs.value("close_to_tray", True, type=bool))
+        self.chk_updates.setChecked(
+            self._prefs.value("updates_auto", True, type=bool))
+        self.chk_appstart.blockSignals(True)
+        self.chk_appstart.setChecked(autostart_enabled())
+        self.chk_appstart.blockSignals(False)
+        self.lbl_install.setText(
+            "Installed - look for 'Proton Drive' in your app menu."
+            if menu_installed() else "Not in your app menu yet.")
+
         self._sel_load_root()
 
     def save_settings(self):
@@ -1817,6 +2025,65 @@ class MainWindow(QWidget):
         self.save_hint.setText("Will start when you log in." if ok
                                else "Could not change start-up.")
 
+    def _app_autostart_toggled(self, checked: bool):
+        set_autostart(checked)
+
+    def _install_menu(self, on: bool):
+        set_menu_installed(on)
+        self.lbl_install.setText(
+            "Installed - look for 'Proton Drive' in your app menu." if on
+            else "Not in your app menu yet.")
+
+    # --- updates
+
+    def _check_updates_clicked(self):
+        self.lbl_update.setText("Checking for updates...")
+        w = Worker(lambda: (check_for_release(), self._identity.get("version", "")))
+        w.done.connect(self._update_checked)
+        self._workers.append(w)
+        w.start()
+
+    def _update_checked(self, result):
+        if isinstance(result, Exception):
+            self.lbl_update.setText("Could not check for updates right now.")
+            return
+        rel, cli_version = result
+        self._release = rel
+        m = re.search(r"@(\d+\.\d+\.\d+)", cli_version or "")
+        cur = m.group(1) if m else ""
+        if cur and rel["version"] != cur:
+            self.lbl_update.setText(
+                f"Version {rel['tag']} is available (you have {cur}).")
+            self.btn_dl_update.setVisible(bool(os.environ.get("APPIMAGE")))
+            if self.tray and self._cool_ok("update", 6 * 3600):
+                self._notify("Update available",
+                             f"Proton Drive {rel['tag']} is ready to install.")
+        else:
+            self.lbl_update.setText(
+                f"You're up to date (latest release: {rel['tag']}, "
+                f"{rel['published']}).")
+            self.btn_dl_update.setVisible(False)
+
+    def _download_update(self):
+        if not self._release:
+            return
+        rel = self._release
+        arch = os.uname().machine
+        self.btn_dl_update.setEnabled(False)
+        self.lbl_update.setText("Downloading and verifying the update...")
+        w = Worker(lambda: install_update_and_restart(download_update(rel, arch)))
+        w.done.connect(self._update_downloaded)
+        self._workers.append(w)
+        w.start()
+
+    def _update_downloaded(self, result):
+        self.btn_dl_update.setEnabled(True)
+        if isinstance(result, Exception):
+            self.lbl_update.setText(f"Update failed: {result}")
+            return
+        self.lbl_update.setText("Updated - the new version is starting...")
+        QTimer.singleShot(1500, self.quit_app)
+
     # ------------------------------------------------------------------ account
 
     def load_identity(self):
@@ -1922,7 +2189,9 @@ class MainWindow(QWidget):
         QApplication.quit()
 
     def closeEvent(self, event: QCloseEvent):  # noqa: N802 - Qt naming
-        if not self._quitting and self.tray and QSystemTrayIcon.isSystemTrayAvailable():
+        close_to_tray = self._prefs.value("close_to_tray", True, type=bool)
+        if (not self._quitting and close_to_tray and self.tray
+                and QSystemTrayIcon.isSystemTrayAvailable()):
             event.ignore()
             self.hide()
             if not self._tray_warned:
@@ -1975,6 +2244,11 @@ def main() -> int:
     win.chk_autostart.toggled.connect(win._autostart_toggled)
     win.chk_starttray.toggled.connect(
         lambda v: win._prefs.setValue("start_in_tray", v))
+    win.chk_close_tray.toggled.connect(
+        lambda v: win._prefs.setValue("close_to_tray", v))
+    win.chk_updates.toggled.connect(
+        lambda v: win._prefs.setValue("updates_auto", v))
+    win.chk_appstart.toggled.connect(win._app_autostart_toggled)
     for chk, key in ((win.chk_note_errors, "notify_errors"),
                      (win.chk_note_conflicts, "notify_conflicts"),
                      (win.chk_note_done, "notify_complete")):
@@ -1987,6 +2261,9 @@ def main() -> int:
             win.tray.showMessage("Proton Drive",
                                  "Running quietly in the tray. Click the icon to open.",
                                  QSystemTrayIcon.MessageIcon.Information, 4000)
+
+    if prefs.value("updates_auto", True, type=bool):
+        QTimer.singleShot(5000, win._check_updates_clicked)
 
     if smoke:
         QTimer.singleShot(2500, app.quit)

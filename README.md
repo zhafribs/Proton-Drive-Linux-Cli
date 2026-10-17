@@ -92,10 +92,21 @@ repos** - no AUR, no bundled toolkits), designed for everyday users:
 * **Settings** - plain-language options: which folder syncs, selective
   sync (browse the cloud and pick folders), never-sync patterns
   (`*.tmp`-style), instant upload, sync frequency, notifications with a
-  test button, start at login, start-minimized-in-tray, light/dark/system
-  theme - and an *Advanced* section for power users (connections, retries,
-  extra environment variables, log access). Saving writes
-  `~/.config/proton-sync.conf` and restarts syncing.
+  test button, plus these sections:
+  * *Running in the background* - keep-in-tray on close, start quietly in
+    tray, start syncing at login, and open the app itself at login
+  * *Appearance* - light/dark/system theme
+  * *Updates* - automatic GitHub release checks with a tray notice, and a
+    one-click *Download and restart* when running as an AppImage (the
+    download is verified against the published SHA256 checksum before it
+    replaces the old file)
+  * *Installing on Linux* - one click adds a menu entry + icon for the
+    current user (no admin rights; works with the AppImage on Debian,
+    Fedora and Arch)
+  * *Advanced* - connections, retries, extra environment variables, log
+    access
+
+  Saving writes `~/.config/proton-sync.conf` and restarts syncing.
 * **About** - what the app is, the good-to-know rules and the legal notes
 * **tray icon** - status at a glance plus desktop notifications; closing
   the window keeps it running (right-click the tray icon to quit)
