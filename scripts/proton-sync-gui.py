@@ -45,7 +45,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox,
                              QTreeWidget, QTreeWidgetItem, QVBoxLayout,
                              QWidget)
 
-GUI_VERSION = "3.2.0"
+GUI_VERSION = "3.3.0"
 
 REPO_URL = "https://github.com/zhafribs/Proton-Drive-Linux-Cli"
 CONF_FILE = Path.home() / ".config" / "proton-sync.conf"
@@ -534,12 +534,12 @@ QPushButton:hover {{ background: {HOVER}; }}
 QPushButton:disabled {{ color: {MUTED}; background: transparent; }}
 QPushButton#primary {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
                         stop:0 {ACCENT_L}, stop:1 {ACCENT}); color: #ffffff;
-                       border-radius: 22px; padding: 12px 24px; font-size: 14px; }}
+                       border-radius: 22px; padding: 12px 22px; font-size: 14px; }}
 QPushButton#primary:hover {{ background: qlineargradient(x1:0,y1:0,x2:1,y2:1,
                              stop:0 #9d84ff, stop:1 #7c5cff); }}
 QPushButton#primary:disabled {{ background: {HOVER}; color: {MUTED}; }}
 QPushButton#secondary {{ background: {CARD}; border: 1px solid {BORDER};
-                         border-radius: 22px; padding: 11px 20px; font-size: 14px; }}
+                         border-radius: 22px; padding: 11px 18px; font-size: 14px; }}
 QPushButton#secondary:hover {{ background: {HOVER}; }}
 QPushButton#ghostDanger {{ color: {ERROR}; }}
 QPushButton#seg {{ border-radius: 10px; padding: 7px 16px; color: {MUTED}; }}
@@ -831,12 +831,13 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Proton Drive")
-        # 960 is the narrowest width where every page fits without a
+        # 920 is the narrowest window where every page fits without a
         # horizontal scrollbar and the About title/version lines stay single -
-        # verified against the real (x11) styling, with margin for font
-        # differences across distros (pill padding trimmed to help).
-        self.setMinimumSize(960, 540)
-        self.resize(980, 780)
+        # sidebar 216 + page margins 60 leave 644px of content against a
+        # 607px worst-case page (Home), verified on x11 with room for font
+        # differences across distros.
+        self.setMinimumSize(920, 540)
+        self.resize(940, 780)
         self._quitting = False
         self._tray_warned = False
         self._identity = {"version": "?", "email": None, "logged_in": False}
@@ -892,9 +893,9 @@ class MainWindow(QWidget):
 
         side = QFrame()
         side.setObjectName("sidebar")
-        side.setFixedWidth(232)
+        side.setFixedWidth(216)
         sl = QVBoxLayout(side)
-        sl.setContentsMargins(16, 26, 16, 20)
+        sl.setContentsMargins(12, 26, 12, 20)
         sl.setSpacing(4)
 
         head = QHBoxLayout()
@@ -956,7 +957,7 @@ class MainWindow(QWidget):
     def _home_page(self) -> QWidget:
         page = QWidget()
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(36, 30, 36, 20)
+        outer.setContentsMargins(30, 30, 30, 20)
         outer.setSpacing(18)
 
         inner = QWidget()
@@ -1075,7 +1076,7 @@ class MainWindow(QWidget):
     def _activity_page(self) -> QWidget:
         page = QWidget()
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(36, 30, 36, 20)
+        outer.setContentsMargins(30, 30, 30, 20)
         outer.setSpacing(18)
 
         head = QHBoxLayout()
@@ -1172,7 +1173,7 @@ class MainWindow(QWidget):
     def _settings_page(self) -> QWidget:
         page = QWidget()
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(36, 30, 36, 20)
+        outer.setContentsMargins(30, 30, 30, 20)
         outer.setSpacing(18)
         title = QLabel("Settings")
         title.setObjectName("pageTitle")
@@ -1439,7 +1440,7 @@ class MainWindow(QWidget):
     def _about_page(self) -> QWidget:
         page = QWidget()
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(36, 30, 36, 20)
+        outer.setContentsMargins(30, 30, 30, 20)
         outer.setSpacing(18)
         title = QLabel("About")
         title.setObjectName("pageTitle")
@@ -2057,7 +2058,7 @@ class MainWindow(QWidget):
     def _apply_window_prefs(self):
         """Floating window: remembered size + stay-on-top flag.
 
-        Remembered sizes are floored to the no-scroll layout (960x780) so a
+        Remembered sizes are floored to the no-scroll layout (920x780) so a
         window saved before this version never comes back with content cut off.
         """
         if self._prefs.value("always_on_top", True, type=bool):
@@ -2070,7 +2071,7 @@ class MainWindow(QWidget):
                 w, h = sw, sh
         except (ValueError, TypeError):
             pass
-        w = max(w, 960)
+        w = max(w, 920)
         h = max(h, 780)
         geo = self.screen().availableGeometry() if self.screen() else None
         if geo:

@@ -1,3 +1,11 @@
+## 3.3.0 — 2026-10-17
+
+- Slimmer window: minimum width 960 → **920**, default width 980 → **940**,
+  with **zero horizontal scrolling on every page** at every allowed size -
+  same guarantees as 3.2, 40px less window (sidebar 232 → 216, page margins
+  tightened, pill padding trimmed 2px). The About title/version line still
+  never wraps.
+
 ## 3.2.0 — 2026-10-17
 
 - Fit guarantee: minimum window width set to 960 so **every** page shows with
