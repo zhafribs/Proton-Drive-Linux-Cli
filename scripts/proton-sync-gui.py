@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 import urllib.request
 from pathlib import Path
@@ -49,7 +50,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox,
                              QWidget)
 from PyQt6.QtGui import QFontMetrics
 
-GUI_VERSION = "3.7.0"
+GUI_VERSION = "3.8.0"
 
 REPO_URL = "https://github.com/zhafribs/Proton-Drive-Linux-Cli"
 CONF_FILE = Path.home() / ".config" / "proton-sync.conf"
@@ -58,6 +59,9 @@ STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/stat
 HEALTH_FILE = STATE_DIR / "health.json"
 WAKE_FILE = STATE_DIR / "wake"
 LOCK_FILE = STATE_DIR / "gui.lock"
+SNAPSHOT_FILE = STATE_DIR / "remote-snapshot.json"   # engine's last full walk
+CLOUD_CACHE_FILE = STATE_DIR / "cloud-cache.json"    # folders this app listed
+CLOUD_CACHE_MAX = 300                                # keep newest N folders
 AUTOSTART_FILE = Path.home() / ".config" / "autostart" / "proton-drive.desktop"
 JOURNAL_UNIT = "proton-sync"
 
@@ -454,6 +458,86 @@ def fetch_trash_entries() -> list:
                     "doc": (not is_dir) and media.startswith("application/vnd.proton")})
     out.sort(key=lambda x: (0 if x["dir"] else 1, x["name"].lower()))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Cloud speed: paint instantly, refresh in the background (browser-style).
+#
+# Two local sources mean no folder ever waits on the network to be VISIBLE:
+#   * the engine's last full walk (remote-snapshot.json) - the whole cloud
+#     tree, seconds to a few minutes old - seeds folders never opened before;
+#   * cloud-cache.json remembers what this app has listed, across restarts.
+# Fresh data always still loads behind the paint (every open re-lists), so
+# the view self-heals within a few seconds - you just never wait to see it.
+# ---------------------------------------------------------------------------
+
+_SNAP_MEM = {"mtime": None, "tree": {}}
+
+
+def snapshot_tree() -> dict:
+    """The engine's walk as {rel: node}, parsed once per file change."""
+    try:
+        mtime = SNAPSHOT_FILE.stat().st_mtime
+    except OSError:
+        return {}
+    if _SNAP_MEM["mtime"] != mtime:
+        try:
+            tree = json.loads(SNAPSHOT_FILE.read_text(encoding="utf-8")).get("tree") or {}
+        except (OSError, json.JSONDecodeError):
+            tree = {}
+        _SNAP_MEM["mtime"] = mtime
+        _SNAP_MEM["tree"] = tree
+    return _SNAP_MEM["tree"]
+
+
+def seed_entries(rel: str) -> list:
+    """A folder listing straight from the engine's walk - instant paint for
+    any folder, even ones never opened in this session."""
+    tree = snapshot_tree()
+    if not tree:
+        return []
+    prefix = f"{rel}/" if rel else ""
+    out = []
+    for r, n in tree.items():
+        if rel:
+            if not r.startswith(prefix):
+                continue
+            if "/" in r[len(prefix):]:
+                continue
+        elif "/" in r:
+            continue
+        name = r.rsplit("/", 1)[-1]
+        if not isinstance(n, dict) or not name:
+            continue
+        is_dir = n.get("type") == "dir"
+        when = (n.get("mtime") or "").replace("T", " ")[:16]
+        out.append({"name": name, "rel": r, "dir": is_dir,
+                    "size": int(n.get("size") or 0), "mtime": when,
+                    "doc": bool(n.get("doc"))})
+    out.sort(key=lambda x: (0 if x["dir"] else 1, x["name"].lower()))
+    return out
+
+
+def load_cloud_cache() -> dict:
+    """Persisted listings: {rel: {"ts": epoch, "entries": [...]}}."""
+    try:
+        data = json.loads(CLOUD_CACHE_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_cloud_cache(cache: dict) -> None:
+    try:
+        if len(cache) > CLOUD_CACHE_MAX:
+            old = sorted(cache, key=lambda k: cache[k].get("ts", 0))
+            for k in old[:len(cache) - CLOUD_CACHE_MAX]:
+                cache.pop(k, None)
+        tmp = CLOUD_CACHE_FILE.with_name(f"{CLOUD_CACHE_FILE.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(cache), encoding="utf-8")
+        tmp.replace(CLOUD_CACHE_FILE)
+    except OSError:
+        pass
 
 
 # ------------------------------------------------ app install / autostart / updates
@@ -1261,6 +1345,7 @@ class MainWindow(QWidget):
         self._cloud_fwd_hist: list = []
         self._cloud_trash = False
         self._cloud_cache: dict = {}
+        self._cloud_disk: dict = load_cloud_cache()   # instant paint source
         self._cloud_entries: list = []
         self._cloud_sort = [0, Qt.SortOrder.AscendingOrder]
         self._cloud_busy_flag = False
@@ -1276,7 +1361,8 @@ class MainWindow(QWidget):
         self._cloud_load_trash() if self._cloud_trash else self._cloud_load(
             self._cloud_rel, push=False)
 
-    def _cloud_load(self, rel: str, push: bool = True, announce: bool = True):
+    def _cloud_load(self, rel: str, push: bool = True, announce: bool = True,
+                    paint: bool = True):
         if push and rel != self._cloud_rel:
             self._cloud_hist.append(self._cloud_rel)
             self._cloud_fwd_hist.clear()
@@ -1287,11 +1373,18 @@ class MainWindow(QWidget):
         self.cloud_trash_btn.blockSignals(False)
         self._cloud_paint_crumbs()
         self._cloud_begin(announce)
-        # browser feel: paint the last listing instantly (clickable) while the
-        # fresh one loads in the background
-        cached = self._cloud_cache.get(rel)
-        if cached is not None:
-            self._cloud_fill(cached, enabled=True)
+        # instant paint, browser-style: this session's cache (freshest), else
+        # the persisted cache, else the engine's last walk - fresh data still
+        # loads behind it, so nothing ever waits on the network to be visible
+        if paint:
+            src = self._cloud_cache.get(rel)
+            if src is None:
+                entry = self._cloud_disk.get(rel)
+                src = entry.get("entries") if entry else None
+            if src is None:
+                src = seed_entries(rel)
+            if src is not None:
+                self._cloud_fill(src, enabled=True)
         root = self._remote_root or "/my-files"
         w = Worker(lambda: fetch_remote_entries(root, rel))
         w.done.connect(lambda r, key=rel: self._cloud_loaded(r, key))
@@ -1302,9 +1395,12 @@ class MainWindow(QWidget):
         self._cloud_trash = True
         self._cloud_paint_crumbs()
         self._cloud_begin(announce)
-        cached = self._cloud_cache.get("\x00trash")
-        if cached is not None:
-            self._cloud_fill(cached, enabled=True)
+        src = self._cloud_cache.get("\x00trash")
+        if src is None:
+            entry = self._cloud_disk.get("\x00trash")
+            src = entry.get("entries") if entry else None
+        if src is not None:
+            self._cloud_fill(src, enabled=True)
         w = Worker(fetch_trash_entries)
         w.done.connect(lambda r: self._cloud_loaded(r, "\x00trash"))
         self._workers.append(w)
@@ -1423,6 +1519,8 @@ class MainWindow(QWidget):
             self._cloud_buttons()
             return
         self._cloud_cache[key] = result
+        self._cloud_disk[key] = {"ts": time.time(), "entries": result}
+        save_cloud_cache(self._cloud_disk)
         self._cloud_fill(result, enabled=True)
         # "Opening..." is cleared; a finished action's message (e.g. "Renamed
         # to X.") is intentionally preserved until the next navigation
@@ -1588,11 +1686,18 @@ class MainWindow(QWidget):
         self._cloud_refresh_current()
 
     def _cloud_refresh_current(self):
-        self._cloud_cache.clear()
+        # after an action: drop this folder's listings everywhere (memory,
+        # disk) so a just-renamed/deleted row can never be painted again;
+        # paint=False until the fresh result lands
+        key = "\x00trash" if self._cloud_trash else self._cloud_rel
+        self._cloud_cache.pop(key, None)
+        self._cloud_disk.pop(key, None)
+        save_cloud_cache(self._cloud_disk)
         if self._cloud_trash:
             self._cloud_load_trash(announce=False)
         else:
-            self._cloud_load(self._cloud_rel, push=False, announce=False)
+            self._cloud_load(self._cloud_rel, push=False, announce=False,
+                             paint=False)
 
     # --- actions
 

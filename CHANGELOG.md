@@ -1,3 +1,22 @@
+## 3.8.0 — 2026-10-17
+
+- **Cloud browsing no longer waits for the network.** Every folder now
+  paints instantly - from the sync engine's latest cloud scan (the whole
+  tree, seconds old) and from your own browsing history, which is kept
+  between app launches. Opening a folder shows its contents immediately
+  (measured: about a millisecond, vs 2–5 seconds of waiting before) while
+  a fresh copy loads behind it and confirms the view within seconds.
+  A folder you just created, renamed or deleted can never linger as a
+  stale row - actions always clear the way for fresh data.
+- For the record: a real cloud check still takes the same ~2–3 seconds
+  (that is Proton's network round-trip, and the AppImage adds nothing to
+  it - measured) - you simply never wait for it anymore.
+- Sync engine hardening: a completed full scan is now always cached even
+  if the quick follow-up check fails for a moment (a network hiccup used
+  to silently discard the scan and force another ~2-minute one on the
+  next cycle), and the rare "walking instead of peeking" fallbacks are
+  logged visibly instead of only at debug level.
+
 ## 3.7.0 — 2026-10-17
 
 - **Cloud is now a full file manager, like browsing in a web browser**:

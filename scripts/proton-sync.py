@@ -774,9 +774,9 @@ def run_once(dry_run=False, force_full=False):
         snap = load_snapshot()
         fp = remote_fingerprint()
         if fp is None:
-            log.debug("fingerprint unavailable - full walk")
+            log.info("fingerprint unavailable - full walk")
         elif snap is None:
-            log.debug("no usable snapshot - full walk")
+            log.info("no usable snapshot - full walk")
         elif fp != snap.get("fp"):
             log.info("peek: cloud changed - full walk")
         elif time.time() - float(snap.get("ts") or 0) > FULL_EVERY:
@@ -790,8 +790,17 @@ def run_once(dry_run=False, force_full=False):
     else:
         remote = scan_remote()
         fp_after = remote_fingerprint()
+        if fp_after is None and fp is not None:
+            # transient size failure right after an expensive walk: cache the
+            # walk we already paid for using the pre-walk value (conservative
+            # - if the cloud changed mid-walk the next peek just says "changed"
+            # and we walk again)
+            fp_after = fp
+            log.info("fingerprint refresh failed - caching the walk anyway")
         if fp_after is not None:
             save_snapshot(remote, fp_after)
+        else:
+            log.info("walk not cached (no fingerprint) - next cycle will walk again")
 
     local = scan_local()
     state = load_state()
