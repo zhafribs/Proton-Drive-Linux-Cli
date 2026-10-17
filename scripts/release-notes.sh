@@ -22,13 +22,18 @@ lock_get() { awk -F= -v key="$1" '$1 == key { sub(/^[^=]*=/, ""); print; exit }'
 VERSION="${1:-$(lock_get VERSION)}"
 [ -n "$VERSION" ] || { echo "error: no version given and none in upstream.lock" >&2; exit 1; }
 
+# The GUI version travels in the tag and in every asset name.
+GUI_VERSION="$(sed -n 's/^GUI_VERSION = "\(.*\)"$/\1/p' "$ROOT/scripts/proton-sync-gui.py" | head -1)"
+[ -n "$GUI_VERSION" ] || { echo "error: GUI_VERSION not found in proton-sync-gui.py" >&2; exit 1; }
+[ -f "$ROOT/CHANGELOG.md" ] || { echo "error: CHANGELOG.md missing" >&2; exit 1; }
+
 RELEASE_DATE="$(lock_get RELEASE_DATE)"
 PAGE_URL="$(lock_get PAGE_URL)"
 SHA512_X64="$(lock_get SHA512_LINUX_X64)"
 SHA512_ARM64="$(lock_get SHA512_LINUX_ARM64)"
 
-X86="$DIST/ProtonDrive-CLI-${VERSION}-x86_64.AppImage"
-ARM="$DIST/ProtonDrive-CLI-${VERSION}-aarch64.AppImage"
+X86="$DIST/ProtonDrive-CLI-${VERSION}-GUI-${GUI_VERSION}-x86_64.AppImage"
+ARM="$DIST/ProtonDrive-CLI-${VERSION}-GUI-${GUI_VERSION}-aarch64.AppImage"
 for artifact in "$X86" "$ARM" "$DIST/SHA256SUMS"; do
     [ -f "$artifact" ] || { echo "error: missing $(basename "$artifact") - run ./build.sh first" >&2; exit 1; }
 done
@@ -40,12 +45,6 @@ done
 REPO="$(git -C "$ROOT" remote get-url origin 2>/dev/null \
     | sed -E 's#^(git@github.com:|https://github.com/)##; s#\.git$##')"
 REPO="${REPO:-zhafribs/Proton-Drive-Linux-Cli}"
-
-# The GUI carries its own version, independent of the packaged CLI - readers
-# should see both plus the app's development history on the release page.
-GUI_VERSION="$(sed -n 's/^GUI_VERSION = "\(.*\)"$/\1/p' "$ROOT/scripts/proton-sync-gui.py" | head -1)"
-[ -n "$GUI_VERSION" ] || { echo "error: GUI_VERSION not found in proton-sync-gui.py" >&2; exit 1; }
-[ -f "$ROOT/CHANGELOG.md" ] || { echo "error: CHANGELOG.md missing" >&2; exit 1; }
 
 sha256() { sha256sum "$1" | cut -d' ' -f1; }
 

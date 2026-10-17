@@ -7,17 +7,17 @@ unmodified upstream binary, verified against Proton's published SHA-512 before p
 
 | File | For | SHA-256 |
 | --- | --- | --- |
-| `ProtonDrive-CLI-{{VERSION}}-x86_64.AppImage` | Intel/AMD | `{{SHA256_X86_64}}` |
-| `ProtonDrive-CLI-{{VERSION}}-aarch64.AppImage` | ARM64 | `{{SHA256_AARCH64}}` |
+| `ProtonDrive-CLI-{{VERSION}}-GUI-{{GUI_VERSION}}-x86_64.AppImage` | Intel/AMD | `{{SHA256_X86_64}}` |
+| `ProtonDrive-CLI-{{VERSION}}-GUI-{{GUI_VERSION}}-aarch64.AppImage` | ARM64 | `{{SHA256_AARCH64}}` |
 
 Verify: `sha256sum -c SHA256SUMS`
 
 ## Run
 
 ```bash
-chmod +x ProtonDrive-CLI-{{VERSION}}-x86_64.AppImage
-./ProtonDrive-CLI-{{VERSION}}-x86_64.AppImage --help
-./ProtonDrive-CLI-{{VERSION}}-x86_64.AppImage auth login   # first run
+chmod +x ProtonDrive-CLI-{{VERSION}}-GUI-{{GUI_VERSION}}-x86_64.AppImage
+./ProtonDrive-CLI-{{VERSION}}-GUI-{{GUI_VERSION}}-x86_64.AppImage --help
+./ProtonDrive-CLI-{{VERSION}}-GUI-{{GUI_VERSION}}-x86_64.AppImage auth login   # first run
 ```
 
 FUSE needed: Arch `pacman -S fuse2` · Debian/Ubuntu `apt install libfuse2t64` · Fedora `dnf install fuse-libs` — or use `APPIMAGE_EXTRACT_AND_RUN=1`.
@@ -28,6 +28,9 @@ FUSE needed: Arch `pacman -S fuse2` · Debian/Ubuntu `apt install libfuse2t64` �
 | --- | --- |
 | Proton Drive CLI (official, unmodified) | `{{VERSION}}` |
 | Desktop app + folder-sync engine (GUI) | **{{GUI_VERSION}}** |
+
+Release tagged `v{{VERSION}}-gui{{GUI_VERSION}}` — every update gets its own
+release and filename, so older builds stay downloadable.
 
 ### App development log
 

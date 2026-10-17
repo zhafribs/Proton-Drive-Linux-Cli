@@ -4,10 +4,12 @@ name: Check upstream & release
 #
 #   schedule        every 6 hours - detects a new upstream release, rewrites
 #                   upstream.lock, builds both AppImages and publishes a
-#                   GitHub release tagged v<version>
+#                   GitHub release tagged v<cli>-gui<gui> (one release per
+#                   distinct CLI+GUI pair; existing releases stay untouched)
 #   workflow_dispatch  manual run; set force_rebuild to rebuild + re-upload
-#                   assets for the current version
-#   push to main    rebuilds whenever the packaging itself changes
+#                   assets for the current CLI+GUI version
+#   push to main    rebuilds whenever the packaging itself changes; a new
+#                   GUI_VERSION in the source publishes its own new release
 #   pull_request    validation only (build + metadata checks, no publish)
 #
 # Everything the build needs is data-driven from upstream.lock, which
@@ -92,17 +94,19 @@ jobs:
           VERSION: ${{ steps.upstream.outputs.version }}
         run: |
           set -euo pipefail
-          TAG="v${VERSION}"
+          GUI="$(sed -n 's/^GUI_VERSION = "\(.*\)"$/\1/p' scripts/proton-sync-gui.py | head -1)"
+          [ -n "$GUI" ] || { echo "GUI_VERSION missing from proton-sync-gui.py" >&2; exit 1; }
+          TAG="v${VERSION}-gui${GUI}"
           NOTES="$RUNNER_TEMP/release-notes.md"
-          ASSETS=(dist/ProtonDrive-CLI-"${VERSION}"-x86_64.AppImage
-                  dist/ProtonDrive-CLI-"${VERSION}"-aarch64.AppImage
+          ASSETS=(dist/ProtonDrive-CLI-"${VERSION}"-GUI-"${GUI}"-x86_64.AppImage
+                  dist/ProtonDrive-CLI-"${VERSION}"-GUI-"${GUI}"-aarch64.AppImage
                   dist/SHA256SUMS)
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             existing="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
             missing=0
-            for name in ProtonDrive-CLI-"${VERSION}"-x86_64.AppImage \
-                        ProtonDrive-CLI-"${VERSION}"-aarch64.AppImage \
+            for name in ProtonDrive-CLI-"${VERSION}"-GUI-"${GUI}"-x86_64.AppImage \
+                        ProtonDrive-CLI-"${VERSION}"-GUI-"${GUI}"-aarch64.AppImage \
                         SHA256SUMS; do
               grep -qxF "$name" <<<"$existing" || missing=1
             done
@@ -116,7 +120,7 @@ jobs:
             fi
           else
             gh release create "$TAG" \
-              --title "Proton Drive CLI ${VERSION} — AppImage (x86_64 + aarch64)" \
+              --title "Proton Drive CLI ${VERSION} + GUI ${GUI} — AppImage (x86_64 + aarch64)" \
               --notes-file "$NOTES" \
               "${ASSETS[@]}"
             echo "Created release $TAG."

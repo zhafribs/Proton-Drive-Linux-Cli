@@ -68,6 +68,9 @@ load_upstream() {
     PAGE_URL="$(lock_get PAGE_URL)"
     DOWNLOAD_BASE="$(lock_get DOWNLOAD_BASE)"
     [ -n "$VERSION" ]           || die "upstream.lock is missing VERSION - run scripts/check-upstream.sh"
+    # The GUI carries its own version; AppImages are named for BOTH versions.
+    GUI_VERSION="$(sed -n 's/^GUI_VERSION = "\(.*\)"$/\1/p' "$ROOT/scripts/proton-sync-gui.py" | head -1)"
+    [ -n "$GUI_VERSION" ]       || die "scripts/proton-sync-gui.py is missing GUI_VERSION"
     [ -n "$DOWNLOAD_BASE" ]     || die "upstream.lock is missing DOWNLOAD_BASE - run scripts/check-upstream.sh"
     [ -n "$PAGE_URL" ]          || PAGE_URL="https://proton.me/download/drive/cli/index.html"
     [ -n "$RELEASE_DATE" ]      || RELEASE_DATE="unknown"
@@ -168,7 +171,7 @@ build_one() {
     local platform="$1"
     local arch="${APPIMAGE_ARCH[$platform]}"
     local appdir="$BUILD/${APPIMAGE_NAME}.AppDir"
-    local out="$DIST/${APPIMAGE_NAME}-${VERSION}-${arch}.AppImage"
+    local out="$DIST/${APPIMAGE_NAME}-${VERSION}-GUI-${GUI_VERSION}-${arch}.AppImage"
 
     fetch_payload "$platform"
     make_appdir "$platform" "$appdir"

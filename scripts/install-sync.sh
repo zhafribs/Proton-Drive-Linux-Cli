@@ -23,10 +23,18 @@ case "${1:-install}" in
   install)
     BIN_PATH="${PROTON_DRIVE_BIN:-$HOME/.local/bin/proton-drive}"
     if [ ! -x "$BIN_PATH" ]; then
+      # Self-heal: a rebuilt/renamed dist AppImage can leave the link dangling.
+      latest="$(ls -1t "$ROOT"/dist/ProtonDrive-CLI-*-$(uname -m).AppImage 2>/dev/null | head -1)"
+      if [ -n "$latest" ]; then
+        mkdir -p "$(dirname "$BIN_PATH")"
+        ln -sfn "$latest" "$BIN_PATH"
+      fi
+    fi
+    if [ ! -x "$BIN_PATH" ]; then
       BIN_PATH="$(command -v proton-drive || true)"
     fi
     [ -n "$BIN_PATH" ] && [ -x "$BIN_PATH" ] || {
-      echo "official CLI not found - run ./install-command.sh first" >&2
+      echo "official CLI not found - put the release AppImage at ~/.local/bin/proton-drive" >&2
       exit 1
     }
     [ -f "$SYNC" ] || { echo "missing $SYNC" >&2; exit 1; }

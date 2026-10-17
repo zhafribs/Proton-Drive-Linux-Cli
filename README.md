@@ -9,20 +9,20 @@ verified against Proton's published SHA-512 checksum before it is wrapped.
 
 | Artifact | Arch | Size |
 | --- | --- | --- |
-| `dist/ProtonDrive-CLI-0.9.0-x86_64.AppImage` | x86_64 (Intel/AMD) | 40 MB |
-| `dist/ProtonDrive-CLI-0.9.0-aarch64.AppImage` | aarch64 (ARM64) | 39 MB |
+| `dist/ProtonDrive-CLI-0.9.0-GUI-3.4.0-x86_64.AppImage` | x86_64 (Intel/AMD) | 40 MB |
+| `dist/ProtonDrive-CLI-0.9.0-GUI-3.4.0-aarch64.AppImage` | aarch64 (ARM64) | 39 MB |
 | `dist/SHA256SUMS` | checksums of the outputs | |
 
 Upstream version: **0.9.0** (released 2026-10-05), `cli-drive@0.9.0+75612299`.
-Desktop app version: **3.3.0** — every release note ships the app's [development log](CHANGELOG.md).
+Desktop app version: **3.4.0** — every release note ships the app's [development log](CHANGELOG.md).
 
 ## Quick start
 
 ```bash
-chmod +x dist/ProtonDrive-CLI-0.9.0-x86_64.AppImage
-./dist/ProtonDrive-CLI-0.9.0-x86_64.AppImage --version
-./dist/ProtonDrive-CLI-0.9.0-x86_64.AppImage --help
-./dist/ProtonDrive-CLI-0.9.0-x86_64.AppImage auth login   # first run
+chmod +x dist/ProtonDrive-CLI-0.9.0-GUI-3.4.0-x86_64.AppImage
+./dist/ProtonDrive-CLI-0.9.0-GUI-3.4.0-x86_64.AppImage --version
+./dist/ProtonDrive-CLI-0.9.0-GUI-3.4.0-x86_64.AppImage --help
+./dist/ProtonDrive-CLI-0.9.0-GUI-3.4.0-x86_64.AppImage auth login   # first run
 ```
 
 Put it on your `PATH` as `proton-drive` (creates `~/.local/bin/proton-drive` → symlink):
@@ -158,9 +158,9 @@ on Debian/Ubuntu, Fedora, Arch/CachyOS and derivatives without bundling libs:
 No FUSE at all (containers, restricted systems, any distro):
 
 ```bash
-APPIMAGE_EXTRACT_AND_RUN=1 ./dist/ProtonDrive-CLI-0.9.0-x86_64.AppImage --help
+APPIMAGE_EXTRACT_AND_RUN=1 ./dist/ProtonDrive-CLI-0.9.0-GUI-3.4.0-x86_64.AppImage --help
 # or permanently:
-./dist/ProtonDrive-CLI-0.9.0-x86_64.AppImage --appimage-extract
+./dist/ProtonDrive-CLI-0.9.0-GUI-3.4.0-x86_64.AppImage --appimage-extract
 ```
 
 Desktop menu entry: install [AppImageLauncher](https://github.com/AppImageCommunity/AppImageLauncher)
@@ -201,9 +201,9 @@ The repository tracks upstream on its own — `.github/workflows/release.yml`:
 
 | Trigger | What happens |
 | --- | --- |
-| **schedule** (every 6 h) | Runs `check-upstream.sh`. If Proton shipped a new CLI: rewrites `upstream.lock`, commits it with `[skip ci]`, builds both AppImages, renders notes from `release-notes.md.tmpl` and **publishes a release tagged `v<new version>`**. If nothing changed: validation build, no commit, no release churn. |
-| **workflow_dispatch** (manual) | Same, plus a `force_rebuild` input that re-uploads assets and refreshes notes for the current version. |
-| **push to main** (packaging changed) | Rebuilds and fills in any missing release assets. |
+| **schedule** (every 6 h) | Runs `check-upstream.sh`. If Proton shipped a new CLI: rewrites `upstream.lock`, commits it with `[skip ci]`, builds both AppImages, renders notes from `release-notes.md.tmpl` and **publishes a release tagged `v<cli>-gui<gui>`**. If nothing changed: validation build, no commit, no release churn. |
+| **workflow_dispatch** (manual) | Same, plus a `force_rebuild` input that re-uploads assets and refreshes notes for the current CLI+GUI version. |
+| **push to main** (packaging changed) | Rebuilds; a changed `GUI_VERSION` publishes the pair's **brand-new release** (existing releases are never overwritten). |
 | **pull_request** | Validation only — builds and checks metadata, never commits or publishes. |
 
 Design notes:
@@ -211,8 +211,11 @@ Design notes:
 * **Idempotent**: the release step checks whether all three assets already
   exist and skips them, so a green run does not silently replace the AppImages
   people already downloaded (their hashes change on every rebuild).
-* **Version-safe**: the tag always comes from `upstream.lock`, which only
-  changes when Proton's page changes, so one release per upstream version.
+* **One release per update**: the tag is `v<cli>-gui<gui>` — the CLI from
+  `upstream.lock` plus `GUI_VERSION` from the source — so a new Proton CLI *or*
+  a new app version always lands as its own release with its own filenames
+  (`ProtonDrive-CLI-<cli>-GUI-<gui>-<arch>.AppImage`), and older builds stay
+  downloadable.
 * **Fails loudly**: if Proton restructures the page so nothing parses,
   `check-upstream.sh` exits 2 and the scheduled run turns red (GitHub emails
   you) instead of silently releasing a stale build.

@@ -45,7 +45,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox,
                              QTreeWidget, QTreeWidgetItem, QVBoxLayout,
                              QWidget)
 
-GUI_VERSION = "3.3.0"
+GUI_VERSION = "3.4.0"
 
 REPO_URL = "https://github.com/zhafribs/Proton-Drive-Linux-Cli"
 CONF_FILE = Path.home() / ".config" / "proton-sync.conf"
@@ -441,13 +441,20 @@ def set_menu_installed(on: bool):
 
 
 def check_for_release() -> dict:
-    """Latest published release of this project on GitHub."""
+    """Latest published release of this project on GitHub.
+
+    Tags are v<cli>-gui<gui> so every update gets its own release; the
+    original single v<cli> tag is still understood as a GUI-less legacy.
+    """
     req = urllib.request.Request(RELEASE_API,
                                  headers={"User-Agent": "proton-drive-gui"})
     with urllib.request.urlopen(req, timeout=20) as r:
         data = json.loads(r.read().decode())
     tag = data.get("tag_name") or ""
-    return {"tag": tag, "version": tag.lstrip("v"),
+    core = tag.lstrip("v")
+    m = re.fullmatch(r"(\d+\.\d+\.\d+)-gui(\d+\.\d+\.\d+)", core)
+    cli, gui = (m.group(1), m.group(2)) if m else (core, "")
+    return {"tag": tag, "version": core, "cli": cli, "gui": gui,
             "published": (data.get("published_at") or "")[:10],
             "assets": {a["name"]: a["browser_download_url"]
                        for a in data.get("assets", [])}}
@@ -455,7 +462,10 @@ def check_for_release() -> dict:
 
 def download_update(rel: dict, arch: str) -> Path:
     """Download the AppImage for this machine and verify its checksum."""
-    name = f"ProtonDrive-CLI-{rel['version']}-{arch}.AppImage"
+    if rel.get("gui"):
+        name = f"ProtonDrive-CLI-{rel['cli']}-GUI-{rel['gui']}-{arch}.AppImage"
+    else:  # legacy release tagged v<cli> without a GUI suffix
+        name = f"ProtonDrive-CLI-{rel['cli']}-{arch}.AppImage"
     url = rel["assets"].get(name)
     sums = rel["assets"].get("SHA256SUMS")
     if not url or not sums:
@@ -2119,9 +2129,22 @@ class MainWindow(QWidget):
         self._release = rel
         m = re.search(r"@(\d+\.\d+\.\d+)", cli_version or "")
         cur = m.group(1) if m else ""
-        if cur and rel["version"] != cur:
+
+        def newer(a: str, b: str) -> bool:
+            try:
+                return (tuple(int(x) for x in a.split("."))
+                        > tuple(int(x) for x in b.split(".")))
+            except ValueError:
+                return False
+
+        have_update = bool(
+            cur and rel.get("gui")
+            and (newer(rel["cli"], cur)
+                 or (rel["cli"] == cur and newer(rel["gui"], GUI_VERSION))))
+        if have_update:
             self.lbl_update.setText(
-                f"Version {rel['tag']} is available (you have {cur}).")
+                f"Update available: CLI {rel['cli']} + GUI {rel['gui']} "
+                f"(you have {cur} + {GUI_VERSION}).")
             self.btn_dl_update.setVisible(bool(os.environ.get("APPIMAGE")))
             if self.tray and self._cool_ok("update", 6 * 3600):
                 self._notify("Update available",

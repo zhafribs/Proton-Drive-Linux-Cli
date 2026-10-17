@@ -1,3 +1,15 @@
+## 3.4.0 — 2026-10-17
+
+- **One release per update from now on**: every new CLI or app version gets its
+  own GitHub release tagged `v<cli>-gui<gui>` (e.g. `v0.9.0-gui3.4.0`) instead
+  of re-uploading into a single release — older builds stay downloadable and
+  the releases list shows the app's progress.
+- **AppImage filenames carry both versions**:
+  `ProtonDrive-CLI-0.9.0-GUI-3.4.0-x86_64.AppImage`.
+- The in-app updater understands both the new tags and the original `v0.9.0`
+  tag, offers updates when either version is newer, and still verifies
+  downloads against SHA256SUMS.
+
 ## 3.3.0 — 2026-10-17
 
 - Slimmer window: minimum width 960 → **920**, default width 980 → **940**,
