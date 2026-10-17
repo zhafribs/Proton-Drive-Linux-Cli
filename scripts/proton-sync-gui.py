@@ -26,6 +26,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import traceback
 import urllib.request
 from pathlib import Path
@@ -38,14 +39,16 @@ from PyQt6.QtGui import (QBrush, QCloseEvent, QColor, QDesktopServices,
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox,
                              QGraphicsDropShadowEffect, QFileDialog, QFrame,
-                             QHBoxLayout, QLabel, QLineEdit, QListWidget,
+                             QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+                             QListWidget,
                              QMenu, QMessageBox, QPlainTextEdit, QPushButton,
                              QScrollArea, QSizePolicy, QSpinBox,
                              QStackedWidget, QStyle, QSystemTrayIcon,
                              QTreeWidget, QTreeWidgetItem, QVBoxLayout,
                              QWidget)
+from PyQt6.QtGui import QFontMetrics
 
-GUI_VERSION = "3.5.1"
+GUI_VERSION = "3.6.0"
 
 REPO_URL = "https://github.com/zhafribs/Proton-Drive-Linux-Cli"
 CONF_FILE = Path.home() / ".config" / "proton-sync.conf"
@@ -365,6 +368,45 @@ def fetch_remote_folders(remote_root: str, rel_path: str) -> list:
             continue
         out.append({"name": name, "rel": f"{rel_path}/{name}" if rel_path else name})
     return sorted(out, key=lambda f: f["name"].lower())
+
+
+def fetch_remote_entries(remote_root: str, rel_path: str) -> list:
+    """Everything inside REL_PATH (folders first) for the Cloud browser.
+
+    Raises on CLI failure so the page can show an honest status line.
+    """
+    cli = resolve_cli()
+    if not cli:
+        raise RuntimeError("proton-drive CLI not found")
+    rpath = "/".join([remote_root] + [c.replace("/", r"\/") for c in rel_path.split("/")]) \
+        if rel_path else remote_root
+    r = subprocess.run([cli, "fs", "list", rpath, "--json"],
+                       capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        raise RuntimeError((r.stderr or r.stdout or "list failed").strip()[:200])
+    try:
+        raw = json.loads(r.stdout or "[]")
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"bad JSON from CLI: {e}") from e
+    out = []
+    for e in raw:
+        if not isinstance(e, dict) or "type" not in e:
+            continue                      # pseudo-sections (/, /trash, ...)
+        name = (e.get("name") or {}).get("value")
+        if not (e.get("name") or {}).get("ok", True) or not name:
+            continue
+        if re.match(r"^\.Trash-\d+$", name):
+            continue
+        is_dir = e.get("type") == "folder"
+        media = e.get("mediaType") or ""
+        out.append({"name": name,
+                    "rel": f"{rel_path}/{name}" if rel_path else name,
+                    "dir": is_dir,
+                    "size": int(((e.get("activeRevision") or {}).get("claimedSize")) or 0),
+                    "mtime": (e.get("modificationTime") or "").replace("T", " ")[:16],
+                    "doc": (not is_dir) and media.startswith("application/vnd.proton")})
+    out.sort(key=lambda x: (0 if x["dir"] else 1, x["name"].lower()))
+    return out
 
 
 # ------------------------------------------------ app install / autostart / updates
@@ -928,12 +970,16 @@ class MainWindow(QWidget):
 
         self.nav = QListWidget()
         self.nav.setObjectName("nav")
+        # the Qt list default size hint is a fixed 192px (fits 4 items only);
+        # _nav_fit_items gives it real room per item so nothing clips/scrolls
+        self.nav.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         # natural height: a hardcoded one made the 4 items overflow into a
         # scrollbar; the stretch below absorbs the remaining sidebar space.
-        for label in ("Home", "Activity", "Settings", "About"):
+        for label in ("Home", "Cloud", "Activity", "Settings", "About"):
             self.nav.addItem(label)
         self.nav.currentRowChanged.connect(self._switch_page)
         sl.addWidget(self.nav)
+        QTimer.singleShot(0, self._nav_fit_items)
         sl.addStretch(1)
 
         foot = QHBoxLayout()
@@ -957,6 +1003,7 @@ class MainWindow(QWidget):
         self.stack = QStackedWidget()
         root.addWidget(self.stack, 1)
         self.stack.addWidget(self._home_page())
+        self.stack.addWidget(self._cloud_page())
         self.stack.addWidget(self._activity_page())
         self.stack.addWidget(self._settings_page())
         self.stack.addWidget(self._about_page())
@@ -1082,6 +1129,200 @@ class MainWindow(QWidget):
         return page
 
     # ---- activity -----------------------------------------------------------
+
+    # ---- cloud ----------------------------------------------------------------
+
+    def _cloud_page(self) -> QWidget:
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(30, 30, 30, 20)
+        outer.setSpacing(14)
+
+        top = QHBoxLayout()
+        top.setSpacing(12)
+        self.cloud_back = QPushButton("←")
+        self.cloud_back.setFixedWidth(44)
+        self.cloud_back.setToolTip("Go back")
+        self.cloud_back.setEnabled(False)
+        self.cloud_back.clicked.connect(self._cloud_back)
+        top.addWidget(self.cloud_back)
+        self.cloud_path = QLabel("")
+        self.cloud_path.setObjectName("small")
+        self.cloud_path.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        top.addWidget(self.cloud_path, 1)
+        btn_refresh = QPushButton("Refresh")
+        btn_refresh.clicked.connect(lambda: self._cloud_load(self._cloud_rel, push=False))
+        top.addWidget(btn_refresh)
+        outer.addLayout(top)
+
+        self.cloud_list = QTreeWidget()
+        self.cloud_list.setHeaderLabels(["Name", "Size", "Modified"])
+        self.cloud_list.setRootIsDecorated(False)
+        self.cloud_list.setAlternatingRowColors(True)
+        self.cloud_list.setUniformRowHeights(True)
+        hdr = self.cloud_list.header()
+        hdr.setStretchLastSection(False)
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        hdr.resizeSection(1, 96)
+        hdr.resizeSection(2, 132)
+        outer.addWidget(self.cloud_list, 1)
+
+        bottom = QHBoxLayout()
+        bottom.setSpacing(12)
+        self.cloud_status = QLabel("")
+        self.cloud_status.setObjectName("small")
+        bottom.addWidget(self.cloud_status, 1)
+        self.cloud_dl = QPushButton("  Download")
+        self.cloud_dl.setEnabled(False)
+        self.cloud_dl.clicked.connect(self._cloud_download)
+        bottom.addWidget(self.cloud_dl)
+        outer.addLayout(bottom)
+
+        self._cloud_rel = ""
+        self._cloud_hist: list = []
+        self.cloud_list.itemDoubleClicked.connect(self._cloud_open_item)
+        self.cloud_list.itemSelectionChanged.connect(
+            lambda: self.cloud_dl.setEnabled(self.cloud_list.currentItem() is not None))
+        return page
+
+    def _cloud_shown(self):
+        # re-list on every visit: fresh, and self-heals after an error
+        self._cloud_load(self._cloud_rel, push=False)
+
+    def _cloud_load(self, rel: str, push: bool = True):
+        if push and rel != self._cloud_rel:
+            self._cloud_hist.append(self._cloud_rel)
+        self._cloud_rel = rel
+        disp = f"/{rel}" if rel else "My Files"
+        self.cloud_path.setToolTip(disp)
+        self._cloud_paint_path()
+        self.cloud_back.setEnabled(bool(self._cloud_hist))
+        self.cloud_list.setEnabled(False)
+        self.cloud_dl.setEnabled(False)
+        self.cloud_status.setText("Opening...")
+        w = Worker(lambda: fetch_remote_entries(self._remote_root or "/my-files", rel))
+        w.done.connect(self._cloud_loaded)
+        self._workers.append(w)
+        w.start()
+
+    def _cloud_paint_path(self):
+        disp = f"/{self._cloud_rel}" if self._cloud_rel else "My Files"
+        w = self.cloud_path.width()
+        if w > 8:
+            disp = QFontMetrics(self.cloud_path.font()).elidedText(
+                disp, Qt.TextElideMode.ElideMiddle, w)
+        self.cloud_path.setText(disp)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if getattr(self, "cloud_path", None) is not None:
+            self._cloud_paint_path()
+
+    @guard_slot
+    def _cloud_loaded(self, result):
+        self.cloud_list.setEnabled(True)
+        self.cloud_list.clear()
+        if isinstance(result, Exception):
+            self.cloud_status.setText("Couldn't open this folder.")
+            self.cloud_dl.setEnabled(False)
+            return
+        folder_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
+        file_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+        for e in result:
+            item = QTreeWidgetItem([e["name"],
+                                    "" if e["dir"] else self._fmt_size(e["size"]),
+                                    e["mtime"] or ""])
+            item.setIcon(0, folder_icon if e["dir"] else file_icon)
+            item.setData(0, Qt.ItemDataRole.UserRole, e["rel"])
+            item.setData(0, Qt.ItemDataRole.UserRole + 1, e["dir"])
+            item.setData(0, Qt.ItemDataRole.UserRole + 2, e["doc"])
+            item.setData(0, Qt.ItemDataRole.UserRole + 3, e["size"])
+            self.cloud_list.addTopLevelItem(item)
+        self.cloud_status.setText("This folder is empty." if not result else "")
+
+    @staticmethod
+    def _fmt_size(n: int) -> str:
+        if n <= 0:
+            return ""
+        if n < 1024:
+            return f"{n} B"
+        if n < 1024 ** 2:
+            return f"{n / 1024:.0f} KB"
+        if n < 1024 ** 3:
+            return f"{n / 1024 ** 2:.1f} MB"
+        return f"{n / 1024 ** 3:.1f} GB"
+
+    def _cloud_open_item(self, item, _col):
+        if item.data(0, Qt.ItemDataRole.UserRole + 1):
+            self._cloud_load(item.data(0, Qt.ItemDataRole.UserRole))
+        else:
+            self._cloud_download()
+
+    def _cloud_back(self):
+        if self._cloud_hist:
+            prev = self._cloud_hist.pop()
+            self._cloud_load(prev, push=False)
+
+    @guard_slot
+    def _cloud_download(self):
+        item = self.cloud_list.currentItem()
+        if item is None or item.data(0, Qt.ItemDataRole.UserRole + 1):
+            return
+        if item.data(0, Qt.ItemDataRole.UserRole + 2):
+            self.cloud_status.setText("Proton documents can't be downloaded.")
+            return
+        rel = item.data(0, Qt.ItemDataRole.UserRole)
+        name = rel.rsplit("/", 1)[-1]
+        start = Path.home() / "Downloads"
+        if not start.is_dir():
+            start = Path.home()
+        chosen, _ = QFileDialog.getSaveFileName(self, "Save file", str(start / name))
+        if not chosen:
+            return
+        self.cloud_dl.setEnabled(False)
+        self.cloud_status.setText("Downloading...")
+        root = self._remote_root or "/my-files"
+        rpath = "/".join([root] + [c.replace("/", r"\/") for c in rel.split("/")])
+        w = Worker(lambda: self._cloud_fetch(rpath, Path(chosen)))
+        w.done.connect(lambda r, chosen=chosen: self._cloud_downloaded(r, chosen))
+        self._workers.append(w)
+        w.start()
+
+    @staticmethod
+    def _cloud_fetch(rpath: str, dest: Path) -> str:
+        cli = resolve_cli()
+        if not cli:
+            raise RuntimeError("proton-drive CLI not found")
+        tmp = Path(tempfile.mkdtemp(prefix="proton-cloud-"))
+        r = subprocess.run([cli, "fs", "download", rpath, str(tmp)],
+                           capture_output=True, text=True, timeout=600)
+        if r.returncode != 0:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise RuntimeError((r.stderr or r.stdout or "download failed").strip()[:200])
+        produced = tmp / dest.name
+        if not produced.exists():
+            files = [p for p in tmp.iterdir() if p.is_file()]
+            if len(files) != 1:
+                shutil.rmtree(tmp, ignore_errors=True)
+                raise RuntimeError("downloaded file not found")
+            produced = files[0]
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(produced), str(dest))
+        shutil.rmtree(tmp, ignore_errors=True)
+        return str(dest)
+
+    @guard_slot
+    def _cloud_downloaded(self, result, dest: str):
+        self.cloud_dl.setEnabled(self.cloud_list.currentItem() is not None)
+        if isinstance(result, Exception):
+            self.cloud_status.setText("Download failed.")
+            return
+        self.cloud_status.setText("Saved.")
+        desktop_notification("Downloaded", Path(dest).name)
+
+    # ---- activity ---------------------------------------------------------------
 
     def _activity_page(self) -> QWidget:
         page = QWidget()
@@ -1566,9 +1807,21 @@ class MainWindow(QWidget):
 
     # ------------------------------------------------------------------ status
 
+    def _nav_fit_items(self):
+        """QListWidget's default size hint is a fixed 192px - room for only 4
+        themed items. Size the nav to its real content so all entries show."""
+        if not self.nav.count():
+            return
+        row = self.nav.visualItemRect(self.nav.item(0)).height()
+        if row > 0:
+            self.nav.setMinimumHeight(row * self.nav.count()
+                                      + 2 * self.nav.frameWidth() + 4)
+
     def _switch_page(self, row: int):
         self.stack.setCurrentIndex(max(0, row))
         if row == 1:
+            self._cloud_shown()
+        if row == 2:
             self.render_changes()
 
     @guard_slot
@@ -1946,6 +2199,9 @@ class MainWindow(QWidget):
         name = ["system", "light", "dark"][max(0, min(2, index))]
         self._prefs.setValue("theme", name)
         apply_theme(name)
+        # themed row heights differ per style - re-fit the nav to its items
+        self._nav_fit_items()
+        QTimer.singleShot(0, self._nav_fit_items)
 
     # --- selective sync tree
 

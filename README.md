@@ -9,20 +9,20 @@ verified against Proton's published SHA-512 checksum before it is wrapped.
 
 | Artifact | Arch | Size |
 | --- | --- | --- |
-| `dist/ProtonDrive-CLI-0.9.0-GUI-3.4.0-x86_64.AppImage` | x86_64 (Intel/AMD) | 40 MB |
-| `dist/ProtonDrive-CLI-0.9.0-GUI-3.4.0-aarch64.AppImage` | aarch64 (ARM64) | 39 MB |
+| `dist/ProtonDrive-CLI-0.9.0-GUI-3.6.0-x86_64.AppImage` | x86_64 (Intel/AMD) | 40 MB |
+| `dist/ProtonDrive-CLI-0.9.0-GUI-3.6.0-aarch64.AppImage` | aarch64 (ARM64) | 39 MB |
 | `dist/SHA256SUMS` | checksums of the outputs | |
 
 Upstream version: **0.9.0** (released 2026-10-05), `cli-drive@0.9.0+75612299`.
-Desktop app version: **3.4.0** — every release note ships the app's [development log](CHANGELOG.md).
+Desktop app version: **3.6.0** — every release note ships the app's [development log](CHANGELOG.md).
 
 ## Quick start
 
 ```bash
-chmod +x dist/ProtonDrive-CLI-0.9.0-GUI-3.4.0-x86_64.AppImage
-./dist/ProtonDrive-CLI-0.9.0-GUI-3.4.0-x86_64.AppImage --version
-./dist/ProtonDrive-CLI-0.9.0-GUI-3.4.0-x86_64.AppImage --help
-./dist/ProtonDrive-CLI-0.9.0-GUI-3.4.0-x86_64.AppImage auth login   # first run
+chmod +x dist/ProtonDrive-CLI-0.9.0-GUI-3.6.0-x86_64.AppImage
+./dist/ProtonDrive-CLI-0.9.0-GUI-3.6.0-x86_64.AppImage --version
+./dist/ProtonDrive-CLI-0.9.0-GUI-3.6.0-x86_64.AppImage --help
+./dist/ProtonDrive-CLI-0.9.0-GUI-3.6.0-x86_64.AppImage auth login   # first run
 ```
 
 Put it on your `PATH` as `proton-drive` (creates `~/.local/bin/proton-drive` → symlink):
@@ -64,7 +64,8 @@ Safety rules baked in:
   use `create-new-revision`, so the old version stays in Proton's history
 * Proton Docs/Sheets cannot be downloaded by the CLI; they are skipped
 
-Knobs: `PROTON_SYNC_LOCAL`, `PROTON_SYNC_REMOTE`, `PROTON_SYNC_INTERVAL`
+Knobs: `PROTON_SYNC_LOCAL`, `PROTON_SYNC_REMOTE`, `PROTON_SYNC_INTERVAL`,
+`PROTON_SYNC_FULL_EVERY`
 (seconds, default 300), `PROTON_SYNC_DELETES`, `PROTON_SYNC_WORKERS`,
 `PROTON_SYNC_RETRIES`, `PROTON_SYNC_SUBFOLDERS` (comma-separated folders to
 mirror instead of everything), `PROTON_SYNC_EXCLUDE` (comma-separated globs
@@ -75,9 +76,9 @@ Settings live in `~/.config/proton-sync.conf` - edit by hand or with the app.
 
 ## Desktop app (GUI)
 
-| Home | Settings | Activity |
-|:---:|:---:|:---:|
-| ![Home](docs/screenshots/home.png) | ![Settings](docs/screenshots/settings.png) | ![Activity](docs/screenshots/activity.png) |
+| Home | Cloud | Activity | Settings |
+|:---:|:---:|:---:|:---:|
+| ![Home](docs/screenshots/home.png) | ![Cloud](docs/screenshots/cloud.png) | ![Activity](docs/screenshots/activity.png) | ![Settings](docs/screenshots/settings.png) |
 
 *The compact floating window (940x780 default, 920x540 minimum - no page ever
 scrolls sideways, stays on top, size remembered) - light theme shown; dark and
@@ -96,12 +97,16 @@ repos** - no AUR, no bundled toolkits), designed for everyday users:
   "Sync is paused") with an animated status orb, one-click *Open my
   folder*, *Sync now* and *Pause* (15 minutes, 1 hour, or until you
   resume), your account, folder size and recently synced files
+* **Cloud** - browse your cloud drive like a file manager: click through
+  folders (~0.2 s each), see sizes and dates, download any file with one
+  click; every view is live, so website changes appear the moment you open
+  a folder
 * **Activity** - what moved recently (uploaded / downloaded / removed /
   conflicts) with search and filters, plus a technical log tab
 * **Settings** - plain-language options: which folder syncs, selective
   sync (browse the cloud and pick folders), never-sync patterns
-  (`*.tmp`-style), instant upload, sync frequency, notifications with a
-  test button, plus these sections:
+  (`*.tmp`-style), instant upload, cloud check speed (as fast as every 30
+  seconds), notifications with a test button, plus these sections:
   * *Running in the background* - keep this window floating above other
     windows, keep-in-tray on close, start quietly in tray, start syncing
     at login, and open the app itself at login
@@ -158,9 +163,9 @@ on Debian/Ubuntu, Fedora, Arch/CachyOS and derivatives without bundling libs:
 No FUSE at all (containers, restricted systems, any distro):
 
 ```bash
-APPIMAGE_EXTRACT_AND_RUN=1 ./dist/ProtonDrive-CLI-0.9.0-GUI-3.4.0-x86_64.AppImage --help
+APPIMAGE_EXTRACT_AND_RUN=1 ./dist/ProtonDrive-CLI-0.9.0-GUI-3.6.0-x86_64.AppImage --help
 # or permanently:
-./dist/ProtonDrive-CLI-0.9.0-GUI-3.4.0-x86_64.AppImage --appimage-extract
+./dist/ProtonDrive-CLI-0.9.0-GUI-3.6.0-x86_64.AppImage --appimage-extract
 ```
 
 Desktop menu entry: install [AppImageLauncher](https://github.com/AppImageCommunity/AppImageLauncher)

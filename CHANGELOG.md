@@ -1,3 +1,18 @@
+## 3.6.0 — 2026-10-17
+
+- **New Cloud page**: browse your Proton Drive inside the app like a file
+  manager — click through folders (~0.2 s each), see sizes and dates, and
+  download any file with one click or double-click. Every view is live:
+  website changes appear the moment you open the folder.
+- **Smart instant sync**: the engine now asks the cloud one cheap ~2.5-second
+  question ("did anything change anywhere?") instead of walking all ~1,200
+  folders every cycle. A full walk (~2 minutes) only happens when something
+  actually changed, after Sync now, or every 10 minutes as a safety net for
+  the rare change the quick question cannot see (renames, same-size edits).
+  Website files still land in about 2–3 minutes — at roughly a tenth of the
+  background load — and local files upload even faster (no walk in the way).
+  New optional knob `PROTON_SYNC_FULL_EVERY` (default 600 seconds).
+
 ## 3.5.1 — 2026-10-17
 
 - Engine: a successful cycle now clears any stale error in the health file

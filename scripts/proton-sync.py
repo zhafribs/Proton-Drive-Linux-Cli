@@ -56,6 +56,10 @@ Environment knobs
   PROTON_SYNC_SUBFOLDERS comma-separated subfolders to mirror (default all)
   PROTON_SYNC_EXCLUDE    comma-separated globs to skip (e.g. "*.tmp,.cache")
   PROTON_SYNC_INOTIFY    0 = disable the inotify fast path
+  PROTON_SYNC_FULL_EVERY safety full-walk seconds (default 600) - between the
+                        cheap fingerprint peeks, a complete remote walk runs at
+                        least this often to catch changes a size peek cannot
+                        see (renames, same-byte-size edits)
 
 Telemetry: ${XDG_STATE_HOME:-~/.local/state}/proton-sync/health.json is
 merge-updated at the start and end of every cycle for the GUI (never fatal).
@@ -117,6 +121,7 @@ BIN = os.environ.get("PROTON_DRIVE_BIN") or shutil.which("proton-drive")
 LOCAL_ROOT = Path(cfg("PROTON_SYNC_LOCAL", str(Path.home() / "ProtonDrive"))).expanduser()
 REMOTE_ROOT = cfg("PROTON_SYNC_REMOTE", "/my-files").rstrip("/") or "/my-files"
 INTERVAL = int(cfg("PROTON_SYNC_INTERVAL", "300"))
+FULL_EVERY = max(60, int(cfg("PROTON_SYNC_FULL_EVERY", "600")))
 SCAN_WORKERS = int(cfg("PROTON_SYNC_WORKERS", "12"))
 SCAN_RETRIES = int(cfg("PROTON_SYNC_RETRIES", "3"))
 TRANSFER_TIMEOUT = int(cfg("PROTON_SYNC_TIMEOUT", "3600"))
@@ -135,6 +140,8 @@ LOCK_FILE = STATE_DIR / "sync.lock"
 HEALTH_FILE = STATE_DIR / "health.json"
 # dropping this file requests an immediate cycle (the GUI's "Sync now" button)
 WAKE_FILE = STATE_DIR / "wake"
+SNAPSHOT_FILE = STATE_DIR / "remote-snapshot.json"
+FORCE_NEXT = False          # manual wake (GUI Sync now / wake file) -> full walk
 
 # minimum spacing between cycles + how long events must be quiet first
 MIN_CYCLE_GAP = 30
@@ -685,16 +692,107 @@ def refresh_state(remote, local, old_state, failed, acted):
     return new_state
 
 
+# ------------------------------------------------- smart cadence (peek vs walk)
+
+def remote_fingerprint():
+    """Cheap deep-change signal: ONE server-side `fs size` call (~2.5s, 0.1s CPU).
+
+    Returns [total_bytes, descendants] or None when unavailable. Any addition,
+    deletion or size-changing edit anywhere in the tree changes these numbers;
+    renames and same-byte-size edits do not (the safety walk catches those).
+    """
+    try:
+        p = subprocess.run([BIN, "fs", "size", REMOTE_ROOT],
+                           capture_output=True, text=True, timeout=META_TIMEOUT)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if p.returncode != 0:
+        return None
+    m_size = re.search(r"size:\s*(\d+)", p.stdout)
+    m_n = re.search(r"numberOfDescendants:\s*(\d+)", p.stdout)
+    if not (m_size and m_n):
+        return None
+    return [int(m_size.group(1)), int(m_n.group(1))]
+
+
+def walk_signature():
+    """Effective settings that change what a remote walk returns - a cached
+    snapshot is only trusted while this matches (selection/exclusion edits)."""
+    return "|".join([REMOTE_ROOT,
+                     cfg("PROTON_SYNC_SUBFOLDERS", ""),
+                     cfg("PROTON_SYNC_EXCLUDE", "")])
+
+
+def load_snapshot():
+    try:
+        data = json.loads(SNAPSHOT_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict) or data.get("sig") != walk_signature():
+        return None
+    if not isinstance(data.get("tree"), dict) or not isinstance(data.get("fp"), list):
+        return None
+    return data
+
+
+def snapshot_tree(data):
+    """The remote view from a cached walk: {rel: {uid, type, mtime, size, doc}}."""
+    tree = {}
+    for rel, node in data["tree"].items():
+        if isinstance(node, dict) and node.get("uid") and node.get("type") in ("dir", "file"):
+            tree[rel] = node
+    return tree
+
+
+def save_snapshot(tree, fp):
+    if not isinstance(fp, list):
+        return
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        payload = {"sig": walk_signature(), "fp": fp, "ts": time.time(), "tree": tree}
+        tmp = SNAPSHOT_FILE.with_name("remote-snapshot.json.tmp")
+        tmp.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+        os.replace(tmp, SNAPSHOT_FILE)
+    except Exception:  # noqa: BLE001 - a cached-walk optimization must never break sync
+        log.debug("snapshot save failed", exc_info=True)
+
+
 # ------------------------------------------------------------------ one cycle
 
-def run_once(dry_run=False):
+def run_once(dry_run=False, force_full=False):
     LOCAL_ROOT.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     if not dry_run:
         write_health(status="syncing",
                      started=datetime.datetime.now().astimezone().isoformat(timespec="seconds"))
     log.info("scan: remote %s + local %s", REMOTE_ROOT, LOCAL_ROOT)
-    remote = scan_remote()
+
+    # smart cadence: a ~2.5s fingerprint peek decides if a full walk is needed
+    mode = "full"
+    snap = fp = None
+    if not (dry_run or force_full):
+        snap = load_snapshot()
+        fp = remote_fingerprint()
+        if fp is None:
+            log.debug("fingerprint unavailable - full walk")
+        elif snap is None:
+            log.debug("no usable snapshot - full walk")
+        elif fp != snap.get("fp"):
+            log.info("peek: cloud changed - full walk")
+        elif time.time() - float(snap.get("ts") or 0) > FULL_EVERY:
+            log.info("safety walk due (> %ds)", FULL_EVERY)
+        else:
+            mode = "keep"
+
+    if mode == "keep":
+        remote = snapshot_tree(snap)
+        log.debug("peek: cloud unchanged - reusing snapshot (%d entries)", len(remote))
+    else:
+        remote = scan_remote()
+        fp_after = remote_fingerprint()
+        if fp_after is not None:
+            save_snapshot(remote, fp_after)
+
     local = scan_local()
     state = load_state()
     log.info("scan: %d remote / %d local / %d state records in %.0fs",
@@ -713,7 +811,7 @@ def run_once(dry_run=False):
         log.info("cycle done: in sync")
         write_health(status="ok", cycle_seconds=round(time.time() - t0, 1),
                      actions=0, holds=holds, failed=0, uploaded=0, downloaded=0, conflicts=0,
-                     error="",
+                     error="", mode=mode,
                      remote_entries=len(remote), local_entries=len(local),
                      state_records=len(state), interval=INTERVAL)
         return True
@@ -724,6 +822,10 @@ def run_once(dry_run=False):
 
     local2 = scan_local()
     remote2 = scan_remote() if did_upload else remote
+    if did_upload:
+        fp2 = remote_fingerprint()          # keep the cached walk in step with reality
+        if fp2 is not None:
+            save_snapshot(remote2, fp2)
     saved = refresh_state(remote2, local2, state, failed, {a[1] for a in actions})
     save_state(saved)
     uploaded_n = sum(1 for kind, rel, _ in actions if kind == "up" and rel not in failed)
@@ -733,7 +835,7 @@ def run_once(dry_run=False):
                  actions=len(actions), holds=holds, failed=len(failed),
                  uploaded=uploaded_n, downloaded=len(downloaded), conflicts=conflicts_n,
                  remote_entries=len(remote), local_entries=len(local),
-                 state_records=len(saved), interval=INTERVAL, error="")
+                 state_records=len(saved), interval=INTERVAL, error="", mode=mode)
     return not failed
 
 
@@ -804,6 +906,7 @@ class InotifyWatcher(threading.Thread):
 # ------------------------------------------------------------------------ main
 
 def loop_forever():
+    global FORCE_NEXT
     wake = threading.Event()
     if INOTIFY_ENABLED:
         try:
@@ -816,8 +919,10 @@ def loop_forever():
 
     while True:
         started = time.time()
+        force = FORCE_NEXT
+        FORCE_NEXT = False
         try:
-            run_once()
+            run_once(force_full=force)
         except CliError as e:
             log.error("cycle failed: %s (next try in %ds)", e, INTERVAL)
             write_health(status="error", error=str(e)[:300], interval=INTERVAL)
@@ -835,6 +940,7 @@ def loop_forever():
             if WAKE_FILE.exists():
                 WAKE_FILE.unlink(missing_ok=True)
                 log.info("manual sync requested (wake)")
+                FORCE_NEXT = True
                 triggered = True
             if triggered:
                 # debounce: wait until events stop for a while, respect min spacing
