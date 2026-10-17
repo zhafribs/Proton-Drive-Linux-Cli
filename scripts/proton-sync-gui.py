@@ -802,8 +802,8 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Proton Drive")
-        self.setMinimumSize(1000, 700)
-        self.resize(1080, 760)
+        self.setMinimumSize(760, 540)
+        self.resize(900, 640)
         self._quitting = False
         self._tray_warned = False
         self._identity = {"version": "?", "email": None, "logged_in": False}
@@ -811,6 +811,7 @@ class MainWindow(QWidget):
         self._changes = []
         self._workers = []
         self._prefs = QSettings("ProtonDriveCLI", "ProtonDriveGUI")
+        self._apply_window_prefs()
         self._notify_cool = {}
         self._last_seen_ts = datetime.datetime.now().astimezone()
         self._prev_health_status = None
@@ -1246,6 +1247,8 @@ class MainWindow(QWidget):
         # --- running in the background
         box, form = card("Running in the background")
         form.setSpacing(6)
+        row_o, self.chk_top = toggle_row("Keep this window above other windows")
+        form.addWidget(row_o)
         row_b, self.chk_close_tray = toggle_row(
             "Keep running when I close the window")
         form.addWidget(row_b)
@@ -1427,6 +1430,7 @@ class MainWindow(QWidget):
         t.setObjectName("heroTitle")
         self.about_version = QLabel("Version " + GUI_VERSION)
         self.about_version.setObjectName("muted")
+        self.about_version.setWordWrap(True)
         texts.addWidget(t)
         texts.addWidget(self.about_version)
         hero.addLayout(texts, 1)
@@ -1834,6 +1838,10 @@ class MainWindow(QWidget):
 
         self.chk_close_tray.setChecked(
             self._prefs.value("close_to_tray", True, type=bool))
+        self.chk_top.blockSignals(True)
+        self.chk_top.setChecked(
+            self._prefs.value("always_on_top", True, type=bool))
+        self.chk_top.blockSignals(False)
         self.chk_updates.setChecked(
             self._prefs.value("updates_auto", True, type=bool))
         self.chk_appstart.blockSignals(True)
@@ -2010,6 +2018,33 @@ class MainWindow(QWidget):
         self.save_hint.setText("Will start when you log in." if ok
                                else "Could not change start-up.")
 
+    def _apply_window_prefs(self):
+        """Compact floating window: remembered size + stay-on-top flag."""
+        if self._prefs.value("always_on_top", True, type=bool):
+            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        try:
+            w, h = (int(v)
+                    for v in str(self._prefs.value("window_size", "")).split("x"))
+            geo = self.screen().availableGeometry() if self.screen() else None
+            if w >= 700 and h >= 480 and geo:
+                self.resize(min(w, geo.width()), min(h, geo.height()))
+        except (ValueError, TypeError):
+            pass
+
+    def _remember_window_size(self):
+        self._prefs.setValue("window_size", f"{self.width()}x{self.height()}")
+
+    def _always_on_top_toggled(self, checked: bool):
+        self._prefs.setValue("always_on_top", checked)
+        flags = self.windowFlags()
+        if checked:
+            flags |= Qt.WindowType.WindowStaysOnTopHint
+        else:
+            flags &= ~Qt.WindowType.WindowStaysOnTopHint
+        self.setWindowFlags(flags)   # Qt re-creates the window (it hides)
+        if not self._quitting:
+            self.show()
+
     def _app_autostart_toggled(self, checked: bool):
         set_autostart(checked)
 
@@ -2089,8 +2124,9 @@ class MainWindow(QWidget):
         self.badge_login.setText("Signed in" if logged_in else "Not signed in")
         self.btn_login.setVisible(not logged_in)
         self.btn_logout.setVisible(logged_in)
-        ver = result.get("version", "?")
+        ver = re.sub(r"\+\w+$", "", str(result.get("version", "?")))
         self.about_version.setText(f"Version {GUI_VERSION}  ·  Engine {ver}")
+        self.about_version.setToolTip(str(result.get("version", "")))
         self.refresh_status()
 
     def login_terminal(self):
@@ -2170,11 +2206,13 @@ class MainWindow(QWidget):
 
     def quit_app(self):
         self._quitting = True
+        self._remember_window_size()
         if self.tray:
             self.tray.hide()
         QApplication.quit()
 
     def closeEvent(self, event: QCloseEvent):  # noqa: N802 - Qt naming
+        self._remember_window_size()
         close_to_tray = self._prefs.value("close_to_tray", True, type=bool)
         if (not self._quitting and close_to_tray and self.tray
                 and QSystemTrayIcon.isSystemTrayAvailable()):
@@ -2207,6 +2245,15 @@ def main() -> int:
     if smoke:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+    # Wayland compositors ignore always-on-top requests (no protocol for
+    # it), so when the floating-on-top preference is on, run the window on
+    # X11/XWayland where the flag works. No-op on plain X11 sessions.
+    prefs = QSettings("ProtonDriveCLI", "ProtonDriveGUI")
+    if (prefs.value("always_on_top", True, type=bool)
+            and os.environ.get("XDG_SESSION_TYPE") == "wayland"
+            and not smoke):
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
+
     app = QApplication(sys.argv)
     app.setApplicationName("Proton Drive")
     app.setOrganizationName("ProtonDriveCLI")
@@ -2215,7 +2262,6 @@ def main() -> int:
     font.setPointSize(10)
     app.setFont(font)
 
-    prefs = QSettings("ProtonDriveCLI", "ProtonDriveGUI")
     theme = prefs.value("theme", "system")
     apply_theme(theme if theme in ("system", "light", "dark") else "system")
 
@@ -2232,6 +2278,7 @@ def main() -> int:
         lambda v: win._prefs.setValue("start_in_tray", v))
     win.chk_close_tray.toggled.connect(
         lambda v: win._prefs.setValue("close_to_tray", v))
+    win.chk_top.toggled.connect(win._always_on_top_toggled)
     win.chk_updates.toggled.connect(
         lambda v: win._prefs.setValue("updates_auto", v))
     win.chk_appstart.toggled.connect(win._app_autostart_toggled)
@@ -2242,6 +2289,9 @@ def main() -> int:
 
     if smoke or not prefs.value("start_in_tray", False, type=bool):
         win.show()
+        if app.platformName() == "xcb":
+            geo = app.primaryScreen().availableGeometry()
+            win.move(geo.center() - win.rect().center())
     else:
         if win.tray:
             win.tray.showMessage("Proton Drive",

@@ -93,8 +93,9 @@ repos** - no AUR, no bundled toolkits), designed for everyday users:
   sync (browse the cloud and pick folders), never-sync patterns
   (`*.tmp`-style), instant upload, sync frequency, notifications with a
   test button, plus these sections:
-  * *Running in the background* - keep-in-tray on close, start quietly in
-    tray, start syncing at login, and open the app itself at login
+  * *Running in the background* - keep this window floating above other
+    windows, keep-in-tray on close, start quietly in tray, start syncing
+    at login, and open the app itself at login
   * *Appearance* - light/dark/system theme
   * *Updates* - automatic GitHub release checks with a tray notice, and a
     one-click *Download and restart* when running as an AppImage (the
@@ -110,6 +111,10 @@ repos** - no AUR, no bundled toolkits), designed for everyday users:
 
 What the settings mean (the app keeps this short - the details live here):
 
+* **Keep this window above other windows** - the app opens as a compact
+  centered window floating over your other apps; its size is remembered.
+  On Wayland sessions the app automatically runs its window through
+  X11/XWayland, because the Wayland protocol has no keep-above request.
 * **Keep running when I close the window** - the app hides to the tray
   and syncing never stops. Turn off to fully quit on close.
 * **Start quietly in the tray** - launch as a small tray icon instead of
