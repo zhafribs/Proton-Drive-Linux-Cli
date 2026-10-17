@@ -74,6 +74,13 @@ Settings live in `~/.config/proton-sync.conf` - edit by hand or with the app.
 
 ## Desktop app (GUI)
 
+| Home | Settings | Activity |
+|:---:|:---:|:---:|
+| ![Home](docs/screenshots/home.png) | ![Settings](docs/screenshots/settings.png) | ![Activity](docs/screenshots/activity.png) |
+
+*The compact floating window (980x660 default, stays on top, size remembered) -
+light theme shown; dark and system themes included.*
+
 ```bash
 ./scripts/install-sync.sh    # the sync service first (see above)
 ./scripts/install-gui.sh     # then the app: menu entry + icon + launcher

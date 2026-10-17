@@ -803,7 +803,7 @@ class MainWindow(QWidget):
         super().__init__()
         self.setWindowTitle("Proton Drive")
         self.setMinimumSize(760, 540)
-        self.resize(900, 640)
+        self.resize(980, 660)
         self._quitting = False
         self._tray_warned = False
         self._identity = {"version": "?", "email": None, "logged_in": False}
@@ -1428,6 +1428,7 @@ class MainWindow(QWidget):
         texts.setSpacing(3)
         t = QLabel("Proton Drive for Linux")
         t.setObjectName("heroTitle")
+        t.setWordWrap(True)
         self.about_version = QLabel("Version " + GUI_VERSION)
         self.about_version.setObjectName("muted")
         self.about_version.setWordWrap(True)
