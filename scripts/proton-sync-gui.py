@@ -273,6 +273,31 @@ def tray_icon(base: QPixmap, status: str) -> QIcon:
     return QIcon(pm)
 
 
+def desktop_notification(title: str, body: str = "") -> bool:
+    """Show a desktop notification that carries our own icon.
+
+    QSystemTrayIcon.showMessage(Information) maps to the freedesktop
+    'idea' icon on Linux - a lightbulb in Breeze - which reads as 'tips'
+    instead of our app, so talk to org.freedesktop.Notifications directly
+    and hand it the cloud icon path.
+    """
+    exe = shutil.which("dbus-send")
+    if not exe:
+        return False
+    try:
+        r = subprocess.run(
+            [exe, "--session", "--dest=org.freedesktop.Notifications",
+             "--type=method_call", "/org/freedesktop/Notifications",
+             "org.freedesktop.Notifications.Notify",
+             "string:Proton Drive", "uint32:0", f"string:{find_icon()}",
+             "string:Proton Drive", f"string:{body}",
+             "array:string:", "dict:string:string:", "int32:15000"],
+            capture_output=True, timeout=10)
+        return r.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 # --------------------------------------------------------------------------- workers
 
 
@@ -1235,10 +1260,8 @@ class MainWindow(QWidget):
         row = QHBoxLayout()
         btn_test = QPushButton("Send a test notification")
         btn_test.clicked.connect(
-            lambda: self.tray and self.tray.showMessage(
-                "Proton Drive",
-                "This is what notifications look like.",
-                QSystemTrayIcon.MessageIcon.Information, 4000))
+            lambda: self._notify("Proton Drive",
+                                 "This is what notifications look like."))
         row.addWidget(btn_test)
         row.addStretch(1)
         form.addLayout(row)
@@ -2175,7 +2198,7 @@ class MainWindow(QWidget):
         return True
 
     def _notify(self, title: str, msg: str):
-        if self.tray:
+        if not desktop_notification(title, msg) and self.tray:
             self.tray.showMessage(title, msg, QSystemTrayIcon.MessageIcon.Information, 4500)
 
     def _poll_notifications(self, health: dict):
@@ -2221,10 +2244,15 @@ class MainWindow(QWidget):
             self.hide()
             if not self._tray_warned:
                 self._tray_warned = True
-                self.tray.showMessage("Proton Drive",
-                                      "Still running - syncing continues in the "
-                                      "background. Right-click the tray icon to quit.",
-                                      QSystemTrayIcon.MessageIcon.Information, 4000)
+                if not desktop_notification(
+                        "Proton Drive",
+                        "Still running - syncing continues in the background. "
+                        "Right-click the tray icon to quit."):
+                    self.tray.showMessage(
+                        "Proton Drive",
+                        "Still running - syncing continues in the "
+                        "background. Right-click the tray icon to quit.",
+                        QSystemTrayIcon.MessageIcon.Information, 4000)
             return
         event.accept()
 
@@ -2295,9 +2323,9 @@ def main() -> int:
             win.move(geo.center() - win.rect().center())
     else:
         if win.tray:
-            win.tray.showMessage("Proton Drive",
-                                 "Running quietly in the tray. Click the icon to open.",
-                                 QSystemTrayIcon.MessageIcon.Information, 4000)
+            desktop_notification(
+                "Proton Drive",
+                "Running quietly in the tray. Click the icon to open.")
 
     if prefs.value("updates_auto", True, type=bool):
         QTimer.singleShot(5000, win._check_updates_clicked)
