@@ -52,7 +52,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox,
                              QWidget)
 from PyQt6.QtGui import QFontMetrics
 
-GUI_VERSION = "3.10.1"
+GUI_VERSION = "3.11.0"
 
 REPO_URL = "https://github.com/zhafribs/Proton-Drive-Linux-Cli"
 CONF_FILE = Path.home() / ".config" / "proton-sync.conf"
@@ -566,6 +566,58 @@ def launch_command() -> str:
 
 def _desktop_exec(cmd: str) -> str:
     return f'"{cmd}"' if " " in cmd else cmd
+
+
+def appimage_path() -> str:
+    """Absolute path of the AppImage this app is running from ('' if not)."""
+    p = os.environ.get("APPIMAGE", "")
+    if p and Path(p).is_file():
+        return str(Path(p).resolve())
+    return ""
+
+
+def _unit_quote(value: str) -> str:
+    # systemd wants values containing spaces wrapped in quotes
+    return f'"{value}"' if " " in value else value
+
+
+def ensure_service_unit() -> str:
+    """Keep the sync service pointing at THIS copy of the app.
+
+    Inside an AppImage the unit must run '<AppImage> __sync-engine': on a
+    fresh install the unit is created, and if the file was moved or upgraded
+    it is rewritten silently so syncing keeps working. Repo installs
+    (scripts/install-sync.sh) manage their own unit and are left alone.
+
+    Returns 'ok' | 'written' | 'failed' | '' (not running from an AppImage).
+    """
+    exe = appimage_path()
+    if not exe:
+        return ""
+    unit = (
+        "[Unit]\n"
+        "Description=Proton Drive folder sync (official CLI, two-way)\n"
+        "\n"
+        "[Service]\n"
+        "Type=simple\n"
+        f"Environment={_unit_quote('PROTON_DRIVE_BIN=' + exe)}\n"
+        f"EnvironmentFile={_unit_quote('-' + str(CONF_FILE))}\n"
+        f"ExecStart={_unit_quote(exe)} __sync-engine\n"
+        "Restart=on-failure\n"
+        "RestartSec=15\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=default.target\n"
+    )
+    try:
+        if UNIT_FILE.is_file() and UNIT_FILE.read_text(encoding="utf-8") == unit:
+            return "ok"
+        UNIT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        UNIT_FILE.write_text(unit, encoding="utf-8")
+        systemctl("daemon-reload")
+        return "written"
+    except OSError:
+        return "failed"
 
 
 def autostart_enabled() -> bool:
@@ -2903,10 +2955,12 @@ class MainWindow(QWidget):
 
     def resume_now(self):
         systemctl("stop", "proton-sync-autoresume.timer", "proton-sync-autoresume.service")
+        ensure_service_unit()
         systemctl("start", JOURNAL_UNIT)
         QTimer.singleShot(700, self.refresh_status)
 
     def restart_service(self):
+        ensure_service_unit()
         systemctl("restart", JOURNAL_UNIT)
         QTimer.singleShot(900, self.refresh_status)
 
@@ -2997,13 +3051,18 @@ class MainWindow(QWidget):
         if answer != QMessageBox.StandardButton.Yes:
             return
         write_conf(values, extras)
+        unit_state = ensure_service_unit()
         outdated = True
         try:
             outdated = "EnvironmentFile" not in UNIT_FILE.read_text(encoding="utf-8")
         except OSError:
             pass
         restarted = systemctl("restart", JOURNAL_UNIT)
-        if outdated:
+        if unit_state == "written":
+            self.save_hint.setText("Saved. Sync service now points at this app copy.")
+        elif unit_state == "failed":
+            self.save_hint.setText("Saved, but the sync service could not be updated.")
+        elif outdated:
             self.save_hint.setText("Saved. Your install is from an older version - "
                                    "run scripts/install-sync.sh once to update it.")
         elif restarted:
@@ -3133,6 +3192,8 @@ class MainWindow(QWidget):
         exe = shutil.which("systemctl")
         if not exe:
             return
+        if checked:
+            ensure_service_unit()   # fresh install: create the unit before enabling
         ok = subprocess.run([exe, "--user", "enable" if checked else "disable",
                              JOURNAL_UNIT],
                             capture_output=True, timeout=15).returncode == 0
@@ -3435,6 +3496,11 @@ def main() -> int:
         QMessageBox.information(None, "Already running",
                                 "Proton Drive is already open.")
         return 0
+
+    # AppImage: re-point the sync service if this copy moved or the unit is
+    # missing (fresh install); a running engine is restarted onto the new path.
+    if ensure_service_unit() == "written" and service_active():
+        systemctl("restart", JOURNAL_UNIT)
 
     win = MainWindow()
     win.chk_autostart.toggled.connect(win._autostart_toggled)

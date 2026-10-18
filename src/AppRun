@@ -1,12 +1,45 @@
 #!/bin/sh
-# Proton Drive CLI AppImage entry point.
-# Keeps argv untouched so the AppImage behaves exactly like the upstream binary.
+# Proton Drive AppImage entry point.
+#   (no args)       -> the desktop app - what double-clicking runs
+#   __sync-engine   -> the background folder-sync engine (used by the systemd
+#                      user service the app installs on first run)
+#   anything else   -> the upstream CLI, argv untouched (auth login, --help...)
+#
+# The app and engine in usr/lib/proton-sync are this project's own MIT scripts;
+# they drive the unmodified upstream CLI payload in usr/bin/proton-drive and
+# use the host's python3 + PyQt6 (official distribution repositories).
 
 HERE="$(CDPATH='' cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)"
+CLI="$HERE/usr/bin/proton-drive"
+LIB="$HERE/usr/lib/proton-sync"
 
-if [ ! -x "$HERE/usr/bin/proton-drive" ]; then
-    echo "proton-drive: payload missing from AppImage ($HERE/usr/bin/proton-drive)" >&2
+if [ ! -x "$CLI" ]; then
+    echo "proton-drive: payload missing from AppImage ($CLI)" >&2
     exit 127
 fi
 
-exec "$HERE/usr/bin/proton-drive" "$@"
+case "${1:-}" in
+    __sync-engine)
+        shift
+        PROTON_DRIVE_BIN="$CLI" exec python3 "$LIB/proton-sync.py" --loop "$@"
+        ;;
+    __gui|"")
+        if ! command -v python3 >/dev/null 2>&1; then
+            echo "Proton Drive needs Python 3 to show its app window." >&2
+            echo "Install python3 from your distribution's official repositories." >&2
+            exit 1
+        fi
+        if ! python3 -c 'import PyQt6.QtWidgets' >/dev/null 2>&1; then
+            echo "Proton Drive needs PyQt6 to show its app window." >&2
+            echo "Install it from your distribution's official repositories:" >&2
+            echo "  Debian / Ubuntu:   sudo apt install python3-pyqt6" >&2
+            echo "  Fedora:            sudo dnf install python3-qt6" >&2
+            echo "  Arch / CachyOS:    sudo pacman -S python-pyqt6" >&2
+            exit 1
+        fi
+        exec python3 "$LIB/proton-sync-gui.py" "$@"
+        ;;
+    *)
+        exec "$CLI" "$@"
+        ;;
+esac

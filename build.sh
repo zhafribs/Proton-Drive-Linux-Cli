@@ -130,6 +130,7 @@ make_appdir() {
 
     rm -rf "$appdir"
     mkdir -p "$appdir/usr/bin" \
+             "$appdir/usr/lib/proton-sync" \
              "$appdir/usr/share/applications" \
              "$appdir/usr/share/icons/hicolor/256x256/apps" \
              "$appdir/usr/share/icons/hicolor/512x512/apps" \
@@ -138,6 +139,12 @@ make_appdir() {
 
     install -m 0755 "$SRC/AppRun" "$appdir/AppRun"
     install -m 0755 "$payload"    "$appdir/usr/bin/proton-drive"
+    # GUI + sync engine: this project's own MIT scripts, run by AppRun with the
+    # host's python3/PyQt6. The CLI payload above stays unmodified.
+    install -m 0644 "$ROOT/scripts/proton-sync.py" \
+        "$appdir/usr/lib/proton-sync/proton-sync.py"
+    install -m 0644 "$ROOT/scripts/proton-sync-gui.py" \
+        "$appdir/usr/lib/proton-sync/proton-sync-gui.py"
 
     install -m 0644 "$SRC/$DESKTOP_ID" "$appdir/$DESKTOP_ID"
     install -m 0644 "$SRC/$DESKTOP_ID" "$appdir/usr/share/applications/$DESKTOP_ID"

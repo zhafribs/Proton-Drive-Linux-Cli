@@ -1,3 +1,23 @@
+## 3.11.0 — 2026-10-18
+
+- **The AppImage is now the whole app - double-click and it opens.**
+  Previously the released file carried only Proton's command-line tool; the
+  app window and the sync engine now live *inside* the AppImage, so a fresh
+  computer needs nothing but the download: double-click, sign in, pick a
+  folder. The upstream CLI is untouched - running the file with arguments
+  (`auth login`, `--help`, ...) still goes straight to Proton's binary.
+- **First run installs itself.** Saving your settings for the first time
+  creates the background sync service and points it at wherever this AppImage
+  file lives. Move or upgrade the file later and the app re-points the
+  service on its next launch - nothing to reinstall, no paths to fix by hand.
+- **One host requirement: Python 3 with PyQt6** from your distribution's
+  official repositories (`python3-pyqt6` on Debian/Ubuntu, `python3-qt6` on
+  Fedora, `python-pyqt6` on Arch/CachyOS). If either is missing, the app
+  says exactly what to install instead of failing silently.
+- The sign-in button still opens Proton's official terminal login once (their
+  CLI handles email, password and 2FA there); the app picks the session up
+  automatically a few seconds later.
+
 ## 3.10.1 — 2026-10-18
 
 - **The tray icon now behaves like every other app's.** Left-clicking it

@@ -1,20 +1,28 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<component type="console-application">
+<component type="desktop-application">
   <id>io.github.zhafrisbs.ProtonDriveCLI</id>
-  <name>Proton Drive CLI</name>
-  <summary>Proton Drive command-line client, packaged as an AppImage</summary>
+  <name>Proton Drive</name>
+  <summary>Sync and manage your Proton Drive - app and CLI, unofficial packaging of the official client</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <description>
     <p>
       Unofficial AppImage packaging of the official Proton Drive CLI published by
-      Proton AG. The binary inside is the unmodified upstream
-      linux build, verified against the SHA-512 checksum published on
-      proton.me before it is packaged.
+      Proton AG, plus an open-source desktop app built on top of it. The CLI
+      binary inside is the unmodified upstream linux build, verified against
+      the SHA-512 checksum published on proton.me before it is packaged.
     </p>
     <p>
-      Proton Drive CLI supports authentication, filesystem operations (upload,
-      download, sync-style moves), sharing and invitations, albums and photos,
-      and Google Takeout import. Run it with --help for the full command list.
+      Double-clicking the AppImage opens the app window: sign in once, pick a
+      folder, and it stays in sync both ways in the background - deletions,
+      renames and moves included, with a tray icon and optional start-at-login.
+      Running the AppImage with arguments uses the upstream command-line client
+      unchanged (auth, filesystem operations, sharing, albums and photos,
+      Google Takeout import); --help lists everything.
+    </p>
+    <p>
+      The app needs Python 3 with PyQt6 from your distribution's official
+      repositories (python3-pyqt6 on Debian/Ubuntu, python3-qt6 on Fedora,
+      python-pyqt6 on Arch).
     </p>
     <p>
       This package is not produced or endorsed by Proton AG: it is unofficial

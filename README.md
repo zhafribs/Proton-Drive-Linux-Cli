@@ -1,28 +1,56 @@
-# Proton Drive CLI — AppImage (x86_64 + aarch64)
+# Proton Drive — AppImage (x86_64 + aarch64)
 
 Unofficial AppImage packaging of the **official Proton Drive CLI** published by
-Proton AG at <https://proton.me/download/drive/cli/index.html>.
+Proton AG at <https://proton.me/download/drive/cli/index.html>, plus an
+open-source desktop app built on top of it.
 
-Proton ships **no native Linux GUI** for Drive, and no Linux desktop app — only
-this CLI. That is what this project packages: the unmodified upstream binary,
-verified against Proton's published SHA-512 checksum before it is wrapped.
+Proton ships **no native Linux GUI** for Drive — only this CLI. That is what
+this project packages: the unmodified upstream binary (verified against
+Proton's published SHA-512 checksum before it is wrapped), the two-way folder
+sync engine and the app window, in one double-clickable file.
 
 | Artifact | Arch | Size |
 | --- | --- | --- |
-| `dist/ProtonDrive-CLI-0.9.0-GUI-3.10.1-x86_64.AppImage` | x86_64 (Intel/AMD) | 40 MB |
-| `dist/ProtonDrive-CLI-0.9.0-GUI-3.10.1-aarch64.AppImage` | aarch64 (ARM64) | 39 MB |
+| `dist/ProtonDrive-CLI-0.9.0-GUI-3.11.0-x86_64.AppImage` | x86_64 (Intel/AMD) | 40 MB |
+| `dist/ProtonDrive-CLI-0.9.0-GUI-3.11.0-aarch64.AppImage` | aarch64 (ARM64) | 39 MB |
 | `dist/SHA256SUMS` | checksums of the outputs | |
 
 Upstream version: **0.9.0** (released 2026-10-05), `cli-drive@0.9.0+75612299`.
-Desktop app version: **3.10.1** — every release note ships the app's [development log](CHANGELOG.md).
+Desktop app version: **3.11.0** — every release note ships the app's [development log](CHANGELOG.md).
 
 ## Quick start
 
+The app needs Python 3 with PyQt6 from your distribution's official
+repositories (not bundled — the same Qt bindings every other Qt app on your
+system uses):
+
+| Distro | Package |
+| --- | --- |
+| Debian / Ubuntu | `sudo apt install python3-pyqt6` |
+| Fedora | `sudo dnf install python3-qt6` |
+| Arch / CachyOS | `sudo pacman -S python-pyqt6` |
+
+Then download the AppImage and double-click it (or run it once from a shell):
+
 ```bash
-chmod +x dist/ProtonDrive-CLI-0.9.0-GUI-3.10.1-x86_64.AppImage
-./dist/ProtonDrive-CLI-0.9.0-GUI-3.10.1-x86_64.AppImage --version
-./dist/ProtonDrive-CLI-0.9.0-GUI-3.10.1-x86_64.AppImage --help
-./dist/ProtonDrive-CLI-0.9.0-GUI-3.10.1-x86_64.AppImage auth login   # first run
+chmod +x ProtonDrive-CLI-0.9.0-GUI-3.11.0-x86_64.AppImage
+./ProtonDrive-CLI-0.9.0-GUI-3.11.0-x86_64.AppImage
+```
+
+The app opens. Click **Sign in** — Proton's official login runs once in a
+terminal window (that is how their CLI does 2FA), and the app picks the
+session up automatically. Choose your sync folder in Settings and save; the
+first save installs the background sync service and points it at wherever
+this AppImage file lives — move or upgrade the file later and the app
+re-points the service by itself. From then on it lives in the tray;
+*Start syncing when I log in* makes it automatic across reboots.
+
+The upstream CLI is untouched — any argument goes straight to it:
+
+```bash
+./ProtonDrive-CLI-0.9.0-GUI-3.11.0-x86_64.AppImage --version
+./ProtonDrive-CLI-0.9.0-GUI-3.11.0-x86_64.AppImage --help
+./ProtonDrive-CLI-0.9.0-GUI-3.11.0-x86_64.AppImage auth login   # same login the app uses
 ```
 
 Put it on your `PATH` as `proton-drive` (creates `~/.local/bin/proton-drive` → symlink):
@@ -183,9 +211,9 @@ on Debian/Ubuntu, Fedora, Arch/CachyOS and derivatives without bundling libs:
 No FUSE at all (containers, restricted systems, any distro):
 
 ```bash
-APPIMAGE_EXTRACT_AND_RUN=1 ./dist/ProtonDrive-CLI-0.9.0-GUI-3.10.1-x86_64.AppImage --help
+APPIMAGE_EXTRACT_AND_RUN=1 ./dist/ProtonDrive-CLI-0.9.0-GUI-3.11.0-x86_64.AppImage --help
 # or permanently:
-./dist/ProtonDrive-CLI-0.9.0-GUI-3.10.1-x86_64.AppImage --appimage-extract
+./dist/ProtonDrive-CLI-0.9.0-GUI-3.11.0-x86_64.AppImage --appimage-extract
 ```
 
 Desktop menu entry: install [AppImageLauncher](https://github.com/AppImageCommunity/AppImageLauncher)
