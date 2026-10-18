@@ -52,7 +52,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox,
                              QWidget)
 from PyQt6.QtGui import QFontMetrics
 
-GUI_VERSION = "3.10.0"
+GUI_VERSION = "3.10.1"
 
 REPO_URL = "https://github.com/zhafribs/Proton-Drive-Linux-Cli"
 CONF_FILE = Path.home() / ".config" / "proton-sync.conf"
@@ -1756,7 +1756,7 @@ class MainWindow(QWidget):
             menu.addSeparator()
             menu.addAction("Move to...", self._cloud_move)
             menu.addAction("Move to trash", self._cloud_trash_items)
-        menu.popup(self.cloud_list.viewport().mapToGlobal(pos))
+        self._popup_at(menu, self.cloud_list.viewport().mapToGlobal(pos))
 
     def eventFilter(self, obj, ev):
         if (obj is self.cloud_list
@@ -1855,8 +1855,8 @@ class MainWindow(QWidget):
         menu = QMenu(self)
         menu.addAction("Upload files...", self._cloud_upload_files)
         menu.addAction("Upload folder...", self._cloud_upload_folder)
-        menu.exec(self.cloud_upload.mapToGlobal(
-            self.cloud_upload.rect().bottomLeft()))
+        self._popup_at(menu, self.cloud_upload.mapToGlobal(
+            self.cloud_upload.rect().bottomLeft()), wait=True)
 
     @guard_slot
     def _cloud_upload_files(self):
@@ -2567,11 +2567,16 @@ class MainWindow(QWidget):
 
     def _tray_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
-            self.show_normal()
+            # Left-click toggles: click brings the window up, click again
+            # tucks it back into the tray - the same as the close button.
+            if self.isVisible() and not self.isMinimized():
+                self.hide()
+            else:
+                self.show_normal()
         elif reason == QSystemTrayIcon.ActivationReason.Context:
             menu = getattr(self, "_tray_menu", None)
             if menu is not None:
-                menu.popup(self._global_cursor_pos())
+                self._popup_at(menu, self._global_cursor_pos())
 
     @staticmethod
     def _global_cursor_pos() -> QPoint:
@@ -2585,6 +2590,31 @@ class MainWindow(QWidget):
             return QPoint(x, y)
         except Exception:  # noqa: BLE001 - any failure means "just use Qt"
             return QCursor.pos()
+
+    def _popup_at(self, menu, pos, wait=False):
+        """Show menu at pos (wait=True blocks via exec), pinned there.
+
+        A "centre every floating window" rule (this machine's Hyprland
+        windowrules.lua has one) also grabs popup menus: popup(pos) alone
+        lands the menu mid-screen. Re-moving right after the map wins -
+        the same trick the dialog event filter uses; a generation token
+        stops a stale timer from dragging a reopened menu back to an old
+        spot. Wayland ignores client moves on popups, but there Qt's
+        positioner already gets pos from popup()/exec() itself.
+        """
+        gen = getattr(menu, "_popup_gen", 0) + 1
+        menu._popup_gen = gen
+
+        def reassert():
+            if getattr(menu, "_popup_gen", 0) == gen and menu.isVisible():
+                menu.move(pos)
+
+        for delay in (0, 40, 120, 250):
+            QTimer.singleShot(delay, reassert)
+        if wait:
+            menu.exec(pos)
+        else:
+            menu.popup(pos)
 
     def show_normal(self):
         self.showNormal()
@@ -2859,7 +2889,8 @@ class MainWindow(QWidget):
         menu.addAction("Pause for 15 minutes", lambda: self.pause_for(15))
         menu.addAction("Pause for 1 hour", lambda: self.pause_for(60))
         menu.addAction("Pause until I resume", lambda: self.pause_for(None))
-        menu.exec(self.btn_pause.mapToGlobal(QPoint(0, self.btn_pause.height())))
+        self._popup_at(menu, self.btn_pause.mapToGlobal(
+            QPoint(0, self.btn_pause.height())), wait=True)
 
     def pause_for(self, minutes):
         systemctl("stop", JOURNAL_UNIT)

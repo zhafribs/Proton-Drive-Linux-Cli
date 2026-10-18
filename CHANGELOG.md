@@ -1,3 +1,14 @@
+## 3.10.1 — 2026-10-18
+
+- **The tray icon now behaves like every other app's.** Left-clicking it
+  opens the window; clicking it again tucks it back into the tray. (Before,
+  a click could only ever open - never close.)
+- **Right-click menus open where you right-clicked.** The file/folder menu
+  in the cloud browser - and every other menu (upload, pause, the tray's
+  own) - used to pop up in the middle of the screen on compositors that
+  centre floating windows; they now open at the cursor, next to the item
+  you clicked.
+
 ## 3.10.0 — 2026-10-18
 
 - **Deletions now follow you both ways.** Deleting a file locally removes it
