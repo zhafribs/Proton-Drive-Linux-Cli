@@ -19,6 +19,7 @@ Run:  python3 scripts/proton-sync-gui.py      (or the proton-drive-gui shim)
 import datetime
 import functools
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -32,9 +33,10 @@ import traceback
 import urllib.request
 from pathlib import Path
 
-from PyQt6.QtCore import (QEvent, QLockFile, QPoint, QSettings, QRectF, QUrl, Qt,
-                          QThread, QTimer, pyqtSignal as Signal)
-from PyQt6.QtGui import (QBrush, QCloseEvent, QColor, QDesktopServices,
+from PyQt6.QtCore import (QEvent, QLockFile, QObject, QPoint, QSettings, QRectF,
+                          QUrl, Qt, QThread, QTimer, pyqtSignal as Signal)
+from PyQt6.QtGui import (QBrush, QCloseEvent, QColor, QCursor,
+                         QDesktopServices,
                          QFont, QIcon, QLinearGradient, QPainter, QPalette,
                          QPen, QPixmap, QRadialGradient)
 from PyQt6.QtSvg import QSvgRenderer
@@ -50,7 +52,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox,
                              QWidget)
 from PyQt6.QtGui import QFontMetrics
 
-GUI_VERSION = "3.8.0"
+GUI_VERSION = "3.9.0"
 
 REPO_URL = "https://github.com/zhafribs/Proton-Drive-Linux-Cli"
 CONF_FILE = Path.home() / ".config" / "proton-sync.conf"
@@ -727,6 +729,9 @@ QPushButton#secondary:hover {{ background: {HOVER}; }}
 QPushButton#ghostDanger {{ color: {ERROR}; }}
 QPushButton#seg {{ border-radius: 10px; padding: 7px 16px; color: {MUTED}; }}
 QPushButton#seg:checked {{ background: {CARD}; color: {TEXT}; }}
+QPushButton#trashToggle {{ border: 1px solid transparent; }}
+QPushButton#trashToggle:checked {{ background: {SELECT}; color: {TEXT};
+                                   border: 1px solid {ACCENT}; }}
 QPushButton#crumb {{ padding: 5px 9px; border-radius: 8px; color: {MUTED};
                      font-weight: 600; font-size: 12.5px; }}
 QPushButton#crumb:checked {{ color: {TEXT}; background: {HOVER}; }}
@@ -767,12 +772,63 @@ QMenu::item {{ padding: 9px 22px; border-radius: 8px; }}
 QMenu::item:selected {{ background: {SELECT}; }}
 QToolTip {{ background: {CARD}; color: {TEXT}; border: 1px solid {BORDER};
             padding: 6px; border-radius: 8px; }}
+
+QMessageBox, QDialog, QInputDialog, QFileDialog {{ background: {WINDOW}; }}
+QMessageBox QLabel, QDialog QLabel, QInputDialog QLabel {{ background: transparent;
+                                                          color: {TEXT}; }}
+QDialogButtonBox {{ background: transparent; }}
+QDialogButtonBox QPushButton {{ background: {CARD}; border: 1px solid {BORDER};
+    border-radius: 10px; padding: 8px 20px; color: {TEXT}; font-weight: 600; }}
+QDialogButtonBox QPushButton:hover {{ background: {HOVER}; }}
+QDialogButtonBox QPushButton:default {{ background: qlineargradient(x1:0,y1:0,
+    x2:1,y2:1, stop:0 {ACCENT_L}, stop:1 {ACCENT}); color: #ffffff; border: none; }}
 """
 
 
+_OS_PALETTE = None   # the real system palette, captured before we override it
+
+
 def is_system_dark(app: QApplication) -> bool:
-    c = app.palette().color(QPalette.ColorRole.Window)
+    # Captured once: apply_theme() replaces the app palette, and "system"
+    # must keep meaning the OS choice, not our last applied theme.
+    global _OS_PALETTE
+    if _OS_PALETTE is None:
+        _OS_PALETTE = QPalette(app.palette())
+    c = _OS_PALETTE.color(QPalette.ColorRole.Window)
     return (0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()) < 128
+
+
+def theme_palette(dark: bool) -> QPalette:
+    """A full palette matching the theme.
+
+    The stylesheet only colours the widgets it names; every other widget
+    (message boxes, input dialogs, file dialogs, popups) used to fall back
+    to the OS palette - dark text on a dark desktop, invisible. One palette
+    keeps them all readable in both themes.
+    """
+    p = PALETTES["dark" if dark else "light"]
+    text, muted = QColor(p["TEXT"]), QColor(p["MUTED"])
+    pal = QPalette()
+    pal.setColor(QPalette.ColorRole.Window, QColor(p["WINDOW"]))
+    pal.setColor(QPalette.ColorRole.WindowText, text)
+    pal.setColor(QPalette.ColorRole.Base, QColor(p["INPUT"]))
+    pal.setColor(QPalette.ColorRole.AlternateBase, QColor(p["HOVER"]))
+    pal.setColor(QPalette.ColorRole.ToolTipBase, QColor(p["CARD"]))
+    pal.setColor(QPalette.ColorRole.ToolTipText, text)
+    pal.setColor(QPalette.ColorRole.Text, text)
+    pal.setColor(QPalette.ColorRole.Button, QColor(p["CARD"]))
+    pal.setColor(QPalette.ColorRole.ButtonText, text)
+    pal.setColor(QPalette.ColorRole.BrightText, QColor(ERROR))
+    pal.setColor(QPalette.ColorRole.Link, QColor(ACCENT))
+    pal.setColor(QPalette.ColorRole.Highlight, QColor(ACCENT))
+    pal.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+    pal.setColor(QPalette.ColorRole.PlaceholderText, muted)
+    for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text,
+                 QPalette.ColorRole.ButtonText):
+        pal.setColor(QPalette.ColorGroup.Disabled, role, muted)
+    pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Button,
+                 QColor(p["HOVER"]))
+    return pal
 
 
 def apply_theme(name: str):
@@ -780,6 +836,7 @@ def apply_theme(name: str):
     if not app:
         return
     dark = is_system_dark(app) if name == "system" else (name == "dark")
+    app.setPalette(theme_palette(dark))   # unstyled widgets follow the theme
     p = dict(PALETTES["dark" if dark else "light"])
     p["ACCENT"] = ACCENT
     p["ACCENT_L"] = ACCENT_LIGHT
@@ -791,10 +848,29 @@ def apply_theme(name: str):
 
 
 def guard_slot(fn):
-    """A crashing slot must never take the whole app down."""
+    """A crashing slot must never take the whole app down.
+
+    Also trims signal arguments to what the wrapped slot accepts: a plain
+    clicked() signal hands us (checked,) and passing that on to a slot that
+    takes only self would raise TypeError - swallowed here, so the button
+    would simply "do nothing" on a real mouse click while direct calls in
+    tests worked. Trimming makes decorated slots behave like the plain
+    connections Qt makes for undecorated ones.
+    """
+    try:
+        _params = inspect.signature(fn).parameters
+        _max_args = (sum(1 for p in _params.values()
+                         if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)) - 1
+                     if not any(p.kind is p.VAR_POSITIONAL for p in _params.values())
+                     else None)  # -1 drops self
+    except (TypeError, ValueError):
+        _max_args = None
+
     @functools.wraps(fn)
     def wrapper(self, *a, **k):
         try:
+            if _max_args is not None and len(a) > _max_args:
+                a = a[:_max_args]
             return fn(self, *a, **k)
         except RuntimeError as e:
             if "has been deleted" in str(e):
@@ -1011,6 +1087,49 @@ def make_move_row(direction: str, name: str, path: str, action: str,
 
 
 # --------------------------------------------------------------------------- window
+
+
+def _under_tiling_wm() -> bool:
+    """True on tiling compositors (Hyprland, Sway, i3) that need a float hint.
+
+    GNOME and KWin float ordinary windows natively, so there is nothing to
+    ask for there.
+    """
+    return bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
+                or os.environ.get("SWAYSOCK") or os.environ.get("I3SOCK"))
+
+
+class DialogCentreFilter(QObject):
+    """Keep our dialogs on the app window, not on the screen centre.
+
+    A compositor rule that centres floating windows (a very common Hyprland
+    setup, the one ArtCraft rides on) re-centres our transient dialogs on
+    the *screen* a frame after Qt placed them on the parent window. Nudge
+    them back right after they map; the second nudge catches compositors
+    that apply the rule one frame later. No-op when they already sit on the
+    parent, so this is invisible on desktops that behave.
+    """
+
+    def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.Type.Show and isinstance(obj, QDialog):
+            QTimer.singleShot(0, functools.partial(self._centre, obj))
+            QTimer.singleShot(90, functools.partial(self._centre, obj))
+        return False
+
+    @staticmethod
+    def _centre(dlg):
+        try:
+            parent = dlg.parent()
+            if not isinstance(parent, QWidget) or not parent.isVisible():
+                return
+            # geometry(), not frameGeometry(): move() addresses the client
+            # area, so mixing the two would drift by the decoration size.
+            pg, dg = parent.geometry(), dlg.geometry()
+            target = dg.topLeft() + (pg.center() - dg.center())
+            if abs(target.x() - dg.x()) > 2 or abs(target.y() - dg.y()) > 2:
+                dlg.move(target)
+        except RuntimeError:
+            pass  # dialog torn down before the timer fired
 
 
 class MainWindow(QWidget):
@@ -1294,6 +1413,7 @@ class MainWindow(QWidget):
                                             QSizePolicy.Policy.Fixed)
         top.addWidget(self.cloud_crumbs_box, 1)
         self.cloud_trash_btn = QPushButton("Trash")
+        self.cloud_trash_btn.setObjectName("trashToggle")
         self.cloud_trash_btn.setToolTip("Recently deleted items")
         self.cloud_trash_btn.setCheckable(True)
         self.cloud_trash_btn.toggled.connect(self._cloud_trash_toggle)
@@ -1549,6 +1669,13 @@ class MainWindow(QWidget):
         rows.sort(key=lambda e: 0 if e["dir"] else 1)
         folder_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
         file_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+        # A refresh used to wipe the user's selection (and with it, the
+        # Download button) the moment a background reload landed - the file
+        # was still there, just no longer selected. Keep it, like a browser
+        # keeps your place on reload; on navigation the old paths simply do
+        # not match the new folder, so selection still clears as before.
+        keep = {i.data(0, Qt.ItemDataRole.UserRole)
+                for i in self.cloud_list.selectedItems()}
         self.cloud_list.clear()
         for e in rows:
             item = QTreeWidgetItem([e["name"],
@@ -1560,6 +1687,8 @@ class MainWindow(QWidget):
             item.setData(0, Qt.ItemDataRole.UserRole + 2, e["doc"])
             item.setData(0, Qt.ItemDataRole.UserRole + 3, e["size"])
             self.cloud_list.addTopLevelItem(item)
+            if e["rel"] in keep:
+                item.setSelected(True)
         self.cloud_list.setEnabled(enabled)
 
     def _cloud_sort_clicked(self, col: int):
@@ -2429,13 +2558,33 @@ class MainWindow(QWidget):
         menu.addSeparator()
         act_quit = menu.addAction("Quit")
         act_quit.triggered.connect(self.quit_app)
-        self.tray.setContextMenu(menu)
+        self._tray_menu = menu
+        # Not setContextMenu(): the tray host would position the menu itself,
+        # and over a Wayland bar (SNI) that lands it mid-screen. We pop it at
+        # the real cursor position on right-click instead.
         self.tray.activated.connect(self._tray_activated)
         self.tray.show()
 
     def _tray_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             self.show_normal()
+        elif reason == QSystemTrayIcon.ActivationReason.Context:
+            menu = getattr(self, "_tray_menu", None)
+            if menu is not None:
+                menu.popup(self._global_cursor_pos())
+
+    @staticmethod
+    def _global_cursor_pos() -> QPoint:
+        # XWayland's pointer position goes stale whenever the cursor sits on
+        # a Wayland surface (like the bar), so ask the compositor for the
+        # real one when we can; anywhere else just read the cursor.
+        try:
+            r = subprocess.run(["hyprctl", "cursorpos"], capture_output=True,
+                               text=True, timeout=1)
+            x, y = (int(v) for v in r.stdout.split(",")[:2])
+            return QPoint(x, y)
+        except Exception:  # noqa: BLE001 - any failure means "just use Qt"
+            return QCursor.pos()
 
     def show_normal(self):
         self.showNormal()
@@ -2967,6 +3116,13 @@ class MainWindow(QWidget):
         """
         if self._prefs.value("always_on_top", True, type=bool):
             self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        if _under_tiling_wm():
+            # Tiling compositors (Hyprland, Sway, i3) tile plain windows and
+            # expose no "please float" protocol - but they float dialog-type
+            # windows natively, so ask for that instead of requiring every
+            # user to write a window rule. GNOME/KWin already float ordinary
+            # windows, so they are left untouched.
+            self.setWindowFlag(Qt.WindowType.Dialog, True)
         w, h = self.width(), self.height()
         try:
             sw, sh = (int(v)
@@ -3234,6 +3390,10 @@ def main() -> int:
     font = QFont("Inter")
     font.setPointSize(10)
     app.setFont(font)
+    # Compositors with a "centre every floating window" rule (a common
+    # Hyprland setup) drag our dialogs to the middle of the screen a frame
+    # after Qt placed them on the app window; this puts them back.
+    app.installEventFilter(DialogCentreFilter(app))
 
     theme = prefs.value("theme", "system")
     apply_theme(theme if theme in ("system", "light", "dark") else "system")

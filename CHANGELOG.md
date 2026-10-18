@@ -1,3 +1,44 @@
+## 3.9.0 — 2026-10-18
+
+- **Dialogs are readable again.** Confirmation boxes (*Move to trash?*,
+  *New folder*, *Rename…*, file pickers) could come out dark-on-dark on
+  desktops with a dark system palette - every button, label and input
+  inside them is now explicitly themed, in light and dark mode alike.
+  Verified on a real desktop, not just in tests.
+- **Dialogs stay on the app window.** On compositors that re-centre every
+  floating window (a common Hyprland setup), popups used to appear in the
+  middle of the *screen*, far from a window you had dragged aside. They are
+  now placed on the app window itself, wherever it is.
+- **Floats like a launcher, with zero setup.** On tiling compositors
+  (Hyprland, Sway, i3) the app now asks for the dialog window type, which
+  those compositors float natively - no window-rule files to edit, on any
+  machine. GNOME and KWin already float ordinary windows and are untouched.
+- **Tray right-click menu appears where you click.** Over a Wayland bar
+  (SNI host) the menu used to pop up mid-screen; it now opens at the real
+  cursor position, read from the compositor when needed.
+- **Your selection survives a refresh.** A background reload landing while
+  you had a file selected used to silently deselect it - the row was still
+  there, but the Download button went dead under your cursor. Reloads of
+  the same folder now keep the selection, exactly like a browser keeps
+  your place when a page reloads (navigating still clears it, as before).
+- **Buttons respond to real clicks again.** A subtle bug (present since
+  3.7.0) made *Download*, *New folder* and *Upload* silently do nothing
+  when clicked - Qt hands a click's on/off state to the clicked slot, and
+  the app's crash-guard wrapper passed it on to functions that take no
+  arguments, which failed invisibly. The guard now hands over only what
+  each function accepts. Everything worked when invoked from menus and
+  the keyboard, which is why this stayed hidden - it is now covered by
+  tests that press the buttons with real synthesized mouse clicks, so it
+  cannot regress.
+- **The Trash button shows its state.** The selected look was defined but
+  never applied because the button was missing its style object name; the
+  Trash view now visibly marks itself as active.
+- **Tested the way a user clicks.** The test suite now presses the
+  Download / New Folder / Upload buttons with real synthesized mouse
+  clicks (not direct function calls), so a button that stops responding
+  to actual clicks is caught immediately - plus new checks for dialog
+  theming, the tray menu and the trash state.
+
 ## 3.8.0 — 2026-10-17
 
 - **Cloud browsing no longer waits for the network.** Every folder now
