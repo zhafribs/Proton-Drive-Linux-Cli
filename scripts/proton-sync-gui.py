@@ -30,6 +30,7 @@ import sys
 import tempfile
 import time
 import traceback
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -52,7 +53,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox,
                              QWidget)
 from PyQt6.QtGui import QFontMetrics
 
-GUI_VERSION = "3.12.3"
+GUI_VERSION = "3.12.4"
 
 REPO_URL = "https://github.com/zhafribs/Proton-Drive-Linux-Cli"
 CONF_FILE = Path.home() / ".config" / "proton-sync.conf"
@@ -64,6 +65,8 @@ LOCK_FILE = STATE_DIR / "gui.lock"
 SNAPSHOT_FILE = STATE_DIR / "remote-snapshot.json"   # engine's last full walk
 CLOUD_CACHE_FILE = STATE_DIR / "cloud-cache.json"    # folders this app listed
 CLOUD_CACHE_MAX = 300                                # keep newest N folders
+RELEASE_CACHE_FILE = STATE_DIR / "release-cache.json"  # last release + its ETag
+UPDATE_MARK_FILE = STATE_DIR / "update-pending.json"   # swap awaiting health check
 AUTOSTART_FILE = Path.home() / ".config" / "autostart" / "proton-drive.desktop"
 JOURNAL_UNIT = "proton-sync"
 
@@ -303,20 +306,28 @@ def desktop_notification(title: str, body: str = "") -> bool:
     'idea' icon on Linux - a lightbulb in Breeze - which reads as 'tips'
     instead of our app, so talk to org.freedesktop.Notifications directly
     and hand it the cloud icon path.
+
+    The hints argument must be an a{sv} map, which dbus-send spells
+    'dict:string:variant:'; a string map (a{ss}) is rejected outright by
+    strict daemons (the one in noctalia refuses the whole call). And
+    --print-reply is what makes a rejection visible: without it dbus-send
+    exits 0 even when the daemon refused, the app believed the notification
+    was shown, and the tray-balloon fallback never fired.
     """
     exe = shutil.which("dbus-send")
     if not exe:
         return False
     try:
         r = subprocess.run(
-            [exe, "--session", "--dest=org.freedesktop.Notifications",
+            [exe, "--session", "--print-reply",
+             "--dest=org.freedesktop.Notifications",
              "--type=method_call", "/org/freedesktop/Notifications",
              "org.freedesktop.Notifications.Notify",
              "string:Proton Drive", "uint32:0", f"string:{find_icon()}",
              "string:Proton Drive", f"string:{body}",
-             "array:string:", "dict:string:string:", "int32:15000"],
+             "array:string:", "dict:string:variant:", "int32:15000"],
             capture_output=True, timeout=10)
-        return r.returncode == 0
+        return r.returncode == 0 and b"Error" not in r.stderr
     except (OSError, subprocess.TimeoutExpired):
         return False
 
@@ -337,6 +348,25 @@ class Worker(QThread):
             self.done.emit(self.fn())
         except Exception as e:  # noqa: BLE001
             self.done.emit(e)
+
+
+def current_cli_version() -> str:
+    """Installed CLI's version line, read directly via resolve_cli().
+
+    Deliberately independent of fetch_identity(), which also lists the
+    whole cloud and can take minutes - the update check must be able to
+    answer while that is still running.
+    """
+    cli = resolve_cli()
+    if not cli:
+        return ""
+    try:
+        r = subprocess.run([cli, "--version"], capture_output=True,
+                           text=True, timeout=60)
+        text = (r.stdout or r.stderr).strip()
+        return text.splitlines()[0] if text else ""
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
 
 
 def fetch_identity() -> dict:
@@ -593,6 +623,8 @@ def ensure_service_unit() -> str:
 
     Returns 'ok' | 'written' | 'failed' | '' (not running from an AppImage).
     """
+    if os.environ.get("PROTON_SYNC_SMOKE"):
+        return ""  # dry-run boot of a staged build: leave the live unit alone
     exe = appimage_path()
     if not exe:
         return ""
@@ -674,19 +706,50 @@ def check_for_release() -> dict:
 
     Tags are v<cli>-gui<gui> so every update gets its own release; the
     original single v<cli> tag is still understood as a GUI-less legacy.
+
+    The reply is cached with its ETag (the same trick ArtCraft's updater
+    uses): GitHub answers 304 to an unchanged release and does not count
+    conditional requests against the unauthenticated rate limit, so the
+    automatic check can run hourly without ever being throttled into
+    "could not check". A rate-limited (403/429) reply also falls back to
+    the last cached release instead of failing outright.
     """
-    req = urllib.request.Request(RELEASE_API,
-                                 headers={"User-Agent": "proton-drive-gui"})
-    with urllib.request.urlopen(req, timeout=20) as r:
-        data = json.loads(r.read().decode())
+    etag, cached = "", None
+    try:
+        cached = json.loads(RELEASE_CACHE_FILE.read_text())
+        etag = cached.get("etag") or ""
+    except (OSError, ValueError):
+        pass
+    headers = {"User-Agent": "proton-drive-gui"}
+    if etag:
+        headers["If-None-Match"] = etag
+    req = urllib.request.Request(RELEASE_API, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            data = json.loads(r.read().decode())
+            new_etag = r.headers.get("ETag") or ""
+    except urllib.error.HTTPError as e:
+        if e.code == 304 and cached and cached.get("release"):
+            return cached["release"]
+        if e.code in (403, 429) and cached and cached.get("release"):
+            return cached["release"]
+        raise
     tag = data.get("tag_name") or ""
     core = tag.lstrip("v")
     m = re.fullmatch(r"(\d+\.\d+\.\d+)-gui(\d+\.\d+\.\d+)", core)
     cli, gui = (m.group(1), m.group(2)) if m else (core, "")
-    return {"tag": tag, "version": core, "cli": cli, "gui": gui,
-            "published": (data.get("published_at") or "")[:10],
-            "assets": {a["name"]: a["browser_download_url"]
-                       for a in data.get("assets", [])}}
+    rel = {"tag": tag, "version": core, "cli": cli, "gui": gui,
+           "published": (data.get("published_at") or "")[:10],
+           "assets": {a["name"]: a["browser_download_url"]
+                      for a in data.get("assets", [])}}
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        RELEASE_CACHE_FILE.write_text(
+            json.dumps({"etag": new_etag, "release": rel,
+                        "checked": int(time.time())}))
+    except OSError:
+        pass  # no cache only costs one extra conditional request later
+    return rel
 
 
 def download_update(rel: dict, arch: str) -> Path:
@@ -699,7 +762,18 @@ def download_update(rel: dict, arch: str) -> Path:
     sums = rel["assets"].get("SHA256SUMS")
     if not url or not sums:
         raise RuntimeError(f"no build for {arch} in release {rel['tag']}")
-    dest = Path("/tmp") / f"proton-update-{name}"
+    # Download beside the running AppImage, not into /tmp: /tmp is usually a
+    # tmpfs and the final swap is an os.replace(), which cannot cross
+    # filesystems (that alone broke every in-app update before 3.12.4 with
+    # "Invalid cross-device link"). A read-only install dir falls back to
+    # /tmp, which install_update_and_restart() then copies across.
+    target = os.environ.get("APPIMAGE")
+    if (target and Path(target).is_file()
+            and os.access(Path(target).parent, os.W_OK)):
+        base = Path(target).parent
+    else:
+        base = Path("/tmp")
+    dest = base / f"proton-update-{name}"
     with urllib.request.urlopen(url, timeout=120) as r, open(dest, "wb") as f:
         shutil.copyfileobj(r, f)
     with urllib.request.urlopen(sums, timeout=30) as r:
@@ -720,16 +794,130 @@ def download_update(rel: dict, arch: str) -> Path:
     return dest
 
 
-def install_update_and_restart(dl: Path):
-    """Swap the running AppImage for the freshly downloaded one, then relaunch."""
+def verify_staged_build(img: Path) -> bool:
+    """Boot the freshly downloaded AppImage once, offscreen, before it is
+    allowed to replace the running version - the same "verified updates
+    activate" rule ArtCraft's updater follows. A build that cannot start
+    never takes your working copy's place.
+
+    PROTON_SYNC_SMOKE keeps this dry run from re-pointing the live sync
+    service at a file that is about to move, and offscreen keeps it off
+    your screen and out of the way of the real window.
+    """
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PROTON_SYNC_SMOKE="1")
+    try:
+        r = subprocess.run([str(img), "--smoke"], capture_output=True,
+                           timeout=120, env=env)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return r.returncode == 0
+
+
+def update_recovery_check() -> tuple:
+    """Recover from an update whose new version never came up.
+
+    The swap records a marker before it happens (see
+    install_update_and_restart). The first launch of the new version is
+    given one chance: it marks itself attempted and, once its window is
+    up, confirms health and drops the backup (update_confirm_health). If
+    the same marker is still unconfirmed on the next launch, the previous
+    version never started - it is restored from <app>.old and relaunched.
+
+    Returns (state, relaunch) where state is 'pending' (this run is the
+    freshly updated version), 'rolled-back' (old version restored; the
+    caller should unlock and start relaunch), or '' (nothing to do).
+    Also sweeps a staging file left behind by an interrupted download.
+    """
+    target = os.environ.get("APPIMAGE")
+    if target and not Path(target).is_file():
+        # the swap died between its two renames: the launcher's file is gone.
+        # The staged build already passed its start-up check, so prefer it;
+        # otherwise put the previous version back.
+        for alt in (target + ".new", target + ".old"):
+            if Path(alt).is_file():
+                try:
+                    os.replace(alt, target)
+                except OSError:
+                    pass
+                break
+    elif target:
+        Path(target + ".new").unlink(missing_ok=True)  # interrupted download
+    try:
+        mark = json.loads(UPDATE_MARK_FILE.read_text())
+    except (OSError, ValueError):
+        return "", ""
+    old, new = mark.get("old"), mark.get("new")
+    if mark.get("attempted"):  # second launch without a health ack:
+        UPDATE_MARK_FILE.unlink(missing_ok=True)  # the new version never ran
+        if old and new and Path(old).is_file() and Path(new).is_file():
+            try:
+                os.replace(old, new)  # previous version back in place
+            except OSError:
+                return "", ""
+            return "rolled-back", new
+        return "", ""
+    mark["attempted"] = True
+    try:
+        UPDATE_MARK_FILE.write_text(json.dumps(mark))
+    except OSError:
+        pass
+    return "pending", ""
+
+
+def update_confirm_health() -> None:
+    """The freshly updated version is up and its window was built: keep it.
+
+    Dropping the marker and the .old backup here is the health
+    acknowledgement - from now on the new version is the real one, and the
+    next start has nothing left to recover.
+    """
+    try:
+        mark = json.loads(UPDATE_MARK_FILE.read_text())
+    except (OSError, ValueError):
+        return
+    UPDATE_MARK_FILE.unlink(missing_ok=True)
+    old = mark.get("old")
+    if old:
+        Path(old).unlink(missing_ok=True)
+
+
+def install_update_and_restart(dl: Path, tag: str = ""):
+    """Swap the running AppImage for the freshly downloaded one, then relaunch.
+
+    The new build is staged next to the running copy and booted once
+    (verify_staged_build) before it may replace it; only then is the swap
+    recorded in UPDATE_MARK_FILE so a version that fails to start is
+    rolled back automatically on the next launch.
+    """
     target = os.environ.get("APPIMAGE")
     if not target or not Path(target).is_file():
         raise RuntimeError("not running as an AppImage")
-    os.replace(dl, target + ".new")
-    os.replace(target, target + ".old")
-    os.replace(target + ".new", target)
-    subprocess.Popen([target], start_new_session=True,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    stage = target + ".new"
+    try:
+        try:
+            os.replace(dl, stage)  # same directory: one atomic rename
+        except OSError:           # staged in /tmp after all: copy across
+            shutil.move(str(dl), stage)
+        os.chmod(stage, 0o755)
+        if not verify_staged_build(stage):
+            Path(stage).unlink(missing_ok=True)
+            raise RuntimeError(
+                "the new version failed its start-up check - "
+                "you keep the current one")
+        UPDATE_MARK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        UPDATE_MARK_FILE.write_text(json.dumps(
+            {"old": target + ".old", "new": target, "tag": tag,
+             "started": int(time.time())}))
+        os.replace(target, target + ".old")
+        os.replace(stage, target)
+    except OSError as e:
+        Path(stage).unlink(missing_ok=True)
+        raise RuntimeError(f"could not replace the AppImage ({e})") from e
+    # No Popen here on purpose: the old instance still holds the
+    # single-instance lock, and a new copy started now would just report
+    # "Already running" and quit. MainWindow._update_downloaded records the
+    # path and main() relaunches it once the lock is released.
+    return target
 
 
 # --------------------------------------------------------------------------- design
@@ -3315,7 +3503,11 @@ class MainWindow(QWidget):
 
     def _check_updates_clicked(self):
         self.lbl_update.setText("Checking for updates...")
-        w = Worker(lambda: (check_for_release(), self._identity.get("version", "")))
+        # The installed version is read here, in the worker, not from
+        # self._identity: the identity fetch waits for a full cloud listing
+        # (up to two minutes), so at the 5s startup check it was still
+        # empty and the app reported a bogus "you're up to date".
+        w = Worker(lambda: (check_for_release(), current_cli_version()))
         w.done.connect(self._update_checked)
         self._workers.append(w)
         w.start()
@@ -3362,7 +3554,8 @@ class MainWindow(QWidget):
         arch = os.uname().machine
         self.btn_dl_update.setEnabled(False)
         self.lbl_update.setText("Downloading and verifying the update...")
-        w = Worker(lambda: install_update_and_restart(download_update(rel, arch)))
+        w = Worker(lambda: install_update_and_restart(
+            download_update(rel, arch), rel.get("tag", "")))
         w.done.connect(self._update_downloaded)
         self._workers.append(w)
         w.start()
@@ -3374,11 +3567,18 @@ class MainWindow(QWidget):
             self.lbl_update.setText(f"Update failed: {result}")
             return
         self.lbl_update.setText("Updated - the new version is starting...")
+        self._relaunch = result  # main() starts it once the lock is free
         QTimer.singleShot(1500, self.quit_app)
 
     # ------------------------------------------------------------------ account
 
     def load_identity(self):
+        if os.environ.get("PROTON_SYNC_SMOKE"):
+            # A smoke run only needs to prove the GUI constructs. Spawning a
+            # Worker here would leave a QThread mid-`fs list` when the run
+            # quits, which crashes PyQt on teardown and orphans a subprocess
+            # (it then SIGBUSes when the FUSE mount goes away).
+            return
         w = Worker(fetch_identity)
         w.done.connect(self._identity_loaded)
         self._workers.append(w)
@@ -3522,6 +3722,10 @@ def main() -> int:
     smoke = "--smoke" in sys.argv
     if smoke:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        # A smoke run is a dry run, whether a human typed it or the updater
+        # is checking a freshly downloaded build: it must never re-point the
+        # live sync service at itself (ensure_service_unit honours this).
+        os.environ["PROTON_SYNC_SMOKE"] = "1"
 
     # Wayland compositors ignore always-on-top requests (no protocol for
     # it), so when the floating-on-top preference is on, run the window on
@@ -3554,6 +3758,19 @@ def main() -> int:
                                 "Proton Drive is already open.")
         return 0
 
+    # An update whose new version never came up is rolled back before
+    # anything else runs; a pending, healthy update is confirmed once the
+    # window below is up (see update_recovery_check / update_confirm_health).
+    upd_state = ""
+    if not smoke:
+        upd_state, relaunch = update_recovery_check()
+        if relaunch:
+            lock.unlock()
+            subprocess.Popen([relaunch], start_new_session=True,
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+            return 0
+
     # AppImage: re-point the sync service if this copy moved or the unit is
     # missing (fresh install); a running engine is restarted onto the new path.
     if ensure_service_unit() == "written" and service_active():
@@ -3585,14 +3802,48 @@ def main() -> int:
                 "Proton Drive",
                 "Running quietly in the tray. Click the icon to open.")
 
+    if upd_state == "pending":
+        # the window exists: the freshly installed version really starts,
+        # so drop the rollback marker and its .old backup
+        update_confirm_health()
+
     if prefs.value("updates_auto", True, type=bool):
         QTimer.singleShot(5000, win._check_updates_clicked)
+        # ArtCraft-style periodic check: startup alone misses releases that
+        # land while the app is open; the ETag cache keeps this free of
+        # GitHub rate limits.
+        updates_timer = QTimer()
+        updates_timer.setInterval(6 * 3600 * 1000)
+        updates_timer.timeout.connect(win._check_updates_clicked)
+        updates_timer.start()
 
     if smoke:
         QTimer.singleShot(2500, app.quit)
     rc = app.exec()
     lock.unlock()
-    return rc
+    relaunch = getattr(win, "_relaunch", None)
+    if relaunch:
+        # the freshly swapped-in version; the lock is free now, so it can
+        # take it instead of reporting "Already running"
+        subprocess.Popen([relaunch], start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # A Worker QThread may still be mid-`fs list` here. PyQt tears the
+    # QApplication down by walking every live QObject wrapper; a thread
+    # that is still running leaves a half-freed wrapper behind and that walk
+    # segfaults. Flush settings (QSettings would normally do this in its
+    # destructor, which we are about to skip) and exit without running the
+    # sip teardown at all.
+    try:
+        prefs.sync()
+        win._prefs.sync()
+    except Exception:  # noqa: BLE001 - exiting regardless
+        pass
+    for _s in (sys.stdout, sys.stderr):
+        try:
+            _s.flush()
+        except Exception:  # noqa: BLE001
+            pass
+    os._exit(rc)
 
 
 if __name__ == "__main__":

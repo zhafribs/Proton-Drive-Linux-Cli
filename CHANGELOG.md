@@ -1,3 +1,48 @@
+## 3.12.4 — 2026-10-19
+
+- **"Send a test notification" now actually sends one** (and so do every
+  other notification: sync finished, problems, update available). The app
+  built the message with the wrong argument type for the hints field, so
+  the notification daemon rejected it - and because it never asked for a
+  reply, it couldn't see the rejection and stayed silent instead of falling
+  back to the tray balloon. Notifications now use the correct type, notice a
+  refusal, and fall back to the tray so you always see something.
+- **Updating the app works - before, "Download and restart" could never
+  finish.** The update was downloaded to /tmp and then moved into place in
+  one step; those are two different filesystems on most computers, and
+  moving a file across them fails ("Invalid cross-device link") every time.
+  The download now lands next to the running app, so installing is one
+  simple rename.
+- **A new version now proves it starts before it replaces yours.** Following
+  the updater in ArtCraft (a launcher we studied for this), the freshly
+  downloaded AppImage is booted once, off screen, before it is allowed to
+  replace the copy you are using. A build that fails that start-up check is
+  thrown away and you keep your current version. If the new version still
+  fails to come up on its real first start, the app restores the previous
+  version automatically on the next launch and tells you.
+- **The relaunch after an update no longer races the old copy.** The new
+  version is started only after the old one has fully exited and released
+  the "already running" lock, so you no longer get an "Already running"
+  message right after updating.
+- **The update check no longer claims "you're up to date" by mistake.**
+  Right after startup it used to compare against a version number that was
+  still being fetched from the sync engine (which can take a minute), found
+  it empty, and reported up-to-date even when a new release existed. The
+  check now reads the installed version directly, immediately.
+- **The update check is now polite to GitHub and survives busy hours.**
+  Like ArtCraft's updater, replies are cached with their ETag and re-requests
+  are conditional; GitHub doesn't count those against its per-hour limit, so
+  checking every six hours while the app is open (new) can never be throttled
+  into "Could not check for updates". If GitHub does rate-limit anyway, the
+  app shows the last known release instead of failing.
+- The app no longer crashes for a moment when it quits. Closing the app while
+  it was still checking your account (which happens on every launch for a
+  second or two) crashed the program on its way out. The app now shuts down
+  cleanly instead.
+- The app now also re-checks for updates every six hours while it is open,
+  not just once at startup, and the downloaded update is verified against
+  the published SHA-256 checksum as before.
+
 ## 3.12.3 — 2026-10-18
 
 - **The tray menu works again and looks like your system's menus.**

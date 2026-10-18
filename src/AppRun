@@ -42,7 +42,10 @@ case "${1:-}" in
         shift
         PROTON_DRIVE_BIN="$CLI" run_python "$LIB/proton-sync.py" --loop "$@"
         ;;
-    __gui|"")
+    # __gui is explicit; "" is double-click; --smoke is the offscreen
+    # start-up self-test the updater runs on a freshly downloaded build
+    # (verify_staged_build) - it must reach the GUI, not the CLI.
+    __gui|--smoke|"")
         if [ ! -x "$PYBUNDLE/bin/python3" ]; then
             if ! command -v python3 >/dev/null 2>&1; then
                 echo "This build carries no bundled Python and the host has none." >&2
