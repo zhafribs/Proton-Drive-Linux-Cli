@@ -1,3 +1,13 @@
+## 3.12.1 — 2026-10-18
+
+- **Long file names no longer squeeze the window wider than its minimum.**
+  The recently-synced rows on Home and every entry in Activity showed file
+  names as plain labels, whose width follows the text - a 60-character name
+  (like a long photo title) dragged the page ~612 px wide and gave both
+  pages a horizontal scrollbar at the compact window size. Names and paths
+  now shorten in the middle with "…" and show the full text on hover,
+  whatever the file is called.
+
 ## 3.12.0 — 2026-10-18
 
 - **No other software needed - the AppImage is completely self-contained.**

@@ -52,7 +52,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox,
                              QWidget)
 from PyQt6.QtGui import QFontMetrics
 
-GUI_VERSION = "3.12.0"
+GUI_VERSION = "3.12.1"
 
 REPO_URL = "https://github.com/zhafribs/Proton-Drive-Linux-Cli"
 CONF_FILE = Path.home() / ".config" / "proton-sync.conf"
@@ -1095,6 +1095,41 @@ DIR_STYLE = {"up": (SUCCESS, "\u2191"), "down": (INFO, "\u2193"),
              "warn": (WARNING, "!"), "other": (MUTED_GRAY, "\u00d7")}
 
 
+class ElidedLabel(QLabel):
+    """QLabel that shortens long text with an ellipsis instead of widening.
+
+    File names are unbounded (60+ characters are ordinary), and a plain
+    QLabel pins its minimum width to the full text - which dragged whole
+    pages past the 920 px minimum window and gave Home/Activity a horizontal
+    scrollbar. This label shrinks to the space it gets; the full text stays
+    in the tooltip and remains selectable.
+    """
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(parent)
+        self._full = text
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
+    def setFullText(self, text: str) -> None:
+        self._full = text
+        self._apply()
+
+    def fullText(self) -> str:
+        return self._full
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._apply()
+
+    def _apply(self) -> None:
+        elided = QFontMetrics(self.font()).elidedText(
+            self._full, Qt.TextElideMode.ElideMiddle, max(0, self.width() - 2))
+        if self.text() != elided:   # guard: setText -> relayout -> resizeEvent loop
+            self.setText(elided)
+        self.setToolTip(self._full if elided != self._full else "")
+
+
 def make_move_row(direction: str, name: str, path: str, action: str,
                   when: str) -> QWidget:
     """One 'file moved' row: colored arrow pill, name, path, action, time."""
@@ -1114,11 +1149,11 @@ def make_move_row(direction: str, name: str, path: str, action: str,
 
     col = QVBoxLayout()
     col.setSpacing(0)
-    name_lab = QLabel(name)
+    name_lab = ElidedLabel(name)
     name_lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
     col.addWidget(name_lab)
     if path:
-        sub = QLabel(path)
+        sub = ElidedLabel(path)
         sub.setObjectName("small")
         col.addWidget(sub)
     lay.addLayout(col, 1)
