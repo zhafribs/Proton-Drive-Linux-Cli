@@ -52,7 +52,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox,
                              QWidget)
 from PyQt6.QtGui import QFontMetrics
 
-GUI_VERSION = "3.9.0"
+GUI_VERSION = "3.10.0"
 
 REPO_URL = "https://github.com/zhafribs/Proton-Drive-Linux-Cli"
 CONF_FILE = Path.home() / ".config" / "proton-sync.conf"
@@ -71,7 +71,7 @@ CONF_DEFAULTS = {
     "PROTON_SYNC_LOCAL": str(Path.home() / "ProtonDrive"),
     "PROTON_SYNC_REMOTE": "/my-files",
     "PROTON_SYNC_INTERVAL": "300",
-    "PROTON_SYNC_DELETES": "0",
+    "PROTON_SYNC_DELETES": "1",
     "PROTON_SYNC_INOTIFY": "1",
     "PROTON_SYNC_WORKERS": "12",
     "PROTON_SYNC_RETRIES": "3",
@@ -2270,7 +2270,7 @@ class MainWindow(QWidget):
         row.addStretch(1)
         form.addLayout(row)
         row_d, self.chk_deletes = toggle_row(
-            "Also remove files I delete", "Both sides stay equal.")
+            "Also remove files I delete", "Deleted files go to the trash.")
         form.addWidget(row_d)
         col.addWidget(box)
 

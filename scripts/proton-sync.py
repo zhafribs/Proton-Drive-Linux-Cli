@@ -18,15 +18,27 @@ How it works
    strategies, re-scan, record the new state
 5. in loop mode, inotify (via ctypes - no extra packages) wakes the loop the
    moment something changes locally, so local edits upload within seconds;
-   the interval only bounds how often *remote* changes are noticed
+   a cheap server-side size-peek (`fs size`) skips re-listing when nothing
+   changed, and PROTON_SYNC_PEEK_AGE bounds how long that peek may be
+   trusted - Proton's size aggregate can lag 80s+ behind a deletion, so the
+   bound is what keeps cloud-side deletions from hiding (Proton exposes no
+   change-feed API, the same ceiling rclone hits on this provider)
 
 Safety defaults
 ---------------
-* never deletes on its own (opt in: PROTON_SYNC_DELETES=1 - local deletions
-  go to Proton's trash, remote deletions to the desktop trash: recoverable)
-* a file deleted on one side stays on the other side ("held"): a local delete
-  does not re-download, a remote delete does not re-upload; editing a held
-  file brings it back
+* deletions sync both ways by default - but ONLY ever to trash, never
+  permanently: local deletions go to Proton's trash, remote deletions to the
+  desktop trash (both recoverable; opt out with PROTON_SYNC_DELETES=0)
+* a scan that comes back empty on one side while the other side has files
+  (moved disk, broken login, wrong path) holds every deletion that cycle -
+  no mass deletes from a sick scan
+* renames/moves are followed, not re-transferred: a path that vanished and an
+  identical path that appeared on the same side is relocated (server-side
+  `fs move` for local moves, a local rename for cloud moves) - the same
+  technique rclone ships as --track-renames
+* with deletion propagation off, a file deleted on one side stays on the
+  other side ("held"): a local delete does not re-download, a remote delete
+  does not re-upload; editing a held file brings it back
 * conflicts (both sides changed since last sync) keep BOTH versions: the
   remote one is saved beside the local one as "name (conflict <timestamp>)",
   then the local one is uploaded as canonical
@@ -50,7 +62,7 @@ Environment knobs
   PROTON_SYNC_LOCAL      local folder           (default ~/ProtonDrive)
   PROTON_SYNC_REMOTE     remote folder          (default /my-files)
   PROTON_SYNC_INTERVAL   remote poll seconds    (default 300)
-  PROTON_SYNC_DELETES    1 = propagate deletions (default 0 = never delete)
+  PROTON_SYNC_DELETES    0 = never delete (default 1 = deletions go to trash)
   PROTON_SYNC_WORKERS    parallel scan calls    (default 12)
   PROTON_SYNC_RETRIES    scan attempts per folder (default 3)
   PROTON_SYNC_SUBFOLDERS comma-separated subfolders to mirror (default all)
@@ -60,6 +72,11 @@ Environment knobs
                         cheap fingerprint peeks, a complete remote walk runs at
                         least this often to catch changes a size peek cannot
                         see (renames, same-byte-size edits)
+  PROTON_SYNC_PEEK_AGE  max seconds a fingerprint peek may skip walking
+                        (default 120, 0 = trust the peek until FULL_EVERY) -
+                        Proton's aggregate size signal lags minutes behind a
+                        deletion, so the peek alone would hide cloud-side
+                        deletes for far too long
 
 Telemetry: ${XDG_STATE_HOME:-~/.local/state}/proton-sync/health.json is
 merge-updated at the start and end of every cycle for the GUI (never fatal).
@@ -122,11 +139,16 @@ LOCAL_ROOT = Path(cfg("PROTON_SYNC_LOCAL", str(Path.home() / "ProtonDrive"))).ex
 REMOTE_ROOT = cfg("PROTON_SYNC_REMOTE", "/my-files").rstrip("/") or "/my-files"
 INTERVAL = int(cfg("PROTON_SYNC_INTERVAL", "300"))
 FULL_EVERY = max(60, int(cfg("PROTON_SYNC_FULL_EVERY", "600")))
+# Proton's `fs size` aggregate (the cheap change signal) lags minutes behind a
+# deletion - measured 80s+ still stale while `fs list` was fresh at t+5s. Bound
+# how long a peek may skip walking, or cloud-side deletes would hide for far
+# too long. 0 = trust the peek until FULL_EVERY (old behavior).
+PEEK_AGE = max(0, min(int(cfg("PROTON_SYNC_PEEK_AGE", "120")), FULL_EVERY))
 SCAN_WORKERS = int(cfg("PROTON_SYNC_WORKERS", "12"))
 SCAN_RETRIES = int(cfg("PROTON_SYNC_RETRIES", "3"))
 TRANSFER_TIMEOUT = int(cfg("PROTON_SYNC_TIMEOUT", "3600"))
 META_TIMEOUT = int(cfg("PROTON_SYNC_META_TIMEOUT", "120"))
-PROPAGATE_DELETES = cfg("PROTON_SYNC_DELETES", "0") == "1"
+PROPAGATE_DELETES = cfg("PROTON_SYNC_DELETES", "1") == "1"
 INOTIFY_ENABLED = cfg("PROTON_SYNC_INOTIFY", "1") == "1"
 # selective sync: only these remote subfolders are mirrored ("" = everything)
 SUBFOLDERS = [s.strip("/") for s in cfg("PROTON_SYNC_SUBFOLDERS", "").split(",") if s.strip()]
@@ -144,8 +166,13 @@ SNAPSHOT_FILE = STATE_DIR / "remote-snapshot.json"
 FORCE_NEXT = False          # manual wake (GUI Sync now / wake file) -> full walk
 
 # minimum spacing between cycles + how long events must be quiet first
-MIN_CYCLE_GAP = 30
-DEBOUNCE_QUIET = 12
+# (tuned for a Google-Drive-like feel: a local save is on the cloud in ~15s)
+MIN_CYCLE_GAP = 10
+DEBOUNCE_QUIET = 4
+
+# a side that scans completely empty while its own state remembers files is a
+# sick scan (moved disk / broken login), not a user decision: hold deletions
+WIPE_MIN = 5
 
 
 class CliError(RuntimeError):
@@ -394,7 +421,7 @@ def ensure_remote_dir(rel, tree, created):
     parent = rel.rsplit("/", 1)[0] if "/" in rel else ""
     if parent:
         ensure_remote_dir(parent, tree, created)
-    name = rel.rsplit("/", 1)[1]
+    name = rel.rsplit("/", 1)[-1]        # works for top-level ("b") and nested ("a/b")
     try:
         cli(["fs", "create-folder", remote_parent(rel), escape(name)], timeout=META_TIMEOUT)
     except CliError as e:
@@ -410,6 +437,105 @@ def ensure_remote_dir(rel, tree, created):
 
 # ----------------------------------------------------------------- decisions
 
+def parent_of(rel):
+    return rel.rsplit("/", 1)[0] if "/" in rel else ""
+
+
+def detect_moves(remote, local, state, busy=frozenset()):
+    """rclone --track-renames equivalent: pair a vanished path with an
+    identical newcomer instead of re-transferring the bytes.
+
+    * cloud-side moves: a path whose cloud `uid` vanished and reappeared
+      elsewhere is a rename/move done in the web app or on another device
+      (uids survive both `fs rename` and `fs move` - verified against the
+      official CLI 0.9.0) -> ONE local rename, nothing downloaded.
+    * local moves: a file that vanished locally (its cloud copy is still
+      there) and an identical file (same size + mtime_ns) that appeared
+      elsewhere locally is a move -> ONE server-side `fs rename`/`fs move`,
+      nothing uploaded.
+    * a whole folder moved at once collapses into a single folder move.
+
+    Returns (local_moves, remote_moves): lists of (old_rel, new_rel).
+    """
+    remote_moves, local_moves = [], []
+
+    # ---- cloud side: exact match on uid ----
+    uid_at = {}
+    for rel, node in remote.items():
+        if node.get("uid"):
+            uid_at.setdefault(node["uid"], []).append(rel)
+    taken = set(busy)
+    for old in sorted((r for r, s in state.items()
+                       if s.get("r_uid") and r not in remote and r in local),
+                      key=lambda p: p.count("/")):      # folders first
+        if old in taken:
+            continue
+        cands = [c for c in uid_at.get(state[old]["r_uid"], [])
+                 if c != old and c not in state and c not in local and c not in taken]
+        if len(cands) != 1:
+            continue
+        new = cands[0]
+        # a parent already moving carries its children along
+        if any(new.startswith(t + "/") for t in taken):
+            continue
+        remote_moves.append((old, new))
+        taken.add(old)
+        taken.add(new)
+
+    # ---- local side: exact match on (size, mtime_ns) ----
+    key_at = {}
+    for rel, node in local.items():
+        if node["type"] == "file":
+            key_at.setdefault((node["size"], node["mtime_ns"]), []).append(rel)
+    taken = set(busy) | {p for mv in remote_moves for p in mv}
+    matched = {}
+    for old in sorted((r for r, s in state.items()
+                       if s.get("l_mtime_ns") is not None and s.get("l_size") is not None
+                       and r not in local and remote.get(r, {}).get("type") == "file"),
+                      key=lambda p: p.count("/")):
+        if old in taken:
+            continue
+        s = state[old]
+        cands = [c for c in key_at.get((s["l_size"], s["l_mtime_ns"]), [])
+                 if c not in state and c not in remote and c not in taken]
+        if len(cands) == 1:
+            matched[old] = cands[0]
+            taken.add(old)
+            taken.add(cands[0])
+
+    # ---- collapse child moves into one folder move (one CLI call) ----
+    consumed = set()
+    old_dirs = sorted((r for r in state
+                       if r not in local and remote.get(r, {}).get("type") == "dir"),
+                      key=lambda p: p.count("/"))
+    new_dirs = [r for r, n in local.items()
+                if n["type"] == "dir" and r not in state and r not in remote]
+    for po in old_dirs:
+        for pn in new_dirs:
+            if pn in consumed or po in consumed:
+                continue
+            pairs = [(o, n) for o, n in matched.items()
+                     if o.startswith(po + "/") and n.startswith(pn + "/")]
+            if not pairs:
+                continue
+            suf_o = {o[len(po) + 1:] for o, _ in pairs}
+            suf_n = {n[len(pn) + 1:] for _, n in pairs}
+            n_files_new = sum(1 for rel, node in local.items()
+                              if node["type"] == "file" and rel.startswith(pn + "/"))
+            # collapse only when the whole folder moved intact: identical
+            # relative layout and no extra files in the new folder
+            if suf_o != suf_n or len(pairs) != len(suf_o) or n_files_new != len(pairs):
+                continue
+            local_moves.append((po, pn))
+            consumed.update(po)
+            consumed.update(pn)
+            consumed.update(o for o, _ in pairs)
+            consumed.update(n for _, n in pairs)
+    local_moves += [(o, n) for o, n in matched.items()
+                    if o not in consumed and n not in consumed]
+    return local_moves, remote_moves
+
+
 def local_changed(l, s):
     return s.get("l_mtime_ns") is None or l["mtime_ns"] != s["l_mtime_ns"] or l["size"] != s.get("l_size")
 
@@ -421,7 +547,39 @@ def remote_changed(r, s):
 def plan_cycle(remote, local, state):
     """Returns (actions, holds). Action tuples: (kind, rel, payload)."""
     actions, holds = [], 0
+
+    # moves first: they are the cheapest possible sync (no bytes move) and
+    # must pre-empt the delete+recreate interpretation of the same paths.
+    # A folder move also covers its whole subtree on both trees - its children
+    # must not be planned individually (that would re-create them elsewhere).
+    local_moves, remote_moves = detect_moves(remote, local, state)
+    for old, new in local_moves:
+        actions.append(("mv_remote", new, (old, new)))
+    for old, new in remote_moves:
+        actions.append(("mv_local", new, (old, new)))
+    moved = set()
+    for old, new in local_moves + remote_moves:
+        moved.update((old, new))
+        moved.update(p for p in set(remote) | set(local)
+                     if p.startswith(old + "/") or p.startswith(new + "/"))
+
+    # wipe guard: one side scanned empty while state remembers real content -
+    # that is a sick scan (moved disk, broken login, wrong path), never a user
+    # decision. Deletions from that side are held this cycle.
+    state_local = sum(1 for s in state.values() if s.get("l_mtime_ns") is not None)
+    state_remote = sum(1 for s in state.values() if s.get("r_mtime"))
+    local_dead = not any(n["type"] == "file" for n in local.values()) \
+        and state_local >= WIPE_MIN and any(n["type"] == "file" for n in remote.values())
+    remote_dead = not any(n["type"] == "file" for n in remote.values()) \
+        and state_remote >= WIPE_MIN and any(n["type"] == "file" for n in local.values())
+    if local_dead or remote_dead:
+        log.error("wipe guard: %s side scanned empty while state remembers files - "
+                  "holding deletions this cycle",
+                  "local" if local_dead else "cloud")
+
     for rel in sorted(set(remote) | set(local), key=lambda p: (p.count("/"), p)):
+        if rel in moved:
+            continue
         r, l, s = remote.get(rel), local.get(rel), state.get(rel)
 
         if r and r.get("doc"):                          # Proton Doc/Sheet: CLI cannot download
@@ -433,8 +591,8 @@ def plan_cycle(remote, local, state):
         if r and not l:
             if s is None:                               # never seen -> new remotely
                 actions.append(("dl", rel, r))
-            elif PROPAGATE_DELETES and s.get("l_mtime_ns") is not None:
-                actions.append(("trash_remote", rel, r))    # deleted locally, deletes opted in
+            elif PROPAGATE_DELETES and not local_dead and s.get("l_mtime_ns") is not None:
+                actions.append(("trash_remote", rel, r))    # deleted locally, deletes on
             elif remote_changed(r, s):
                 actions.append(("dl", rel, r))          # new revision -> bring it over
             else:
@@ -445,8 +603,8 @@ def plan_cycle(remote, local, state):
         if l and not r:
             if s is None:                               # never seen -> new locally
                 actions.append(("up", rel, l))
-            elif PROPAGATE_DELETES and s.get("r_mtime"):
-                actions.append(("trash_local", rel, l))     # deleted remotely, deletes opted in
+            elif PROPAGATE_DELETES and not remote_dead and s.get("r_mtime"):
+                actions.append(("trash_local", rel, l))     # deleted remotely, deletes on
             elif l["type"] == "file" and local_changed(l, s):
                 actions.append(("up", rel, l))          # edited -> (re)create remotely
             else:
@@ -538,13 +696,19 @@ def trash_local_path(rel):
     if not p.exists():
         return
     if shutil.which("gio"):
-        subprocess.run(["gio", "trash", str(p)], check=False, capture_output=True)
+        r = subprocess.run(["gio", "trash", str(p)], check=False, capture_output=True, text=True)
         if not p.exists():
             return
+        if r.returncode != 0:
+            # e.g. /tmp or another system-internal mount refuses; fall back to
+            # a recoverable engine bin rather than losing the file
+            log.warning("gio trash refused %s (%s) - keeping it in the engine bin",
+                        rel, (r.stderr or "").strip().splitlines()[-1] if r.stderr else "no reason")
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     bin_dir = STATE_DIR / "trash" / stamp
     bin_dir.mkdir(parents=True, exist_ok=True)
     shutil.move(str(p), str(bin_dir / p.name))
+    log.info("kept deleted file in %s (restore by moving it back)", bin_dir / p.name)
 
 
 def apply_mtimes(paths, remote):
@@ -574,8 +738,54 @@ def execute(actions, remote, local):
         except CliError as e:
             log.error("FAILED %s: %s", label, e)
             failed.add(label)
+        except Exception as e:        # one bad path must never wedge the whole sync
+            log.exception("FAILED %s: %s", label, e)
+            failed.add(label)
 
-    # 1) new local folders -> create remotely (files inside follow via upload)
+    # 1) server-side moves (rename/move tracking) - cheapest action first:
+    #    one CLI call relocates the file, no bytes are transferred
+    for kind, rel, payload in actions:
+        if kind == "mv_remote":
+            old, new = payload
+            try:
+                ensure_remote_dir(parent_of(new), tree, created)
+                if parent_of(old) == parent_of(new):
+                    cli(["fs", "rename", remote_path(old), escape(new.rsplit("/", 1)[-1])],
+                        timeout=META_TIMEOUT)
+                else:
+                    cli(["fs", "move", remote_path(old), remote_parent(new)], timeout=META_TIMEOUT)
+                    if old.rsplit("/", 1)[-1] != new.rsplit("/", 1)[-1]:
+                        # `fs move` keeps the name - finish the rename too
+                        cli(["fs", "rename",
+                             "/".join([remote_parent(new), escape(old.rsplit("/", 1)[-1])]),
+                             escape(new.rsplit("/", 1)[-1])], timeout=META_TIMEOUT)
+                log.info("MOVE remote %s -> %s (server-side, no upload)", old, new)
+                did_upload = True                     # remote changed: refresh snapshot
+            except CliError as e:
+                log.error("FAILED move remote %s -> %s: %s", old, new, e)
+                failed.add(old)
+                failed.add(new)
+
+    # 1b) local moves: a rename/move in the cloud or on another device is
+    #     mirrored here with a plain filesystem move - nothing re-downloaded
+    for kind, rel, payload in actions:
+        if kind == "mv_local":
+            old, new = payload
+            try:
+                src, dst = LOCAL_ROOT / old, LOCAL_ROOT / new
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                if src.exists():
+                    shutil.move(str(src), str(dst))
+                    log.info("MOVE local %s -> %s (renamed in the cloud, no download)",
+                             old, new)
+                else:                                 # already moved by the user
+                    log.debug("local move %s -> %s: source already gone", old, new)
+            except OSError as e:
+                log.error("FAILED move local %s -> %s: %s", old, new, e)
+                failed.add(old)
+                failed.add(new)
+
+    # 2) new local folders -> create remotely (files inside follow via upload)
     for kind, rel, payload in actions:
         if kind == "up" and payload["type"] == "dir":
             guarded(rel, ensure_remote_dir, rel, tree, created)
@@ -632,19 +842,24 @@ def execute(actions, remote, local):
                 downloaded.add(rel)   # canonical stays local; remote copy was fetched
                 did_upload = True
 
-    # 6) opt-in deletions (off by default)
+    # 6) deletions (on by default; always to trash, never permanent)
     if PROPAGATE_DELETES:
         for kind, rel, payload in actions:
             if kind == "trash_remote":
                 try:
                     cli(["fs", "trash", remote_path(rel)], timeout=META_TIMEOUT)
                     log.info("TRASH remote %s (was deleted locally)", rel)
+                    did_upload = True               # refresh the remote snapshot too
                 except CliError as e:
                     log.error("FAILED trash remote %s: %s", rel, e)
                     failed.add(rel)
             elif kind == "trash_local":
-                trash_local_path(rel)
-                log.info("TRASH local  %s (was deleted remotely)", rel)
+                try:
+                    trash_local_path(rel)
+                    log.info("TRASH local  %s (was deleted remotely)", rel)
+                except OSError as e:
+                    log.error("FAILED trash local %s: %s", rel, e)
+                    failed.add(rel)
 
     return failed, downloaded, did_upload
 
@@ -657,7 +872,10 @@ def refresh_state(remote, local, old_state, failed, acted):
     * failed paths keep their previous record so the exact same action retries
     * one-sided paths with no history and no action get NO record yet (they
       must be planned again next cycle - e.g. a fresh conflict copy)
-    * a side that vanished gets an explicit null so deletions are respected
+    * a side that vanished is remembered: with deletions ON the last-known
+      values are kept (a deletion held this cycle - wipe guard, stale
+      snapshot - still fires next cycle); with deletions OFF the side is
+      nulled so an old deletion never fires if the user enables them later
     """
     new_state = {}
     for rel in sorted(set(remote) | set(local)):
@@ -684,9 +902,18 @@ def refresh_state(remote, local, old_state, failed, acted):
             entry["r_mtime"], entry["r_uid"] = r["mtime"], r["uid"]
         if o is not None:
             if not l and o.get("l_mtime_ns") is not None:
-                entry["l_mtime_ns"], entry["l_size"] = None, None
+                if PROPAGATE_DELETES:
+                    # keep the last-known values: a deletion HELD this cycle
+                    # (wipe guard, stale remote snapshot) must still be
+                    # actionable on the next sane cycle
+                    entry["l_mtime_ns"], entry["l_size"] = o["l_mtime_ns"], o.get("l_size")
+                else:
+                    entry["l_mtime_ns"], entry["l_size"] = None, None
             if not r and o.get("r_mtime") is not None:
-                entry["r_mtime"], entry["r_uid"] = None, None
+                if PROPAGATE_DELETES:
+                    entry["r_mtime"], entry["r_uid"] = o["r_mtime"], o.get("r_uid")
+                else:
+                    entry["r_mtime"], entry["r_uid"] = None, None
         if entry:
             new_state[rel] = entry
     return new_state
@@ -779,6 +1006,9 @@ def run_once(dry_run=False, force_full=False):
             log.info("no usable snapshot - full walk")
         elif fp != snap.get("fp"):
             log.info("peek: cloud changed - full walk")
+        elif PEEK_AGE and time.time() - float(snap.get("ts") or 0) > PEEK_AGE:
+            log.info("peek stale (> %ds) - full walk (cloud deletes hide behind the lagging size signal)",
+                     PEEK_AGE)
         elif time.time() - float(snap.get("ts") or 0) > FULL_EVERY:
             log.info("safety walk due (> %ds)", FULL_EVERY)
         else:

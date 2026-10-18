@@ -9,20 +9,20 @@ verified against Proton's published SHA-512 checksum before it is wrapped.
 
 | Artifact | Arch | Size |
 | --- | --- | --- |
-| `dist/ProtonDrive-CLI-0.9.0-GUI-3.9.0-x86_64.AppImage` | x86_64 (Intel/AMD) | 40 MB |
-| `dist/ProtonDrive-CLI-0.9.0-GUI-3.9.0-aarch64.AppImage` | aarch64 (ARM64) | 39 MB |
+| `dist/ProtonDrive-CLI-0.9.0-GUI-3.10.0-x86_64.AppImage` | x86_64 (Intel/AMD) | 40 MB |
+| `dist/ProtonDrive-CLI-0.9.0-GUI-3.10.0-aarch64.AppImage` | aarch64 (ARM64) | 39 MB |
 | `dist/SHA256SUMS` | checksums of the outputs | |
 
 Upstream version: **0.9.0** (released 2026-10-05), `cli-drive@0.9.0+75612299`.
-Desktop app version: **3.9.0** — every release note ships the app's [development log](CHANGELOG.md).
+Desktop app version: **3.10.0** — every release note ships the app's [development log](CHANGELOG.md).
 
 ## Quick start
 
 ```bash
-chmod +x dist/ProtonDrive-CLI-0.9.0-GUI-3.9.0-x86_64.AppImage
-./dist/ProtonDrive-CLI-0.9.0-GUI-3.9.0-x86_64.AppImage --version
-./dist/ProtonDrive-CLI-0.9.0-GUI-3.9.0-x86_64.AppImage --help
-./dist/ProtonDrive-CLI-0.9.0-GUI-3.9.0-x86_64.AppImage auth login   # first run
+chmod +x dist/ProtonDrive-CLI-0.9.0-GUI-3.10.0-x86_64.AppImage
+./dist/ProtonDrive-CLI-0.9.0-GUI-3.10.0-x86_64.AppImage --version
+./dist/ProtonDrive-CLI-0.9.0-GUI-3.10.0-x86_64.AppImage --help
+./dist/ProtonDrive-CLI-0.9.0-GUI-3.10.0-x86_64.AppImage auth login   # first run
 ```
 
 Put it on your `PATH` as `proton-drive` (creates `~/.local/bin/proton-drive` → symlink):
@@ -50,16 +50,28 @@ no AUR, no third-party binaries, nothing but this project's own MIT scripts:
 That keeps `~/ProtonDrive` in sync with the `/my-files` section of your Drive:
 
 * **local edits upload within seconds** (inotify wakes the sync immediately),
-  remote changes appear within 5 minutes (poll)
+  remote changes appear within about a minute (a cheap size-peek skips
+  re-listing, bounded by `PROTON_SYNC_PEEK_AGE` so cloud deletions cannot
+  hide behind the server's lagging size signal)
+* **renames and moves are followed, never re-uploaded**: a file you renamed
+  or moved is relocated server-side in one call (no bytes transferred) - the
+  same technique rclone ships as `--track-renames`; a rename done in the web
+  app or on another device is mirrored here with a plain local rename, no
+  re-download
 * runs at every login, restarts on failure, logs to the journal
   (`journalctl --user -u proton-sync -f`)
 * dry run first: `python3 scripts/proton-sync.py --dry-run`
 
 Safety rules baked in:
 
-* **never deletes anything** (opt in with `PROTON_SYNC_DELETES=1`: local
-  deletions go to Proton's trash, remote deletions to the desktop trash)
-* deleting a file on one side keeps it on the other — no surprise data loss
+* **deletions follow you both ways, but only ever to trash** (never
+  permanent; turn off with `PROTON_SYNC_DELETES=0`): a local delete goes to
+  Proton's trash, a cloud delete goes to your desktop trash - both restorable
+* **a sick scan can never mass-delete**: if one side comes back empty while
+  the other has files (moved disk, broken login, wrong path), every deletion
+  is held for that cycle and logged
+* a file deleted on one side with deletion propagation off stays on the
+  other - no surprise data loss
 * conflicts keep **both** versions (`name (conflict <timestamp>)`), and uploads
   use `create-new-revision`, so the old version stays in Proton's history
 * Proton Docs/Sheets cannot be downloaded by the CLI; they are skipped
@@ -143,8 +155,10 @@ What the settings mean (the app keeps this short - the details live here):
   at login (systemd user service).
 * **Open Proton Drive when I log in** - starts the app itself at login
   via a per-user autostart entry (`~/.config/autostart/`).
-* **Also remove files I delete** - deletions move to the other side's
-  trash; off by default so nothing disappears by accident.
+* **Also remove files I delete** - deletions follow you both ways (on by
+  default): a local delete goes to Proton's trash, a cloud delete goes to
+  your desktop trash - nothing is ever deleted permanently, and a broken
+  scan can never empty a side (deletions pause instead).
 * **Updates** - checks the GitHub releases; *Download and restart* only
   appears when running as an AppImage and replaces it after verifying the
   SHA256 checksum (the old file is kept as `*.old`).
@@ -169,9 +183,9 @@ on Debian/Ubuntu, Fedora, Arch/CachyOS and derivatives without bundling libs:
 No FUSE at all (containers, restricted systems, any distro):
 
 ```bash
-APPIMAGE_EXTRACT_AND_RUN=1 ./dist/ProtonDrive-CLI-0.9.0-GUI-3.9.0-x86_64.AppImage --help
+APPIMAGE_EXTRACT_AND_RUN=1 ./dist/ProtonDrive-CLI-0.9.0-GUI-3.10.0-x86_64.AppImage --help
 # or permanently:
-./dist/ProtonDrive-CLI-0.9.0-GUI-3.9.0-x86_64.AppImage --appimage-extract
+./dist/ProtonDrive-CLI-0.9.0-GUI-3.10.0-x86_64.AppImage --appimage-extract
 ```
 
 Desktop menu entry: install [AppImageLauncher](https://github.com/AppImageCommunity/AppImageLauncher)

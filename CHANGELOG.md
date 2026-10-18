@@ -1,3 +1,69 @@
+## 3.10.0 — 2026-10-18
+
+- **Deletions now follow you both ways.** Deleting a file locally removes it
+  from the cloud, and deleting it in the cloud removes it locally - the
+  behavior you expect from any modern sync client, and the one complaint
+  this app had. Nothing is ever deleted *permanently*: a local delete goes
+  to Proton's trash, a cloud delete goes to your desktop trash, so both
+  directions are one click away from being undone. (This was previously an
+  opt-in setting; it is now on by default. *Also remove files I delete* in
+  Settings turns it off.)
+- **A broken scan can no longer empty a side.** With deletions following
+  by default, the dangerous what-if deserves an answer: if a scan ever
+  comes back empty on one side while the other side has files (a moved or
+  unmounted disk, a broken login, a mistyped folder), every deletion is
+  held for that cycle and logged loudly - the engine never interprets a
+  sick scan as a user decision. Downloads and uploads are unaffected.
+- **Renames and moves are followed, not re-uploaded.** Renaming or moving a
+  file (or a whole folder) used to mean: trash the old copy, upload the
+  entire file again - a 2 GB folder rename could re-transfer gigabytes. The
+  engine now recognizes a vanished path paired with an identical newcomer
+  (exact size + timestamp match) and simply relocates the file server-side
+  in one call, transferring zero bytes. This is the same technique rclone
+  ships as `--track-renames` (and what Google Drive does natively). A
+  rename made in the web app or on another device is mirrored back with a
+  plain local rename - nothing is re-downloaded (Proton file IDs are stable
+  across renames and moves, so the match is exact, never guessed).
+- **Local changes reach the cloud in seconds, not ~45 seconds.** The
+  file-watcher used to wait 12 seconds for edits to settle and up to 30
+  seconds between cycles; it now waits 4 seconds and at most 10, so a save
+  is on your drive in roughly 5-14 seconds - the same feel as Google
+  Drive's client. A burst of edits still coalesces into one cycle.
+- **Cloud-side deletions are caught within a cycle or two, not hidden for
+  minutes.** The engine peeks a cheap server-side size signal to skip
+  re-listing your Drive; measured against the live API, that signal can lag
+  **over 80 seconds** behind a deletion while the real listing is fresh in
+  5 seconds. The peek is now time-bounded (`PROTON_SYNC_PEEK_AGE`, default
+  120s, 0 = trust it), so a file deleted in the cloud or on another device
+  lands in your desktop trash within about a minute instead of hiding until
+  the next safety walk. (Proton offers no change-feed API, so some polling
+  ceiling always exists - this is the same limitation rclone has on
+  Proton.)
+- **A deletion that is held once is still respected later.** Fixed a state
+  bug where a deletion held for one cycle (by the wipe guard or a stale
+  peek) lost its memory of the other side and could then never propagate -
+  it now fires on the first sane cycle. Deletions-off keeps the opposite
+  behavior on purpose: an old held deletion never fires if you turn
+  deletions on later.
+- **A brand-new top-level folder can no longer wedge the sync.** Creating
+  a folder directly in `~/ProtonDrive` (not inside a subfolder) crashed
+  every following cycle with an uncaught error - found by the new live
+  end-to-end test, fixed, and covered by a regression test. One bad path
+  can no longer take the whole sync down: unexpected per-file errors are
+  now caught, logged, and retried instead of killing the cycle.
+- Config cleanup: `PROTON_SYNC_DELETES` now defaults to `1`; existing
+  configs are honored as-is (no surprise behavior change on upgrade until
+  you flip it in Settings or the file). Inotify timings are derived from
+  the same constants the log prints, so the journal always tells the truth.
+- Tested: 31 engine unit tests (both deletion directions, the
+  hold-deletions-on-sick-scan guard, single-call folder moves, ambiguous
+  matches falling back safely, real edits never being mistaken for moves,
+  and the held-deletion-memory fix) + a live end-to-end run against the
+  real Drive (27 checks: seed, delete each way, rename, whole-folder move,
+  settle, clean-up) + the full 190-check GUI suite - all passing, and a
+  live dry-run against the real Drive confirmed zero pending actions with
+  deletions enabled.
+
 ## 3.9.0 — 2026-10-18
 
 - **Dialogs are readable again.** Confirmation boxes (*Move to trash?*,
