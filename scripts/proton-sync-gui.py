@@ -52,7 +52,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox,
                              QWidget)
 from PyQt6.QtGui import QFontMetrics
 
-GUI_VERSION = "3.12.1"
+GUI_VERSION = "3.12.2"
 
 REPO_URL = "https://github.com/zhafribs/Proton-Drive-Linux-Cli"
 CONF_FILE = Path.home() / ".config" / "proton-sync.conf"
@@ -250,10 +250,12 @@ def rel_time(dt) -> str:
 
 
 def find_icon() -> str:
-    here = Path(__file__).resolve().parent.parent / "src" / "protondrive-icon.svg"
-    if here.is_file():
-        return str(here)
-    for cand in (Path.home() / ".local/share/icons/hicolor/scalable/apps/proton-drive-gui.svg",
+    # Release AppImage: the SVG ships next to this script (usr/lib/proton-sync).
+    # Repo checkout: src/protondrive-icon.svg. Then any menu/system install.
+    here = Path(__file__).resolve().parent
+    for cand in (here / "protondrive-icon.svg",
+                 here.parent / "src" / "protondrive-icon.svg",
+                 Path.home() / ".local/share/icons/hicolor/scalable/apps/proton-drive-gui.svg",
                  Path("/usr/share/icons/hicolor/scalable/apps/proton-drive-gui.svg")):
         if cand.is_file():
             return str(cand)
@@ -2323,15 +2325,20 @@ class MainWindow(QWidget):
         self.sel_tree.setMinimumHeight(160)
         self.sel_tree.itemExpanded.connect(self._sel_expand)
         self.sel_tree.itemChanged.connect(self._sel_item_changed)
+        # The picker only matters in selective mode; keep the two in sync so
+        # ticking folders can never look active while it is switched off.
+        self.chk_selective.toggled.connect(self._sel_mode_toggled)
         form.addWidget(self.sel_tree)
         row = QHBoxLayout()
-        btn_reload = QPushButton("Refresh folder list")
-        btn_reload.clicked.connect(self._sel_load_root)
-        row.addWidget(btn_reload)
+        self.btn_sel_reload = QPushButton("Refresh folder list")
+        self.btn_sel_reload.clicked.connect(self._sel_load_root)
+        row.addWidget(self.btn_sel_reload)
         self.sel_hint = QLabel("")
         self.sel_hint.setObjectName("small")
         row.addWidget(self.sel_hint, 1)
         form.addLayout(row)
+        # initial state: the picker is inert until selective mode is switched on
+        self._sel_mode_toggled(self.chk_selective.isChecked())
 
         form.addSpacing(6)
         form.addWidget(section_label("NEVER SYNC FILES MATCHING"))
@@ -2764,8 +2771,10 @@ class MainWindow(QWidget):
             QStyle.StandardPixmap.SP_MediaPause if active
             else QStyle.StandardPixmap.SP_MediaPlay))
         self.btn_sync.setEnabled(active)
-        self.act_sync.setEnabled(active)
-        self.act_pause.setText("Pause sync" if active else "Resume sync")
+        if self.tray:
+            # The tray actions only exist when a tray could be built.
+            self.act_sync.setEnabled(active)
+            self.act_pause.setText("Pause sync" if active else "Resume sync")
 
         if self.tray:
             self.tray.setIcon(tray_icon(svg_pixmap(find_icon(), 64), status))
@@ -3017,6 +3026,9 @@ class MainWindow(QWidget):
         self.ed_exclude.setText(c["PROTON_SYNC_EXCLUDE"])
         self._selection = [s for s in c["PROTON_SYNC_SUBFOLDERS"].split(",") if s]
         self.chk_selective.setChecked(bool(self._selection))
+        # setChecked only emits toggled on change - apply the mode state
+        # explicitly so the picker's enabled state always matches the conf.
+        self._sel_mode_toggled(self.chk_selective.isChecked())
         self.ed_extra.setPlainText("\n".join(read_conf_extras()))
         self.save_hint.setText("")
 
@@ -3066,6 +3078,19 @@ class MainWindow(QWidget):
                                 "Please choose a folder to sync first.")
             return
         selection = self._derive_selection() if self.chk_selective.isChecked() else []
+        _root = self.sel_tree.topLevelItem(0)
+        _root_checked = (_root is not None
+                         and _root.checkState(0) == Qt.CheckState.Checked)
+        if self.chk_selective.isChecked() and not selection and not _root_checked:
+            # An empty SUBFOLDERS means "everything" to the engine, so saving
+            # a selective mode with no pick would silently sync the whole
+            # cloud - the opposite of what the user asked for. (Root ticked
+            # = "all files" is fine: that pick *is* everything.)
+            QMessageBox.warning(self, "Nothing picked",
+                                "You turned on selective sync but picked no "
+                                "folders.\nPick at least one folder in the "
+                                "list, or switch selective sync off.")
+            return
         values = {
             "PROTON_SYNC_LOCAL": local,
             "PROTON_SYNC_REMOTE": self._remote_root or "/my-files",
@@ -3116,6 +3141,13 @@ class MainWindow(QWidget):
 
     # --- selective sync tree
 
+    def _sel_mode_toggled(self, on: bool):
+        """Selective mode off = the picker is inert (its ticks mean nothing)."""
+        self.sel_tree.setEnabled(on)
+        if hasattr(self, "btn_sel_reload"):
+            self.btn_sel_reload.setEnabled(on)
+        self.sel_hint.setText("" if on else "Everything in your cloud is synced.")
+
     def _sel_load_root(self):
         self.sel_tree.clear()
         c = read_conf()
@@ -3130,7 +3162,8 @@ class MainWindow(QWidget):
         self.sel_tree.addTopLevelItem(root)
         placeholder = QTreeWidgetItem(root, ["Loading..."])
         placeholder.setData(0, Qt.ItemDataRole.UserRole, None)
-        self.sel_hint.setText("Loading folders...")
+        if self.chk_selective.isChecked():
+            self.sel_hint.setText("Loading folders...")
 
         w = Worker(lambda: fetch_remote_folders(self._remote_root, ""))
         w.done.connect(lambda r: self._sel_populate(root, r))
@@ -3159,7 +3192,9 @@ class MainWindow(QWidget):
         finally:
             self._sel_updating = False
         if item is self.sel_tree.topLevelItem(0):
-            self.sel_hint.setText(f"{len(folders)} folders")
+            # In full-sync mode the hint belongs to the checkbox, not the list.
+            if self.chk_selective.isChecked():
+                self.sel_hint.setText(f"{len(folders)} folders")
 
     def _sel_item_changed(self, item):
         """Manual tri-state: check cascades down, parents reflect children."""

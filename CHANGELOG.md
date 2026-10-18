@@ -1,3 +1,23 @@
+## 3.12.2 — 2026-10-18
+
+- **"Open my folder" works again (and so do the sign-in terminal and every
+  link the app opens).** The bundled Qt libraries were announced to the whole
+  session, so every program the app started for you - the file manager behind
+  "Open my folder", the terminal used for the one-time sign-in, your browser
+  from the update page - was handed the app's own Qt copy instead of the
+  system's and crashed before showing anything. The bundle now stays inside
+  the app, and the app launches those programs with your system's libraries
+  again.
+- **The app icon shows properly in the window title and the system tray.**
+  Inside the AppImage the icon file wasn't found, so both fell back to a
+  plain purple square. The icon now travels with the app, and "add to app
+  menu" installs the real icon too.
+- **The folder picker in Settings now follows "Only sync the folders I
+  pick".** Turning that option off greys the list out, and saving with the
+  option on but nothing picked asks you to pick instead of silently syncing
+  the whole cloud (an empty pick means "everything" to the sync engine).
+- Fixed a crash in the status refresh on desktops without a system tray.
+
 ## 3.12.1 — 2026-10-18
 
 - **Long file names no longer squeeze the window wider than its minimum.**

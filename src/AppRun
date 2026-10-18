@@ -23,13 +23,16 @@ fi
 
 # Run a script with the bundled Python/Qt stack when present (releases);
 # fall back to the host's python3 + PyQt6 (source-checkout dev runs).
+#
+# No LD_LIBRARY_PATH/QT_* exports here, on purpose: the PyQt6 wheels carry
+# RPATHs and Qt locates its plugins relative to its own libQt6Core.so, so the
+# bundled stack works with a clean environment. Exporting those variables
+# instead leaks into every child process the app starts (xdg-open -> kde-open5,
+# dolphin, the sign-in terminal...) and makes those host apps load *our* Qt
+# 6.11, which crashes them on a host running any other Qt version.
 run_python() {
     if [ -x "$PYBUNDLE/bin/python3" ]; then
-        SP="$PYBUNDLE/lib/python3.12/site-packages"
-        QT_PLUGIN_PATH="$SP/PyQt6/Qt6/plugins" \
-        QT_QPA_PLATFORM_PLUGIN_PATH="$SP/PyQt6/Qt6/plugins/platforms" \
-        LD_LIBRARY_PATH="$SP/PyQt6/Qt6/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-            exec "$PYBUNDLE/bin/python3" "$@"
+        exec "$PYBUNDLE/bin/python3" "$@"
     fi
     exec python3 "$@"
 }

@@ -149,6 +149,11 @@ make_appdir() {
         "$appdir/usr/lib/proton-sync/proton-sync.py"
     install -m 0644 "$ROOT/scripts/proton-sync-gui.py" \
         "$appdir/usr/lib/proton-sync/proton-sync-gui.py"
+    # The app icon: the GUI renders it for the window title, the tray and the
+    # "add to app menu" entry - inside the AppImage it must ship next to the
+    # script (find_icon() looks there first).
+    install -m 0644 "$SRC/protondrive-icon.svg" \
+        "$appdir/usr/lib/proton-sync/protondrive-icon.svg"
 
     install -m 0644 "$SRC/$DESKTOP_ID" "$appdir/$DESKTOP_ID"
     install -m 0644 "$SRC/$DESKTOP_ID" "$appdir/usr/share/applications/$DESKTOP_ID"
