@@ -1,3 +1,27 @@
+## 3.12.0 — 2026-10-18
+
+- **No other software needed - the AppImage is completely self-contained.**
+  A portable Python 3.12 and the full Qt6/PyQt6 desktop runtime now live
+  *inside* the file, so double-clicking works on a machine with nothing but a
+  normal desktop: no `python3-pyqt6`, no `python3-qt6`, no `python-pyqt6`,
+  no AUR, no terminal commands. Every bundled component's licence travels
+  with it (CPython PSF-2.0, Qt6 LGPL-3.0-only, PyQt6 GPL-3.0-only - texts in
+  `usr/share/licenses/`, catalogued in `THIRD_PARTY_NOTICES.md`); this
+  project's own scripts stay MIT.
+- **System requirements are now just a graphical session**: FUSE + OpenGL
+  (already present on anything running a desktop), glibc 2.34+ on x86_64
+  (Debian 12 / Ubuntu 22.04 / Fedora 36 era or newer) and glibc 2.39+ on
+  aarch64 (Debian 13 / Ubuntu 24.04 / Fedora 40 era or newer).
+- **The download grows from ~40 MB to ~167 MB (x86_64) / ~153 MB (aarch64)**
+  - that is the price of carrying the whole desktop stack instead of
+  borrowing the host's. Source checkouts without the bundle still fall back
+  to the system's Python + PyQt6, with the same friendly install hint as
+  before.
+- The sign-in button still opens Proton's official terminal login once (their
+  CLI handles email, password and 2FA there); the app picks the session up
+  automatically a few seconds later. That is the only step that touches a
+  terminal, ever.
+
 ## 3.11.0 — 2026-10-18
 
 - **The AppImage is now the whole app - double-click and it opens.**

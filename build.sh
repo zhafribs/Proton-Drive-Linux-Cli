@@ -3,8 +3,10 @@
 # build.sh - Build Proton Drive CLI AppImages (x86_64 + aarch64)
 #
 # Downloads the official Proton Drive CLI binaries, verifies them against the
-# SHA-512 checksums published by Proton, wraps them in an AppDir and produces
-# portable AppImages with appimagetool.
+# SHA-512 checksums published by Proton, adds this project's scripts plus a
+# portable Python/Qt desktop stack (scripts/fetch-desktop-deps.sh), wraps it
+# all in an AppDir and produces portable AppImages with appimagetool. The
+# result needs nothing installed on the host beyond a normal desktop.
 #
 # Usage:
 #   ./build.sh                   # build both architectures
@@ -140,7 +142,9 @@ make_appdir() {
     install -m 0755 "$SRC/AppRun" "$appdir/AppRun"
     install -m 0755 "$payload"    "$appdir/usr/bin/proton-drive"
     # GUI + sync engine: this project's own MIT scripts, run by AppRun with the
-    # host's python3/PyQt6. The CLI payload above stays unmodified.
+    # portable Python/Qt stack bundled by bundle_python below (the host's
+    # python3/PyQt6 is only a dev fallback for source checkouts). The CLI
+    # payload above stays unmodified.
     install -m 0644 "$ROOT/scripts/proton-sync.py" \
         "$appdir/usr/lib/proton-sync/proton-sync.py"
     install -m 0644 "$ROOT/scripts/proton-sync-gui.py" \
@@ -153,11 +157,53 @@ make_appdir() {
     # every copy of the Proton payload, so it ships inside the AppImage too.
     install -m 0644 "$SRC/licenses/Proton-Drive-SDK-MIT.txt" \
         "$appdir/usr/share/licenses/proton-drive/LICENSE"
+    # The bundled desktop stack is copyleft: PyQt6 is GPL-3.0-only, the Qt6
+    # libraries are LGPL-3.0-only and CPython is PSF-2.0. Each of those
+    # licences must accompany the binaries, so all three travel inside the
+    # AppImage as well (catalogued in THIRD_PARTY_NOTICES.md).
+    install -m 0644 "$SRC/licenses/GPL-3.0-only.txt"  "$appdir/usr/share/licenses/GPL-3.0-only.txt"
+    install -m 0644 "$SRC/licenses/LGPL-3.0-only.txt" "$appdir/usr/share/licenses/LGPL-3.0-only.txt"
+    install -m 0644 "$SRC/licenses/PSF-2.0.txt"       "$appdir/usr/share/licenses/PSF-2.0.txt"
 
     install -m 0644 "$BUILD/icon-256.png" "$appdir/proton-drive.png"
     install -m 0644 "$BUILD/icon-256.png" "$appdir/usr/share/icons/hicolor/256x256/apps/proton-drive.png"
     install -m 0644 "$BUILD/icon-512.png" "$appdir/usr/share/icons/hicolor/512x512/apps/proton-drive.png"
     ln -sfn proton-drive.png "$appdir/.DirIcon"
+}
+
+# Assemble the portable desktop stack - CPython + the PyQt6/Qt6 wheels - into
+# the AppDir so the AppImage needs nothing installed on the host. This only
+# extracts and copies, never runs target-architecture binaries, so an x86_64
+# machine prepares the aarch64 bundle the same way. Trimmed: Python pieces a
+# sync client never imports (tcl/tk, idle, 2to3, pip) and Qt's QML/translations
+# (~40 MB). Licence texts are kept - they are the compliance obligation.
+bundle_python() {
+    local arch="$1" appdir="$2"
+    local bdir="$ROOT/download/bundle/$arch"
+    local py_file dest sp whl
+    py_file="$(ls -1 "$bdir"/cpython-*-install_only.tar.gz 2>/dev/null | head -1 || true)"
+    [ -n "$py_file" ] || die "portable CPython missing for ${arch} - run scripts/fetch-desktop-deps.sh ${arch}"
+    ls -1 "$bdir"/wheels/*.whl >/dev/null 2>&1 || die "PyQt6 wheels missing for ${arch} - run scripts/fetch-desktop-deps.sh ${arch}"
+
+    dest="$appdir/usr/lib/bundled-python"
+    log "bundling portable Python + Qt6 (${arch})"
+    rm -rf "$dest"
+    mkdir -p "$dest"
+    tar -xzf "$py_file" -C "$dest" --strip-components=1
+    sp="$dest/lib/python3.12/site-packages"
+    mkdir -p "$sp"
+    for whl in "$bdir"/wheels/*.whl; do
+        python3 -m zipfile -e "$whl" "$sp"
+    done
+    rm -rf "$dest/lib/python3.12/idlelib" \
+           "$dest/lib/python3.12/lib2to3" \
+           "$dest/lib/python3.12/turtledemo" \
+           "$dest/lib/python3.12/tkinter" \
+           "$dest/lib/python3.12/ensurepip" \
+           "$dest/lib/python3.12/site-packages/pip" \
+           "$dest"/lib/python3.12/site-packages/pip-*.dist-info \
+           "$sp/PyQt6/Qt6/qml" \
+           "$sp/PyQt6/Qt6/translations"
 }
 
 validate() {
@@ -182,6 +228,8 @@ build_one() {
 
     fetch_payload "$platform"
     make_appdir "$platform" "$appdir"
+    "$ROOT/scripts/fetch-desktop-deps.sh" "$arch"
+    bundle_python "$arch" "$appdir"
     validate "$appdir"
 
     mkdir -p "$DIST"

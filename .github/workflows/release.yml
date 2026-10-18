@@ -57,14 +57,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends librsvg2-bin desktop-file-utils appstream
 
-      - name: Cache Proton binaries and build tools
+      - name: Cache Proton binaries, build tools and the desktop bundle
         uses: actions/cache@v6
         with:
           path: |
             tools
             download
-          key: build-${{ runner.os }}-${{ hashFiles('upstream.lock') }}
+          # v2: download/ now also holds the portable Python + PyQt6 wheels
+          # (scripts/fetch-desktop-deps.sh pins them), so the key hashes that
+          # script too and the first run with the bundle saves a fresh cache.
+          key: build-v2-${{ runner.os }}-${{ hashFiles('upstream.lock', 'scripts/fetch-desktop-deps.sh') }}
           restore-keys: |
+            build-v2-${{ runner.os }}-
             build-${{ runner.os }}-
 
       - name: Check Proton's download page for a new release

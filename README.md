@@ -11,30 +11,26 @@ sync engine and the app window, in one double-clickable file.
 
 | Artifact | Arch | Size |
 | --- | --- | --- |
-| `dist/ProtonDrive-CLI-0.9.0-GUI-3.11.0-x86_64.AppImage` | x86_64 (Intel/AMD) | 40 MB |
-| `dist/ProtonDrive-CLI-0.9.0-GUI-3.11.0-aarch64.AppImage` | aarch64 (ARM64) | 39 MB |
+| `dist/ProtonDrive-CLI-0.9.0-GUI-3.12.0-x86_64.AppImage` | x86_64 (Intel/AMD) | 167 MB |
+| `dist/ProtonDrive-CLI-0.9.0-GUI-3.12.0-aarch64.AppImage` | aarch64 (ARM64) | 153 MB |
 | `dist/SHA256SUMS` | checksums of the outputs | |
 
 Upstream version: **0.9.0** (released 2026-10-05), `cli-drive@0.9.0+75612299`.
-Desktop app version: **3.11.0** — every release note ships the app's [development log](CHANGELOG.md).
+Desktop app version: **3.12.0** — every release note ships the app's [development log](CHANGELOG.md).
 
 ## Quick start
 
-The app needs Python 3 with PyQt6 from your distribution's official
-repositories (not bundled — the same Qt bindings every other Qt app on your
-system uses):
-
-| Distro | Package |
-| --- | --- |
-| Debian / Ubuntu | `sudo apt install python3-pyqt6` |
-| Fedora | `sudo dnf install python3-qt6` |
-| Arch / CachyOS | `sudo pacman -S python-pyqt6` |
+**The AppImage needs nothing else installed** - it carries its own Python and
+Qt6/PyQt6 desktop runtime inside. The host only needs a normal graphical
+session (FUSE for AppImages and OpenGL, present on any desktop - see
+[Distro notes](#distro-notes)) and a terminal emulator for the one-time
+Proton sign-in.
 
 Then download the AppImage and double-click it (or run it once from a shell):
 
 ```bash
-chmod +x ProtonDrive-CLI-0.9.0-GUI-3.11.0-x86_64.AppImage
-./ProtonDrive-CLI-0.9.0-GUI-3.11.0-x86_64.AppImage
+chmod +x ProtonDrive-CLI-0.9.0-GUI-3.12.0-x86_64.AppImage
+./ProtonDrive-CLI-0.9.0-GUI-3.12.0-x86_64.AppImage
 ```
 
 The app opens. Click **Sign in** — Proton's official login runs once in a
@@ -48,9 +44,9 @@ re-points the service by itself. From then on it lives in the tray;
 The upstream CLI is untouched — any argument goes straight to it:
 
 ```bash
-./ProtonDrive-CLI-0.9.0-GUI-3.11.0-x86_64.AppImage --version
-./ProtonDrive-CLI-0.9.0-GUI-3.11.0-x86_64.AppImage --help
-./ProtonDrive-CLI-0.9.0-GUI-3.11.0-x86_64.AppImage auth login   # same login the app uses
+./ProtonDrive-CLI-0.9.0-GUI-3.12.0-x86_64.AppImage --version
+./ProtonDrive-CLI-0.9.0-GUI-3.12.0-x86_64.AppImage --help
+./ProtonDrive-CLI-0.9.0-GUI-3.12.0-x86_64.AppImage auth login   # same login the app uses
 ```
 
 Put it on your `PATH` as `proton-drive` (creates `~/.local/bin/proton-drive` → symlink):
@@ -130,8 +126,11 @@ system themes included.*
 proton-drive-gui             # or search "Proton Drive" in your app menu
 ```
 
-A friendly Qt6 desktop app for the sync service (PyQt6 from the **official
-repos** - no AUR, no bundled toolkits), designed for everyday users:
+A friendly Qt6 desktop app for the sync service - **in the AppImage it uses
+the Qt6/PyQt6 stack bundled inside the file** (nothing to install, no AUR);
+running these repo scripts directly instead uses your distro's PyQt6 from the
+**official** repositories (`python3-pyqt6` / `python3-qt6` / `python-pyqt6`).
+Designed for everyday users:
 
 * **Home** - a big friendly status ("You're up to date" / "Syncing..." /
   "Sync is paused") with an animated status orb, one-click *Open my
@@ -199,8 +198,13 @@ What the settings mean (the app keeps this short - the details live here):
 
 ## Distro notes
 
-Both upstream binaries require only **glibc ≥ 2.17**, so the same AppImage runs
-on Debian/Ubuntu, Fedora, Arch/CachyOS and derivatives without bundling libs:
+The AppImage needs a normal desktop session and **glibc ≥ 2.34 on x86_64**
+(Debian 12 / Ubuntu 22.04 / Fedora 36 era or newer) or **glibc ≥ 2.39 on
+aarch64** (Debian 13 / Ubuntu 24.04 / Fedora 40 era or newer) - those floors
+come from the bundled PyQt6/Qt6 wheels. The Proton CLI payload itself needs
+only glibc ≥ 2.17, so `--help`-style CLI use stays even more portable. On
+Debian/Ubuntu, Fedora, Arch/CachyOS and derivatives there is **nothing else
+to install** - no python3-pyqt6, no python3-qt6, no python-pyqt6:
 
 * **Arch / CachyOS** — works out of the box if `fuse2` is installed (this build
   was made and tested here, on CachyOS).
@@ -211,14 +215,14 @@ on Debian/Ubuntu, Fedora, Arch/CachyOS and derivatives without bundling libs:
 No FUSE at all (containers, restricted systems, any distro):
 
 ```bash
-APPIMAGE_EXTRACT_AND_RUN=1 ./dist/ProtonDrive-CLI-0.9.0-GUI-3.11.0-x86_64.AppImage --help
+APPIMAGE_EXTRACT_AND_RUN=1 ./dist/ProtonDrive-CLI-0.9.0-GUI-3.12.0-x86_64.AppImage --help
 # or permanently:
-./dist/ProtonDrive-CLI-0.9.0-GUI-3.11.0-x86_64.AppImage --appimage-extract
+./dist/ProtonDrive-CLI-0.9.0-GUI-3.12.0-x86_64.AppImage --appimage-extract
 ```
 
 Desktop menu entry: install [AppImageLauncher](https://github.com/AppImageCommunity/AppImageLauncher)
-or run `appimaged` — the AppImage ships a desktop file
-(`Terminal=true`, so it opens in a terminal) plus 256/512 px icons and AppStream
+or run `appimaged` — the AppImage ships a desktop file (double-click opens
+the app window, no terminal involved) plus 256/512 px icons and AppStream
 metadata, all of which validate cleanly.
 
 ## Rebuilding / upgrading
@@ -243,8 +247,14 @@ validates.
 Dependencies (all non-root, nothing is installed system-wide):
 
 * `wget` or `curl`, `bash`, `coreutils` — likely already present
+* `python3` **with pip** — only for `pip download` (fetches the PyQt6 wheels;
+  pip never installs anything during the build)
 * `rsvg-convert` (`pacman -S librsvg` / `apt install librsvg2-bin` / `dnf install librsvg2-tools`) — renders the icon
 * `desktop-file-validate` (`desktop-file-utils`) and `appstreamcli` (`appstream`) — optional, used for validation
+
+The desktop bundle (portable CPython + PyQt6/Qt6 wheels) is fetched by
+`scripts/fetch-desktop-deps.sh`, checksum-pinned, and cached in CI alongside
+`tools/` and `download/`.
 
 No `sudo` and no `mksquashfs` needed: appimagetool ships its own squashfs builder.
 
@@ -272,8 +282,10 @@ Design notes:
 * **Fails loudly**: if Proton restructures the page so nothing parses,
   `check-upstream.sh` exits 2 and the scheduled run turns red (GitHub emails
   you) instead of silently releasing a stale build.
-* **Caching**: `tools/` and `download/` are cached, keyed on `upstream.lock`,
-  so routine runs only pay for the squashfs build.
+* **Caching**: `tools/` and `download/` (including the fetched Python/Qt
+  desktop bundle) are cached, keyed on `upstream.lock` **plus**
+  `scripts/fetch-desktop-deps.sh`, so routine runs only pay for the squashfs
+  build.
 * **Caveat**: GitHub disables scheduled workflows after ~60 days without
   repository activity. A commit/release interaction resets that clock; if the
   badge ever says "workflow disabled", re-enable it under the Actions tab.
@@ -297,6 +309,7 @@ scripts/proton-sync.py      two-way folder sync on top of the official CLI (stdl
 scripts/install-sync.sh     install/uninstall the sync as a systemd user service
 scripts/proton-sync-gui.py  Qt6 desktop app (dashboard, logs, settings, tray)
 scripts/install-gui.sh      install the app: launcher + menu entry + icon
+scripts/fetch-desktop-deps.sh  fetch the bundled portable Python + PyQt6/Qt6 wheels (pinned + checksummed)
 release-notes.md.tmpl       release notes template (hashes filled in at build time)
 .github/workflows/release.yml  scheduled upstream check + build + publish
 install-command.sh  symlink the built AppImage into ~/.local/bin
@@ -306,6 +319,7 @@ src/AppRun        AppImage entry point (pure argv pass-through)
 src/io.github.zhafrisbs.ProtonDriveCLI.desktop     desktop entry
 src/io.github.zhafrisbs.ProtonDriveCLI.appdata.xml AppStream metadata
 src/licenses/Proton-Drive-SDK-MIT.txt  Proton's MIT notice (also inside every AppImage)
+src/licenses/GPL-3.0-only.txt LGPL-3.0-only.txt PSF-2.0.txt  licences of the bundled PyQt6 / Qt6 / CPython (inside every AppImage)
 src/protondrive-icon.svg  Proton Drive glyph (simple-icons, CC0), tinted #6D4AFF
 download/         upstream binaries (SHA-512-verified, git-ignored)
 tools/            appimagetool + aarch64 runtime (auto-fetched, git-ignored)
@@ -326,6 +340,18 @@ equal the component id. Change the string in `build.sh` (`DESKTOP_ID`,
 * **This repository's scripts** (`build.sh`, `install-command.sh`, `src/AppRun`,
   the desktop/AppStream metadata, the icon file) are **MIT** — see
   [`LICENSE`](LICENSE).
+* **The bundled desktop stack** (portable CPython, Qt6 libraries, PyQt6 and
+  PyQt6-sip wheels, all fetched by `scripts/fetch-desktop-deps.sh` and shipped
+  inside release AppImages at `usr/lib/bundled-python/`) keeps its own
+  licences: CPython **PSF-2.0**, Qt6 **LGPL-3.0-only** (with Qt's FOSS
+  exception), PyQt6 and PyQt6-sip **GPL-3.0-only**. All three texts ship
+  inside every AppImage at `usr/share/licenses/` — LGPL and PSF accompany
+  their binaries as those licences require, and because PyQt6 is copyleft
+  **the AppImage as a whole is distributed under GPL-3.0-only** (this
+  project's own code stays MIT; the packaged combination does not). Its
+  complete corresponding source is this public repository: the build recipe,
+  `src/AppRun`, the GUI and sync engine, plus the pinned third-party versions
+  above. Inventory: [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 * **The payload** (the Proton Drive CLI binary inside each AppImage) is owned by
   Proton AG and is **MIT, `Copyright (c) 2025-2026 Proton AG`**. Its source is
   the SDK Proton publishes at <https://github.com/ProtonDriveApps/sdk>, which

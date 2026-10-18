@@ -20,9 +20,10 @@
       Google Takeout import); --help lists everything.
     </p>
     <p>
-      The app needs Python 3 with PyQt6 from your distribution's official
-      repositories (python3-pyqt6 on Debian/Ubuntu, python3-qt6 on Fedora,
-      python-pyqt6 on Arch).
+      Nothing else to install: the AppImage carries its own Python and Qt
+      desktop runtime inside, so it runs on any glibc 2.34+ system (glibc
+      2.39+ on aarch64) with FUSE and OpenGL - the things every graphical
+      session already has.
     </p>
     <p>
       This package is not produced or endorsed by Proton AG: it is unofficial

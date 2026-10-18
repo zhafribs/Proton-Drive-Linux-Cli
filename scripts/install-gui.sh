@@ -21,7 +21,7 @@ case "${1:-install}" in
       echo "PyQt6 is not installed yet. Install it from the OFFICIAL repos:" >&2
       echo "    sudo pacman -S python-pyqt6        # Arch / CachyOS" >&2
       echo "    sudo apt install python3-pyqt6     # Debian / Ubuntu" >&2
-      echo "    sudo dnf install python3-pyqt6     # Fedora" >&2
+      echo "    sudo dnf install python3-qt6       # Fedora" >&2
       exit 1
     }
 

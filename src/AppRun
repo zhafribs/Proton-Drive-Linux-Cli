@@ -5,39 +5,57 @@
 #                      user service the app installs on first run)
 #   anything else   -> the upstream CLI, argv untouched (auth login, --help...)
 #
-# The app and engine in usr/lib/proton-sync are this project's own MIT scripts;
-# they drive the unmodified upstream CLI payload in usr/bin/proton-drive and
-# use the host's python3 + PyQt6 (official distribution repositories).
+# Everything the app needs travels inside: this project's MIT scripts in
+# usr/lib/proton-sync, a portable CPython + Qt6/PyQt6 runtime in
+# usr/lib/bundled-python, and the unmodified upstream CLI in usr/bin. A host
+# desktop needs nothing installed - only the usual FUSE + OpenGL, and a
+# terminal emulator for the one-time Proton sign-in.
 
 HERE="$(CDPATH='' cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)"
 CLI="$HERE/usr/bin/proton-drive"
 LIB="$HERE/usr/lib/proton-sync"
+PYBUNDLE="$HERE/usr/lib/bundled-python"
 
 if [ ! -x "$CLI" ]; then
     echo "proton-drive: payload missing from AppImage ($CLI)" >&2
     exit 127
 fi
 
+# Run a script with the bundled Python/Qt stack when present (releases);
+# fall back to the host's python3 + PyQt6 (source-checkout dev runs).
+run_python() {
+    if [ -x "$PYBUNDLE/bin/python3" ]; then
+        SP="$PYBUNDLE/lib/python3.12/site-packages"
+        QT_PLUGIN_PATH="$SP/PyQt6/Qt6/plugins" \
+        QT_QPA_PLATFORM_PLUGIN_PATH="$SP/PyQt6/Qt6/plugins/platforms" \
+        LD_LIBRARY_PATH="$SP/PyQt6/Qt6/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+            exec "$PYBUNDLE/bin/python3" "$@"
+    fi
+    exec python3 "$@"
+}
+
 case "${1:-}" in
     __sync-engine)
         shift
-        PROTON_DRIVE_BIN="$CLI" exec python3 "$LIB/proton-sync.py" --loop "$@"
+        PROTON_DRIVE_BIN="$CLI" run_python "$LIB/proton-sync.py" --loop "$@"
         ;;
     __gui|"")
-        if ! command -v python3 >/dev/null 2>&1; then
-            echo "Proton Drive needs Python 3 to show its app window." >&2
-            echo "Install python3 from your distribution's official repositories." >&2
-            exit 1
+        if [ ! -x "$PYBUNDLE/bin/python3" ]; then
+            if ! command -v python3 >/dev/null 2>&1; then
+                echo "This build carries no bundled Python and the host has none." >&2
+                echo "Install python3, or use an official release AppImage." >&2
+                exit 1
+            fi
+            if ! python3 -c 'import PyQt6.QtWidgets' >/dev/null 2>&1; then
+                echo "This build carries no bundled Python; the host's PyQt6 is missing." >&2
+                echo "Install it from your distribution's official repositories:" >&2
+                echo "  Debian / Ubuntu:   sudo apt install python3-pyqt6" >&2
+                echo "  Fedora:            sudo dnf install python3-qt6" >&2
+                echo "  Arch / CachyOS:    sudo pacman -S python-pyqt6" >&2
+                exit 1
+            fi
         fi
-        if ! python3 -c 'import PyQt6.QtWidgets' >/dev/null 2>&1; then
-            echo "Proton Drive needs PyQt6 to show its app window." >&2
-            echo "Install it from your distribution's official repositories:" >&2
-            echo "  Debian / Ubuntu:   sudo apt install python3-pyqt6" >&2
-            echo "  Fedora:            sudo dnf install python3-qt6" >&2
-            echo "  Arch / CachyOS:    sudo pacman -S python-pyqt6" >&2
-            exit 1
-        fi
-        exec python3 "$LIB/proton-sync-gui.py" "$@"
+        run_python "$LIB/proton-sync-gui.py" "$@"
         ;;
     *)
         exec "$CLI" "$@"
