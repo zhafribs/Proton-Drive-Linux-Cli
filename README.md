@@ -11,12 +11,12 @@ sync engine and the app window, in one double-clickable file.
 
 | Artifact | Arch | Size |
 | --- | --- | --- |
-| `dist/ProtonDrive-CLI-0.9.0-GUI-3.12.0-x86_64.AppImage` | x86_64 (Intel/AMD) | 167 MB |
-| `dist/ProtonDrive-CLI-0.9.0-GUI-3.12.0-aarch64.AppImage` | aarch64 (ARM64) | 153 MB |
+| `dist/ProtonDrive-CLI-0.9.0-GUI-3.12.1-x86_64.AppImage` | x86_64 (Intel/AMD) | 167 MB |
+| `dist/ProtonDrive-CLI-0.9.0-GUI-3.12.1-aarch64.AppImage` | aarch64 (ARM64) | 153 MB |
 | `dist/SHA256SUMS` | checksums of the outputs | |
 
 Upstream version: **0.9.0** (released 2026-10-05), `cli-drive@0.9.0+75612299`.
-Desktop app version: **3.12.0** — every release note ships the app's [development log](CHANGELOG.md).
+Desktop app version: **3.12.1** — every release note ships the app's [development log](CHANGELOG.md).
 
 ## Quick start
 
@@ -29,8 +29,8 @@ Proton sign-in.
 Then download the AppImage and double-click it (or run it once from a shell):
 
 ```bash
-chmod +x ProtonDrive-CLI-0.9.0-GUI-3.12.0-x86_64.AppImage
-./ProtonDrive-CLI-0.9.0-GUI-3.12.0-x86_64.AppImage
+chmod +x ProtonDrive-CLI-0.9.0-GUI-3.12.1-x86_64.AppImage
+./ProtonDrive-CLI-0.9.0-GUI-3.12.1-x86_64.AppImage
 ```
 
 The app opens. Click **Sign in** — Proton's official login runs once in a
@@ -44,9 +44,9 @@ re-points the service by itself. From then on it lives in the tray;
 The upstream CLI is untouched — any argument goes straight to it:
 
 ```bash
-./ProtonDrive-CLI-0.9.0-GUI-3.12.0-x86_64.AppImage --version
-./ProtonDrive-CLI-0.9.0-GUI-3.12.0-x86_64.AppImage --help
-./ProtonDrive-CLI-0.9.0-GUI-3.12.0-x86_64.AppImage auth login   # same login the app uses
+./ProtonDrive-CLI-0.9.0-GUI-3.12.1-x86_64.AppImage --version
+./ProtonDrive-CLI-0.9.0-GUI-3.12.1-x86_64.AppImage --help
+./ProtonDrive-CLI-0.9.0-GUI-3.12.1-x86_64.AppImage auth login   # same login the app uses
 ```
 
 Put it on your `PATH` as `proton-drive` (creates `~/.local/bin/proton-drive` → symlink):
@@ -215,9 +215,9 @@ to install** - no python3-pyqt6, no python3-qt6, no python-pyqt6:
 No FUSE at all (containers, restricted systems, any distro):
 
 ```bash
-APPIMAGE_EXTRACT_AND_RUN=1 ./dist/ProtonDrive-CLI-0.9.0-GUI-3.12.0-x86_64.AppImage --help
+APPIMAGE_EXTRACT_AND_RUN=1 ./dist/ProtonDrive-CLI-0.9.0-GUI-3.12.1-x86_64.AppImage --help
 # or permanently:
-./dist/ProtonDrive-CLI-0.9.0-GUI-3.12.0-x86_64.AppImage --appimage-extract
+./dist/ProtonDrive-CLI-0.9.0-GUI-3.12.1-x86_64.AppImage --appimage-extract
 ```
 
 Desktop menu entry: install [AppImageLauncher](https://github.com/AppImageCommunity/AppImageLauncher)
