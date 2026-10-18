@@ -35,7 +35,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import (QEvent, QLockFile, QObject, QPoint, QSettings, QRectF,
                           QUrl, Qt, QThread, QTimer, pyqtSignal as Signal)
-from PyQt6.QtGui import (QBrush, QCloseEvent, QColor, QCursor,
+from PyQt6.QtGui import (QBrush, QCloseEvent, QColor,
                          QDesktopServices,
                          QFont, QIcon, QLinearGradient, QPainter, QPalette,
                          QPen, QPixmap, QRadialGradient)
@@ -52,7 +52,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox,
                              QWidget)
 from PyQt6.QtGui import QFontMetrics
 
-GUI_VERSION = "3.12.2"
+GUI_VERSION = "3.12.3"
 
 REPO_URL = "https://github.com/zhafribs/Proton-Drive-Linux-Cli"
 CONF_FILE = Path.home() / ".config" / "proton-sync.conf"
@@ -2636,7 +2636,7 @@ class MainWindow(QWidget):
             return
         self.tray = QSystemTrayIcon(tray_icon(svg_pixmap(find_icon(), 64), "unknown"), self)
         self.tray.setToolTip("Proton Drive")
-        menu = QMenu()
+        menu = QMenu(self)
         act_show = menu.addAction("Open Proton Drive")
         act_show.triggered.connect(self.show_normal)
         menu.addSeparator()
@@ -2653,9 +2653,13 @@ class MainWindow(QWidget):
         act_quit = menu.addAction("Quit")
         act_quit.triggered.connect(self.quit_app)
         self._tray_menu = menu
-        # Not setContextMenu(): the tray host would position the menu itself,
-        # and over a Wayland bar (SNI) that lands it mid-screen. We pop it at
-        # the real cursor position on right-click instead.
+        # setContextMenu() hands the menu to the tray host over the standard
+        # DBusMenu protocol: the host draws it in the system's own style,
+        # anchored at the tray icon, with proper input grabs. Popping our own
+        # Qt menu at the cursor (3.9.0) did the opposite on a Wayland bar -
+        # a parentless popup gets no grab, so clicks dismissed it instead of
+        # activating entries, and it wore the app theme, not the system's.
+        self.tray.setContextMenu(menu)
         self.tray.activated.connect(self._tray_activated)
         self.tray.show()
 
@@ -2667,23 +2671,6 @@ class MainWindow(QWidget):
                 self.hide()
             else:
                 self.show_normal()
-        elif reason == QSystemTrayIcon.ActivationReason.Context:
-            menu = getattr(self, "_tray_menu", None)
-            if menu is not None:
-                self._popup_at(menu, self._global_cursor_pos())
-
-    @staticmethod
-    def _global_cursor_pos() -> QPoint:
-        # XWayland's pointer position goes stale whenever the cursor sits on
-        # a Wayland surface (like the bar), so ask the compositor for the
-        # real one when we can; anywhere else just read the cursor.
-        try:
-            r = subprocess.run(["hyprctl", "cursorpos"], capture_output=True,
-                               text=True, timeout=1)
-            x, y = (int(v) for v in r.stdout.split(",")[:2])
-            return QPoint(x, y)
-        except Exception:  # noqa: BLE001 - any failure means "just use Qt"
-            return QCursor.pos()
 
     def _popup_at(self, menu, pos, wait=False):
         """Show menu at pos (wait=True blocks via exec), pinned there.

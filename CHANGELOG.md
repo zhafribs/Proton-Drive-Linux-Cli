@@ -1,3 +1,14 @@
+## 3.12.3 — 2026-10-18
+
+- **The tray menu works again and looks like your system's menus.**
+  Since 3.9.0 the app popped its own copy of the tray menu at the mouse
+  position; on a Wayland bar that menu is a window without popup rights, so
+  clicks dismissed it instead of activating its entries, and it was painted
+  in the app's colours rather than your desktop's. The menu is now handed
+  back to your desktop tray (the standard DBusMenu protocol your panel
+  already speaks), which draws it itself, at the tray icon, in your system's
+  own style - the same menu you get from any other tray app.
+
 ## 3.12.2 — 2026-10-18
 
 - **"Open my folder" works again (and so do the sign-in terminal and every
