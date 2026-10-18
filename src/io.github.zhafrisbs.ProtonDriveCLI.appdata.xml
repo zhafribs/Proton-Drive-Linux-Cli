@@ -2,7 +2,7 @@
 <component type="desktop-application">
   <id>io.github.zhafrisbs.ProtonDriveCLI</id>
   <name>Proton Drive</name>
-  <summary>Sync and manage your Proton Drive - app and CLI, unofficial packaging of the official client</summary>
+  <summary>Sync and manage your Proton Drive - unofficial AppImage with the official CLI inside</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <description>
     <p>
