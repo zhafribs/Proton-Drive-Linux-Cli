@@ -48,6 +48,22 @@ REPO="${REPO:-zhafribs/Proton-Drive-Linux-Cli}"
 
 sha256() { sha256sum "$1" | cut -d' ' -f1; }
 
+# Only THIS release's changelog section goes into the notes. Sections look
+# like "## <version> — <date>", so everything from the matching header up to
+# the next one is this release; older releases stay in CHANGELOG.md, not
+# pasted into every new release (notes used to grow longer every time).
+# A GUI version without an entry (e.g. an emergency rebuild) gets a stub.
+CHANGELOG_SECTION="$TMP/changelog-section.md"
+awk -v ver="$GUI_VERSION" '
+    $1 == "##" && $2 == ver { on = 1; next }
+    on && $1 == "##"        { on = 0 }
+    on                      { print }
+' "$ROOT/CHANGELOG.md" > "$CHANGELOG_SECTION"
+[ -s "$CHANGELOG_SECTION" ] || printf 'Maintenance rebuild of %s (packaging refresh).\n' "$GUI_VERSION" > "$CHANGELOG_SECTION"
+# drop the blank line under the header and any trailing blanks, so the
+# section sits flush in the notes
+sed -i -e '/./,$!d' -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$CHANGELOG_SECTION"
+
 RENDERED="$TMP/rendered.md"
 sed \
     -e "s|{{VERSION}}|${VERSION}|g" \
@@ -60,7 +76,7 @@ sed \
     -e "s|{{SHA512_LINUX_ARM64}}|${SHA512_ARM64}|g" \
     -e "s|{{GUI_VERSION}}|${GUI_VERSION}|g" \
     -e "s|{{PAGE_URL}}|${PAGE_URL}|g" \
-    -e "/{{CHANGELOG}}/r $ROOT/CHANGELOG.md" \
+    -e "/{{CHANGELOG}}/r $CHANGELOG_SECTION" \
     -e "/{{CHANGELOG}}/d" \
     "$TEMPLATE" > "$RENDERED"
 
