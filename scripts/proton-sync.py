@@ -154,7 +154,18 @@ INOTIFY_ENABLED = cfg("PROTON_SYNC_INOTIFY", "1") == "1"
 SUBFOLDERS = [s.strip("/") for s in cfg("PROTON_SYNC_SUBFOLDERS", "").split(",") if s.strip()]
 # comma-separated globs matched against rel path and file name (e.g. "*.tmp,.cache")
 EXCLUDE = [p.strip() for p in cfg("PROTON_SYNC_EXCLUDE", "").split(",") if p.strip()]
-SKIP_NAME = re.compile(r"^\.Trash-\d+$")   # trash folders desktop apps leave behind
+# names that must never sync, anywhere on either side. Editor/OS lock-and-swap
+# artifacts are skipped like real sync clients do - otherwise opening a file in
+# LibreOffice/Office/vim uploads its lock file to the cloud as junk.
+SKIP_NAME = re.compile(
+    r"^\.Trash-\d+$"        # trash folders desktop apps leave behind
+    r"|^\.~lock\..*#$"      # LibreOffice lock: .~lock.name.ext#
+    r"|^~\$.*"              # MS Office lock:  ~$name.docx
+    r"|^\.#.*"              # Emacs lock:      .#name
+    r"|\..*\.sw[a-p]$"      # vim swap:        .name.ext.swp / .swo / ...
+    r"|^\._.*"              # macOS AppleDouble junk
+    r"|^\.DS_Store$"        # macOS folder metadata
+)
 
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "proton-sync"
 STATE_FILE = STATE_DIR / "state.json"
@@ -866,10 +877,15 @@ def execute(actions, remote, local):
 
 # ------------------------------------------------------------------- state
 
-def refresh_state(remote, local, old_state, failed, acted):
+def refresh_state(remote, local, old_state, failed, acted, planned_local=None, downloaded=None):
     """
     Record the observed reality for every trustworthy path.
     * failed paths keep their previous record so the exact same action retries
+    * a both-sides file records the PLAN-TIME local fingerprint, not the
+      post-execute rescan: a local edit that lands mid-cycle (while the batch
+      runs) must never be stamped as already-synced, or the engine would think
+      it is done and silently never upload it. Only a file we just downloaded
+      records the fresh local, since that new content is the reality we hold.
     * one-sided paths with no history and no action get NO record yet (they
       must be planned again next cycle - e.g. a fresh conflict copy)
     * a side that vanished is remembered: with deletions ON the last-known
@@ -877,6 +893,9 @@ def refresh_state(remote, local, old_state, failed, acted):
       snapshot - still fires next cycle); with deletions OFF the side is
       nulled so an old deletion never fires if the user enables them later
     """
+    downloaded = downloaded or set()
+    if planned_local is None:
+        planned_local = local
     new_state = {}
     for rel in sorted(set(remote) | set(local)):
         o = old_state.get(rel)
@@ -888,7 +907,12 @@ def refresh_state(remote, local, old_state, failed, acted):
         if r and l:
             entry = {}
             if l["type"] == "file":
-                entry["l_mtime_ns"], entry["l_size"] = l["mtime_ns"], l["size"]
+                # fresh local for a completed download; otherwise the plan-time
+                # view, so an edit made mid-cycle is re-planned next cycle
+                # instead of being lost as "already synced"
+                src = l if rel in downloaded else (planned_local.get(rel) or l)
+                if src["type"] == "file":
+                    entry["l_mtime_ns"], entry["l_size"] = src["mtime_ns"], src["size"]
             entry["r_mtime"], entry["r_uid"] = r["mtime"], r["uid"]
             new_state[rel] = entry
             continue
@@ -1065,7 +1089,8 @@ def run_once(dry_run=False, force_full=False):
         fp2 = remote_fingerprint()          # keep the cached walk in step with reality
         if fp2 is not None:
             save_snapshot(remote2, fp2)
-    saved = refresh_state(remote2, local2, state, failed, {a[1] for a in actions})
+    saved = refresh_state(remote2, local2, state, failed, {a[1] for a in actions},
+                          planned_local=local, downloaded=downloaded)
     save_state(saved)
     uploaded_n = sum(1 for kind, rel, _ in actions if kind == "up" and rel not in failed)
     conflicts_n = sum(1 for kind, rel, _ in actions if kind == "conflict" and rel not in failed)
