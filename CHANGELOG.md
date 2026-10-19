@@ -1,3 +1,17 @@
+## 3.12.5 — 2026-10-19
+
+- **Edited files are no longer silently skipped and never uploaded.** If you
+  saved a change at the exact moment the sync engine was busy (within its short
+  working window), it could mistake your edit for one it had already sent and
+  report "in sync" without ever uploading it - so a file you just edited could
+  still download as the old version, with no error anywhere. The engine now
+  remembers what it actually planned and re-sends any change it hasn't truly
+  uploaded yet, so an edit always reaches the cloud.
+- **Editor lock and temporary files are no longer copied to the cloud.**
+  Opening a file in LibreOffice, MS Office, or vim used to upload its lock or
+  swap file (for example `.~lock.report.xlsx#`) as junk. These are now skipped,
+  and any already uploaded are cleaned out of the cloud.
+
 ## 3.12.4 — 2026-10-19
 
 - **"Send a test notification" now actually sends one** (and so do every
