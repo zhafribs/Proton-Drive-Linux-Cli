@@ -108,7 +108,9 @@ Knobs: `PROTON_SYNC_LOCAL`, `PROTON_SYNC_REMOTE`, `PROTON_SYNC_INTERVAL`,
 `PROTON_SYNC_RETRIES`, `PROTON_SYNC_SUBFOLDERS` (comma-separated folders to
 mirror instead of everything), `PROTON_SYNC_EXCLUDE` (comma-separated globs
 like `*.tmp,.cache` that are never synced), `PROTON_SYNC_INOTIFY=0` (disable
-the fast path). Uninstall:
+the fast path), `PROTON_SYNC_DEBOUNCE` (seconds a local write must stay quiet
+before an upload starts, default 2), `PROTON_SYNC_MIN_GAP` (minimum seconds
+between cycles, default 4). Uninstall:
 `./scripts/install-sync.sh uninstall` (folder and state are kept).
 Settings live in `~/.config/proton-sync.conf` - edit by hand or with the app.
 

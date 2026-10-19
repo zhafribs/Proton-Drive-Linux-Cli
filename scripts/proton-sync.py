@@ -98,6 +98,11 @@ Environment knobs
                         Proton's aggregate size signal lags minutes behind a
                         deletion, so the peek alone would hide cloud-side
                         deletes for far too long
+  PROTON_SYNC_DEBOUNCE  seconds a local write stream must go quiet before an
+                        upload starts (default 2; every wake re-arms it, so
+                        files written in bursts wait for real silence)
+  PROTON_SYNC_MIN_GAP   minimum seconds between cycle starts (default 4) -
+                        stops event storms from hammering the CLI/server
 
 Telemetry: ${XDG_STATE_HOME:-~/.local/state}/proton-sync/health.json is
 merge-updated at the start and end of every cycle for the GUI (never fatal).
@@ -213,9 +218,11 @@ FORCE_NEXT = False          # manual wake (GUI Sync now / wake file) -> full wal
 PUSH = None                 # PushListener instance (set by loop_forever when live)
 
 # minimum spacing between cycles + how long events must be quiet first
-# (tuned for a Google-Drive-like feel: a local save is on the cloud in ~15s)
-MIN_CYCLE_GAP = 10
-DEBOUNCE_QUIET = 4
+# (Phase 1.5 tuning: 10s->4s / 4s->2s, a local save reaches the cloud ~4s
+# sooner; every wake re-arms the quiet window, so a file written in bursts
+# still waits for real write-silence before its first upload)
+MIN_CYCLE_GAP = max(0, int(cfg("PROTON_SYNC_MIN_GAP", "4")))
+DEBOUNCE_QUIET = max(0.0, float(cfg("PROTON_SYNC_DEBOUNCE", "2")))
 
 # a side that scans completely empty while its own state remembers files is a
 # sick scan (moved disk / broken login), not a user decision: hold deletions
@@ -1476,18 +1483,25 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
         log.debug("peek: cloud unchanged - reusing snapshot (%d entries)", len(remote))
     elif mode == "scope":
         remote = snapshot_tree(snap)
-        try:
-            for rel in scoped:
-                apply_scope(remote, rel)
-        except CliError as e:
-            log.info("push: scoped refresh failed (%s) - full walk instead", str(e)[:140])
-            mode = "full"
-        else:
-            fp_after = remote_fingerprint()
-            if fp_after is not None:
-                save_snapshot(remote, fp_after)
+        # the ~2.5s fingerprint runs CONCURRENTLY with the scoped list (~4s):
+        # two independent server reads, so the cycle pays the slower one
+        # instead of both (~2.5s off every push-triggered cycle)
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            fp_job = ex.submit(remote_fingerprint)
+            try:
+                for rel in scoped:
+                    apply_scope(remote, rel)
+            except CliError as e:
+                fp = fp_job.result()   # pre-refresh value: the full walk below
+                log.info("push: scoped refresh failed (%s) - full walk instead",
+                         str(e)[:140])  # can still cache itself with it
+                mode = "full"
             else:
-                log.info("push: fingerprint unavailable - snapshot left for the next peek")
+                fp_after = fp_job.result()
+                if fp_after is not None:
+                    save_snapshot(remote, fp_after)
+                else:
+                    log.info("push: fingerprint unavailable - snapshot left for the next peek")
     if mode == "full":
         remote = scan_remote()
         fp_after = remote_fingerprint()
@@ -1531,11 +1545,53 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
         apply_mtimes(downloaded, remote)   # before the local rescan, so state records them
 
     local2 = scan_local()
-    remote2 = scan_remote() if did_upload else remote
+    remote2 = remote
     if did_upload:
-        fp2 = remote_fingerprint()          # keep the cached walk in step with reality
+        # `remote` was fresh at the start of this cycle, so the ONLY places it
+        # can differ now are the folders this cycle changed (uploads, trashes,
+        # moves): re-list just those - one shallow list + selective descent into
+        # new folder chains, the exact operation a push event runs - instead of
+        # re-walking the whole cloud. (The old full re-walk after every upload
+        # held the event loop hostage for 30-40s, stalling any cloud change
+        # that arrived meanwhile.) Anything rooted at the volume root, or a
+        # listing that fails, still falls back to the full walk.
+        parents, root_change = set(), False
+        for kind, rel, payload in actions:
+            if kind in ("dl", "trash_local", "mv_local"):
+                continue                          # remote side untouched
+            sides = [rel] + ([payload[0]] if kind == "mv_remote" else [])
+            for side in sides:
+                p = side.rsplit("/", 1)[0] if "/" in side else ""
+                while p and p not in remote:      # brand-new folder chain: up to
+                    p = p.rsplit("/", 1)[0] if "/" in p else ""   # a known folder
+                if not p:
+                    root_change = True            # volume-root change (as a root push event)
+                    break
+                parents.add(p)
+            if root_change:
+                break
+        fp2 = None
+        if root_change:
+            remote2 = scan_remote()
+            fp2 = remote_fingerprint()
+        elif parents:
+            try:
+                with ThreadPoolExecutor(max_workers=min(len(parents), 4)) as ex:
+                    # fingerprint is an independent post-transfer server read:
+                    # run it beside the parent re-lists (~2.5s hidden again)
+                    fp_job = ex.submit(remote_fingerprint)
+                    for p in sorted(parents):
+                        apply_scope(remote, p)
+                    fp2 = fp_job.result()
+            except CliError as e:
+                log.info("post-upload refresh failed (%s) - full walk instead",
+                         str(e)[:140])
+                remote2 = scan_remote()
+                fp2 = remote_fingerprint()
+        else:
+            fp2 = remote_fingerprint()
         if fp2 is not None:
-            save_snapshot(remote2, fp2)
+            save_snapshot(remote2, fp2)            # keep the cached view in step
     saved = refresh_state(remote2, local2, state, failed, {a[1] for a in actions},
                           planned_local=local, downloaded=downloaded)
     save_state(saved)

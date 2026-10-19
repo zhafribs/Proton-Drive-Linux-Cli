@@ -1,3 +1,20 @@
+## 3.13.2 — 2026-10-19
+
+- **Faster both ways, and cloud changes can no longer queue behind
+  housekeeping.** After an upload the engine used to re-walk the entire
+  cloud before handling anything else (30-40s), so a cloud change arriving
+  in that window just waited; it now re-lists only the folders that cycle
+  actually changed (2-4s), keeping the real-time event stream free. Local
+  saves also go out sooner (quiet-before-upload 4s → 2s, minimum gap
+  between cycles 10s → 4s) and the size check runs beside the folder
+  re-list instead of after it. Measured on this machine: create locally →
+  in the cloud **8.5s**, create in the cloud → on disk **9.7s**, delete
+  locally → gone from the cloud **7.3s**, delete in the cloud → gone from
+  disk **5.5s** (previously ~8-13s, and ~20-28s when an event collided
+  with the re-walk).
+- New optional knobs: `PROTON_SYNC_DEBOUNCE` (default 2) and
+  `PROTON_SYNC_MIN_GAP` (default 4).
+
 ## 3.13.1 — 2026-10-19
 
 - **Deleting a folder now deletes it in the cloud too.** Removing files
