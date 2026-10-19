@@ -73,10 +73,12 @@ no AUR, no third-party binaries, nothing but this project's own MIT scripts:
 
 That keeps `~/ProtonDrive` in sync with the `/my-files` section of your Drive:
 
-* **local edits upload within seconds** (inotify wakes the sync immediately),
-  remote changes appear within about a minute (a cheap size-peek skips
-  re-listing, bounded by `PROTON_SYNC_PEEK_AGE` so cloud deletions cannot
-  hide behind the server's lagging size signal)
+* **local edits upload within seconds** (inotify wakes the sync immediately);
+  **remote changes appear in ~10 seconds** - the engine follows Proton Drive's
+  own change events (reusing the official CLI's keyring session via a bundled
+  pure-Python D-Bus client) and re-lists only the folder that changed, with
+  the cheap size-peek and `PROTON_SYNC_PEEK_AGE` safety walk still running as
+  backstops
 * **renames and moves are followed, never re-uploaded**: a file you renamed
   or moved is relocated server-side in one call (no bytes transferred) - the
   same technique rclone ships as `--track-renames`; a rename done in the web
@@ -247,12 +249,12 @@ validates.
 Dependencies (all non-root, nothing is installed system-wide):
 
 * `wget` or `curl`, `bash`, `coreutils` — likely already present
-* `python3` **with pip** — only for `pip download` (fetches the PyQt6 wheels;
+* `python3` **with pip** — only for `pip download` (fetches the PyQt6 and jeepney wheels;
   pip never installs anything during the build)
 * `rsvg-convert` (`pacman -S librsvg` / `apt install librsvg2-bin` / `dnf install librsvg2-tools`) — renders the icon
 * `desktop-file-validate` (`desktop-file-utils`) and `appstreamcli` (`appstream`) — optional, used for validation
 
-The desktop bundle (portable CPython + PyQt6/Qt6 wheels) is fetched by
+The desktop bundle (portable CPython + PyQt6/Qt6 and jeepney wheels) is fetched by
 `scripts/fetch-desktop-deps.sh`, checksum-pinned, and cached in CI alongside
 `tools/` and `download/`.
 

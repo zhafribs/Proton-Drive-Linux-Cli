@@ -1,3 +1,21 @@
+## 3.13.0 — 2026-10-19
+
+- **Cloud changes now sync in ~10 seconds instead of a minute or more.**
+  The engine listens to Proton Drive's own change events - using the
+  session the official CLI already keeps in your keyring (nothing new to
+  install, tokens never shown or touched) - and re-checks only the folder
+  that changed instead of re-walking the whole tree. Measured on this
+  machine: a file added on another device appears locally in ~11s, and
+  deleting it remotely removes it locally in ~8s (previously up to two
+  minutes, because Proton's size summary lags behind deletions).
+- **Much less work while idle.** Changes now arrive as events, so the
+  engine just takes a quick peek every 60 seconds and does a full safety
+  walk every 10 minutes instead of walking constantly. Local edits still
+  upload within seconds.
+- **Nothing changes if events are unavailable** (no keyring session,
+  unusual setup): the engine silently falls back to the previous polling
+  behaviour - sync correctness never depends on it.
+
 ## 3.12.5 — 2026-10-19
 
 - **Edited files are no longer silently skipped and never uploaded.** If you

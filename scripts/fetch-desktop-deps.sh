@@ -70,5 +70,9 @@ python3 -m pip download "PyQt6==${PYQT_VERSION}" "PyQt6-Qt6==${PYQT_VERSION}" \
     "PyQt6-sip==${SIP_VERSION}" \
     --only-binary=:all: --python-version 3.12 --implementation cp \
     "${plat_args[@]}" --no-deps -q -d "$OUT/wheels"
+# jeepney (pure-python D-Bus client, py3-none-any): the sync engine's push
+# listener reads the official CLI's session from the OS Secret Service with it
+python3 -m pip download "jeepney==0.9.0" \
+    --only-binary=:all: --no-deps -q -d "$OUT/wheels"
 
 echo "==> desktop bundle ready: $OUT"

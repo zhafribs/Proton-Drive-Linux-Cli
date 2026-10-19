@@ -18,11 +18,30 @@ How it works
    strategies, re-scan, record the new state
 5. in loop mode, inotify (via ctypes - no extra packages) wakes the loop the
    moment something changes locally, so local edits upload within seconds;
-   a cheap server-side size-peek (`fs size`) skips re-listing when nothing
-   changed, and PROTON_SYNC_PEEK_AGE bounds how long that peek may be
-   trusted - Proton's size aggregate can lag 80s+ behind a deletion, so the
-   bound is what keeps cloud-side deletions from hiding (Proton exposes no
-   change-feed API, the same ceiling rclone hits on this provider)
+   cloud changes arrive in ~1s through the real-time push listener (below),
+   while a cheap server-side size-peek (`fs size`) and the
+   PROTON_SYNC_PEEK_AGE/FULL_EVERY walks stay as the correctness backstop -
+   Proton's size aggregate itself can lag 80s+ behind a deletion, so peek-only
+   detection can never be trusted alone (the same ceiling rclone hits)
+
+Real-time push (default on; PROTON_SYNC_PUSH=0 disables it)
+-----------------------------------------------------------
+The official CLI keeps a per-volume event cursor in
+~/.local/share/proton-drive-cli/events.json and re-reads its session from the
+OS Secret Service on every invocation. The engine subscribes to the SAME Proton
+event stream with that session (read via jeepney - pure python, bundled in the
+AppImage, nothing installed on the host), shares the cursor file atomically
+(write-back after every delivered batch; on 400 "Invalid ID" it re-reads what
+the other consumer advanced), and turns each Link event into ONE targeted
+re-list of just the affected folder instead of a full recursive walk:
+
+    cloud-side commit -> event in ~1.0s -> folder re-listed -> transfer
+    (~8s end-to-end, versus 45-120s walking the whole tree)
+
+Events are hints, the snapshot walk is the truth: unknown/unresolvable events,
+push outages, auth failures and rate limits all fall back to the peek cadence,
+and PEEK_AGE/FULL_EVERY still bound how long any change can stay invisible.
+Tokens are handled in memory only and the refresh token is never touched.
 
 Safety defaults
 ---------------
@@ -61,8 +80,10 @@ Environment knobs
   PROTON_DRIVE_BIN       path to the official CLI (default: proton-drive on PATH)
   PROTON_SYNC_LOCAL      local folder           (default ~/ProtonDrive)
   PROTON_SYNC_REMOTE     remote folder          (default /my-files)
-  PROTON_SYNC_INTERVAL   remote poll seconds    (default 300)
+  PROTON_SYNC_INTERVAL   remote poll seconds    (default 60)
   PROTON_SYNC_DELETES    0 = never delete (default 1 = deletions go to trash)
+  PROTON_SYNC_PUSH       0 = disable the real-time cloud event listener
+  PROTON_SYNC_PUSH_POLL  idle poll cap for the event stream (default 2.5)
   PROTON_SYNC_WORKERS    parallel scan calls    (default 12)
   PROTON_SYNC_RETRIES    scan attempts per folder (default 3)
   PROTON_SYNC_SUBFOLDERS comma-separated subfolders to mirror (default all)
@@ -73,7 +94,7 @@ Environment knobs
                         least this often to catch changes a size peek cannot
                         see (renames, same-byte-size edits)
   PROTON_SYNC_PEEK_AGE  max seconds a fingerprint peek may skip walking
-                        (default 120, 0 = trust the peek until FULL_EVERY) -
+                        (default 600, 0 = trust the peek until FULL_EVERY) -
                         Proton's aggregate size signal lags minutes behind a
                         deletion, so the peek alone would hide cloud-side
                         deletes for far too long
@@ -100,6 +121,8 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -137,19 +160,31 @@ def cfg(key: str, default: str = "") -> str:
 BIN = os.environ.get("PROTON_DRIVE_BIN") or shutil.which("proton-drive")
 LOCAL_ROOT = Path(cfg("PROTON_SYNC_LOCAL", str(Path.home() / "ProtonDrive"))).expanduser()
 REMOTE_ROOT = cfg("PROTON_SYNC_REMOTE", "/my-files").rstrip("/") or "/my-files"
-INTERVAL = int(cfg("PROTON_SYNC_INTERVAL", "300"))
+INTERVAL = int(cfg("PROTON_SYNC_INTERVAL", "60"))
 FULL_EVERY = max(60, int(cfg("PROTON_SYNC_FULL_EVERY", "600")))
 # Proton's `fs size` aggregate (the cheap change signal) lags minutes behind a
 # deletion - measured 80s+ still stale while `fs list` was fresh at t+5s. Bound
 # how long a peek may skip walking, or cloud-side deletes would hide for far
 # too long. 0 = trust the peek until FULL_EVERY (old behavior).
-PEEK_AGE = max(0, min(int(cfg("PROTON_SYNC_PEEK_AGE", "120")), FULL_EVERY))
+# With the push listener active this is only a safety net (events carry
+# deletions in ~1s), so the default is generous; without push it bounds the
+# worst-case delete lag (the size signal itself still lags ~80s for deletes).
+PEEK_AGE = max(0, min(int(cfg("PROTON_SYNC_PEEK_AGE", "600")), FULL_EVERY))
 SCAN_WORKERS = int(cfg("PROTON_SYNC_WORKERS", "12"))
 SCAN_RETRIES = int(cfg("PROTON_SYNC_RETRIES", "3"))
 TRANSFER_TIMEOUT = int(cfg("PROTON_SYNC_TIMEOUT", "3600"))
 META_TIMEOUT = int(cfg("PROTON_SYNC_META_TIMEOUT", "120"))
 PROPAGATE_DELETES = cfg("PROTON_SYNC_DELETES", "1") == "1"
 INOTIFY_ENABLED = cfg("PROTON_SYNC_INOTIFY", "1") == "1"
+# real-time cloud->local detection: subscribe to Proton's volume event stream
+# with the official CLI's own session (read from the OS keyring). One event ->
+# one targeted re-list of the affected folder instead of a full tree walk.
+PUSH_ENABLED = cfg("PROTON_SYNC_PUSH", "1") == "1"
+# idle poll cap for the event stream (no server-side long-poll exists; responses
+# return in <1.2s). After an event we poll fast, then back off to this cap.
+PUSH_POLL_MAX = max(0.5, float(cfg("PROTON_SYNC_PUSH_POLL", "2.5")))
+PUSH_QUIET = 0.5        # coalescing window for push events (they are atomic
+                        # server-side commits - no local write settling needed)
 # selective sync: only these remote subfolders are mirrored ("" = everything)
 SUBFOLDERS = [s.strip("/") for s in cfg("PROTON_SYNC_SUBFOLDERS", "").split(",") if s.strip()]
 # comma-separated globs matched against rel path and file name (e.g. "*.tmp,.cache")
@@ -175,6 +210,7 @@ HEALTH_FILE = STATE_DIR / "health.json"
 WAKE_FILE = STATE_DIR / "wake"
 SNAPSHOT_FILE = STATE_DIR / "remote-snapshot.json"
 FORCE_NEXT = False          # manual wake (GUI Sync now / wake file) -> full walk
+PUSH = None                 # PushListener instance (set by loop_forever when live)
 
 # minimum spacing between cycles + how long events must be quiet first
 # (tuned for a Google-Drive-like feel: a local save is on the cloud in ~15s)
@@ -299,14 +335,50 @@ def _list_folder(rpath):
     return rpath, [], last
 
 
-def scan_remote():
-    """Walk REMOTE_ROOT in parallel -> {relpath: {type, mtime, size, uid, doc}} ('' = root)."""
+def _children_nodes(rel, rpath, entries):
+    """Parse one `fs list --json` response into direct-child nodes.
+    Returns [(child_rel, child_rpath, node), ...] with scan_remote's filters
+    (scope, excludes, SKIP_NAME, undecryptable names)."""
+    out = []
+    for e in entries:
+        if "type" not in e:                       # pseudo-sections (/, /trash, ...)
+            continue
+        name = e.get("name", {}).get("value")
+        if not e.get("name", {}).get("ok", True) or not name:
+            log.warning("skipping entry with undecryptable name (uid %s)", e.get("uid", "?"))
+            continue
+        if SKIP_NAME.match(name):
+            continue
+        child_rel = f"{rel}/{name}" if rel else name
+        if excluded(child_rel):
+            continue
+        media = e.get("mediaType") or ""
+        node = {
+            "uid": e.get("uid"),
+            "type": "dir" if e.get("type") == "folder" else "file",
+            "mtime": e.get("modificationTime"),
+            "size": int((e.get("activeRevision") or {}).get("claimedSize") or 0),
+            "doc": media.startswith("application/vnd.proton"),  # Docs/Sheets: not downloadable
+        }
+        if node["type"] == "file" and not allowed_file(child_rel):
+            continue
+        if node["type"] == "dir" and not allowed_dir(child_rel):
+            continue
+        out.append((child_rel, f"{rpath}/{escape(name)}", node))
+    return out
+
+
+def scan_remote(start_rel=None):
+    """Walk from START_REL (default REMOTE_ROOT) in parallel -> {relpath: node}
+    for that subtree only ('' = root). relpaths stay absolute from REMOTE_ROOT
+    so a subtree result merges straight into the cached full snapshot."""
     tree = {}
-    rel_of = {REMOTE_ROOT: ""}
+    start_rpath = remote_path(start_rel) if start_rel else REMOTE_ROOT
+    rel_of = {start_rpath: (start_rel or "")}
     visited = set()
     # each BFS round lists ALL pending folders in parallel; next_dirs accumulates
     # the child folders of the whole round (reset once per round, not per folder!)
-    pending = [REMOTE_ROOT]
+    pending = [start_rpath]
     with ThreadPoolExecutor(max_workers=SCAN_WORKERS) as pool:
         while pending:
             next_dirs = []
@@ -315,36 +387,11 @@ def scan_remote():
                     raise CliError(f"cannot list {rpath}: {err}")
                 visited.add(rpath)
                 rel = rel_of[rpath]
-                for e in entries:
-                    if "type" not in e:                       # pseudo-sections (/, /trash, ...)
-                        continue
-                    name = e.get("name", {}).get("value")
-                    if not e.get("name", {}).get("ok", True) or not name:
-                        log.warning("skipping entry with undecryptable name (uid %s)", e.get("uid", "?"))
-                        continue
-                    if SKIP_NAME.match(name):
-                        continue
-                    child_rel = f"{rel}/{name}" if rel else name
-                    if excluded(child_rel):
-                        continue
-                    media = e.get("mediaType") or ""
-                    node = {
-                        "uid": e.get("uid"),
-                        "type": "dir" if e.get("type") == "folder" else "file",
-                        "mtime": e.get("modificationTime"),
-                        "size": int((e.get("activeRevision") or {}).get("claimedSize") or 0),
-                        "doc": media.startswith("application/vnd.proton"),  # Docs/Sheets: not downloadable
-                    }
-                    if node["type"] == "file" and not allowed_file(child_rel):
-                        continue
-                    if node["type"] == "dir" and not allowed_dir(child_rel):
-                        continue
+                for child_rel, child_rpath, node in _children_nodes(rel, rpath, entries):
                     tree[child_rel] = node
-                    if node["type"] == "dir":
-                        child_rpath = f"{rpath}/{escape(name)}"
-                        if child_rpath not in visited:
-                            rel_of[child_rpath] = child_rel
-                            next_dirs.append(child_rpath)
+                    if node["type"] == "dir" and child_rpath not in visited:
+                        rel_of[child_rpath] = child_rel
+                        next_dirs.append(child_rpath)
             pending = next_dirs   # next BFS round lists all of these in parallel
     return tree
 
@@ -1008,9 +1055,354 @@ def save_snapshot(tree, fp):
         log.debug("snapshot save failed", exc_info=True)
 
 
+# ------------------------------------------------------------------ push events
+#
+# Real-time cloud->local detection. The official CLI keeps a per-volume event
+# cursor in ~/.local/share/proton-drive-cli/events.json and re-consumes the
+# stream on every invocation; we subscribe to the SAME stream with the CLI's
+# own session (read from the OS Secret Service - jeepney is pure python and
+# bundled, so no host packages are needed) and share the cursor file so both
+# consumers stay on one chain:
+#   * after every delivered batch we advance the cursor on disk (atomic replace)
+#   * on 400 "Invalid ID" we re-read the cursor (someone else consumed a link
+#     first) and retry
+# A Link event names the changed node (LinkID) and its folder (ParentLinkID);
+# ids map to snapshot entries as "<volumeId>~<LinkID>". Measured: server-side
+# commit -> event delivered in ~1.0s; the engine then re-lists ONLY the
+# affected folder instead of walking the whole tree.
+
+PUSH_EVENTS_FILE = (Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share")))
+                    / "proton-drive-cli" / "events.json")
+PUSH_SECRET_LABEL = "ch.proton.drive/drive-sdk-cli/auth-session"
+PUSH_API = "https://drive-api.proton.me"
+
+
+def read_cli_session():
+    """The official CLI's auth session from the OS Secret Service.
+
+    Returns {"accessToken","uid"} or None - never fatal: without it the
+    engine simply keeps polling as before. Tokens are handled in memory only.
+    """
+    try:
+        from jeepney import DBusAddress, new_method_call
+        from jeepney.io.blocking import open_dbus_connection
+    except ImportError:
+        log.info("push: jeepney not bundled - interval polling only")
+        return None
+    conn = None
+    try:
+        def addr(path, interface):
+            return DBusAddress(path, bus_name="org.freedesktop.secrets",
+                               interface=interface)
+
+        def call(a, member, signature, body):
+            reply = conn.send_and_get_reply(new_method_call(a, member, signature, body))
+            if reply.header.message_type.name == "error":
+                raise RuntimeError(f"{member}: {reply.body}")
+            return reply.body
+
+        conn = open_dbus_connection()
+        paths, _ = call(addr("/org/freedesktop/secrets", "org.freedesktop.Secret.Service"),
+                        "SearchItems", "a{ss}", ({},))
+        item = None
+        for p in paths:
+            label = call(addr(p, "org.freedesktop.DBus.Properties"), "Get", "ss",
+                         ("org.freedesktop.Secret.Item", "Label"))[0]
+            if isinstance(label, tuple):
+                label = label[1]
+            label = str(label)
+            if label == PUSH_SECRET_LABEL or ("proton" in label
+                                              and label.endswith("/auth-session")):
+                item = p
+                break
+        if not item:
+            log.info("push: official CLI session not found in the keyring")
+            return None
+        out = call(addr("/org/freedesktop/secrets", "org.freedesktop.Secret.Service"),
+                   "OpenSession", "sv", ("plain", ("s", "")))
+        raw = bytes(call(addr(item, "org.freedesktop.Secret.Item"), "GetSecret", "o",
+                         (out[1],))[0][2])
+        wrapper = json.loads(raw)
+        inner = wrapper.get("session") or {}
+        if isinstance(inner, str):
+            inner = json.loads(inner)
+        return {"accessToken": inner.get("accessToken"), "uid": inner.get("uid")}
+    except Exception as e:  # noqa: BLE001 - push must never take the engine down
+        log.info("push: keyring read failed (%s)", e)
+        return None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def push_cursor_read(volume_id):
+    try:
+        data = json.loads(PUSH_EVENTS_FILE.read_text(encoding="utf-8"))
+        return data["drive"][volume_id]["lastEventId"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def push_cursor_write(volume_id, cid):
+    """Merge our advanced cursor into the CLI's events.json (atomic replace) so
+    the CLI continues the same chain instead of hitting "Invalid ID"."""
+    try:
+        data = json.loads(PUSH_EVENTS_FILE.read_text(encoding="utf-8"))
+        data.setdefault("drive", {}).setdefault(volume_id, {})["lastEventId"] = cid
+        tmp = PUSH_EVENTS_FILE.with_name("events.json.tmp")
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        os.replace(tmp, PUSH_EVENTS_FILE)
+        return True
+    except Exception:  # noqa: BLE001 - a lost race just costs a re-read later
+        log.debug("push: cursor write-back failed", exc_info=True)
+        return False
+
+
+class PushListener(threading.Thread):
+    """Long-lived subscriber for one Drive volume's event stream.
+
+    Every Link event records the changed node's PARENT folder id; the main
+    loop drains those into one targeted re-list (resolve_push_scopes +
+    apply_scope) instead of a full recursive walk. Startup problems raise in
+    __init__ - the caller logs it and degrades to plain interval polling.
+    """
+
+    def __init__(self, trigger):
+        super().__init__(name="push", daemon=True)
+        self.trigger = trigger                 # shared Event: wake the main loop
+        self._lock = threading.Lock()
+        self.pending = set()                   # bare parent LinkIDs awaiting refresh
+        self._stop = False
+        info = cli(["fs", "info", REMOTE_ROOT, "--json"], as_json=True, timeout=META_TIMEOUT)
+        uid = info.get("uid") or ""
+        if "~" not in uid:
+            raise RuntimeError("cannot resolve remote root uid")
+        self.root_uid = uid
+        self.volume_id = info.get("treeEventScopeId") or uid.split("~", 1)[0]
+        self.cursor = push_cursor_read(self.volume_id)
+        if not self.cursor:
+            raise RuntimeError(f"no event cursor for volume {self.volume_id}")
+        self.session = read_cli_session()
+        if not (self.session and self.session.get("accessToken")):
+            raise RuntimeError("no CLI session in keyring")
+        log.info("push: subscribed to volume %s", self.volume_id)
+
+    def drain(self):
+        with self._lock:
+            got, self.pending = self.pending, set()
+        return got
+
+    @staticmethod
+    def _get(url, token, uid):
+        req = urllib.request.Request(url, headers={
+            "Authorization": f"Bearer {token}",
+            "x-pm-uid": str(uid or ""),
+            "x-pm-appversion": "Other",
+            "Accept": "application/json",
+            "User-Agent": "proton-drive-sync",
+        })
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.read()
+
+    def _record(self, events):
+        parents = {(ev.get("Link") or {}).get("ParentLinkID")
+                   for ev in events if isinstance(ev, dict)}
+        parents = {p for p in parents if p}
+        if parents:
+            with self._lock:
+                self.pending |= parents
+            self.trigger.set()
+
+    def run(self):
+        delay = 0.4            # fast after activity, grows to PUSH_POLL_MAX when idle
+        auth_fails = 0         # consecutive 401s: > 6 means the session is gone
+        stale_cursor = 0       # consecutive 400s with an unchanged disk cursor
+        sess_check = time.time()
+        while not self._stop:
+            # the CLI rotates its access token - pick up the refreshed one cheaply
+            if time.time() - sess_check > 60:
+                fresh = read_cli_session()
+                if fresh and fresh.get("accessToken"):
+                    self.session = fresh
+                sess_check = time.time()
+            url = (f"{PUSH_API}/drive/v2/volumes/{self.volume_id}/events/{self.cursor}")
+            t0 = time.time()
+            try:
+                body = self._get(url, self.session.get("accessToken"),
+                                 self.session.get("uid"))
+            except urllib.error.HTTPError as e:
+                if e.code == 400:
+                    disk = push_cursor_read(self.volume_id)
+                    if disk and disk != self.cursor:
+                        log.info("push: cursor consumed elsewhere - re-adopting")
+                        self.cursor = disk
+                        delay, stale_cursor = 0.4, 0
+                    else:
+                        stale_cursor += 1
+                        delay = min(max(delay, 0.8) * 2, 30)
+                        if stale_cursor == 10:
+                            log.warning("push: cursor rejected repeatedly - "
+                                        "waiting for the CLI to refresh it")
+                        elif stale_cursor and stale_cursor % 30 == 0:
+                            time.sleep(30)   # long idle, the CLI's next run rewrites it
+                elif e.code == 401:
+                    auth_fails += 1
+                    fresh = read_cli_session()
+                    if fresh:
+                        self.session = fresh
+                        auth_fails = 0
+                    delay = min(delay * 2, 15)
+                    if auth_fails >= 6:
+                        log.error("push: session rejected repeatedly - push disabled "
+                                  "(interval polling continues)")
+                        return
+                elif e.code == 429:
+                    delay = min(max(delay, 5) * 2, 120)
+                    log.warning("push: rate limited - backing off %.0fs", delay)
+                else:
+                    delay = min(delay * 2, 30)
+            except Exception as e:  # noqa: BLE001 - network hiccups are normal
+                delay = min(delay * 2, 30)
+                log.debug("push: %s: %s (backoff %.1fs)", type(e).__name__, e, delay)
+            else:
+                try:
+                    data = json.loads(body)
+                except json.JSONDecodeError:
+                    data = {}
+                events = data.get("Events") or []
+                if events:
+                    self._record(events)
+                    log.info("push: %d event(s) received", len(events))
+                    delay = 0.4
+                else:
+                    delay = min(delay * 1.6, PUSH_POLL_MAX)
+                next_id = data.get("EventID")
+                if isinstance(next_id, str) and next_id and next_id != self.cursor:
+                    self.cursor = next_id
+                    push_cursor_write(self.volume_id, next_id)
+                    delay = 0.4
+                delay = max(delay, time.time() - t0)   # responses already cost ~1s
+            time.sleep(delay)
+
+    def stop(self):
+        self._stop = True
+
+
+def resolve_push_scopes(pending, tree, volume_id, root_uid):
+    """Parent LinkIDs from events -> snapshot rel paths to re-list.
+
+    Unknown parents are skipped on purpose: they are either outside the
+    synced subtree (no-op for us) or a folder chain not observed yet - the
+    parent's own refresh event picks it up, and peek/PEEK_AGE backstop the
+    rare race. Returns (sorted rels, unknown count)."""
+    if not pending:
+        return [], 0
+    index = {node["uid"]: rel for rel, node in tree.items() if node.get("uid")}
+    root_lid = root_uid.split("~", 1)[1]
+    rels, unknown = set(), 0
+    for lid in pending:
+        if lid == root_lid:
+            rels.add("")                     # volume root: not scopable
+        else:
+            rel = index.get(f"{volume_id}~{lid}")
+            if rel:
+                rels.add(rel)
+            else:
+                unknown += 1
+    return sorted(rels), unknown
+
+
+def apply_scope(remote, rel):
+    """Refresh REL's DIRECT children inside the cached REMOTE view (in place).
+
+    A volume event names the changed node's immediate parent, and a deeper
+    change arrives as its own event - so ONE `fs list` of REL is enough;
+    only children new to the snapshot get descended (a folder that just
+    appeared may already carry a subtree, e.g. a move).
+
+    Raises CliError on transient failures so the caller falls back to a full
+    walk - a partial refresh must never leave the snapshot silently
+    inconsistent. A definitively vanished target drops its subtree
+    (plan_cycle then trash-deletes locally, like any cloud deletion)."""
+    if not rel:
+        raise CliError("root refresh must run as a full walk")
+    rpath = remote_path(rel)
+    _, entries, err = _list_folder(rpath)
+    if err is not None:
+        if re.search(r"not found|404|no such", str(err), re.I):
+            for k in [k for k in remote if k == rel or k.startswith(rel + "/")]:
+                del remote[k]
+            log.info("push: %s vanished - dropped from snapshot", rel)
+            return "dropped"
+        raise CliError(f"cannot list {rpath}: {err}")
+
+    prefix = rel + "/"
+    fresh = {}                                   # child name -> (child_rel, child_rpath, node)
+    for child_rel, child_rpath, node in _children_nodes(rel, rpath, entries):
+        fresh[child_rel.rsplit("/", 1)[-1]] = (child_rel, child_rpath, node)
+    old = {}                                     # direct child name -> snapshot key
+    for k in remote:
+        if k.startswith(prefix) and "/" not in k[len(prefix):]:
+            old[k[len(prefix):]] = k
+    fresh_uids = {t[2].get("uid") for t in fresh.values() if t[2].get("uid")}
+    old_by_uid = {remote[rk].get("uid"): name for name, rk in old.items()
+                  if remote[rk].get("uid")}
+
+    descend, dropped, renamed = [], 0, 0
+    vanished_new = set()                          # new dirs that vanished mid-descend
+    for name, (child_rel, child_rpath, node) in fresh.items():
+        rk = prefix + name
+        uid = node.get("uid")
+        prev_name = old_by_uid.get(uid) if uid else None
+        if prev_name == name:
+            remote[rk] = node                     # same link: adopt new mtime/size
+        elif prev_name is not None:               # renamed: rebase the subtree keys
+            old_rk = prefix + prev_name
+            for k in [k for k in remote if k == old_rk or k.startswith(old_rk + "/")]:
+                remote[prefix + name + k[len(old_rk):]] = remote.pop(k)
+            remote[rk] = node
+            renamed += 1
+        else:
+            if rk in remote:                      # same name, new link (recreated)
+                for k in [k for k in remote if k == rk or k.startswith(rk + "/")]:
+                    del remote[k]
+                dropped += 1
+            remote[rk] = node
+            if node["type"] == "dir":
+                descend.append(child_rel)
+    for name, rk in old.items():                  # vanished children
+        if rk in remote and remote[rk].get("uid") not in fresh_uids:
+            for k in [k for k in remote if k == rk or k.startswith(rk + "/")]:
+                del remote[k]
+            dropped += 1
+    for child_rel in descend:
+        try:
+            remote.update(scan_remote(child_rel))
+        except CliError as e:
+            m = str(e)
+            if m.startswith(f"cannot list {remote_path(child_rel)}:") and \
+                    re.search(r"not found|404|no such", m, re.I):
+                remote.pop(child_rel, None)       # vanished again in the meantime
+                vanished_new.add(child_rel.rsplit("/", 1)[-1])
+            else:
+                raise                             # transient -> full walk fallback
+    # defensive: a pathological merge (two simultaneous renames swapping names
+    # in one listing) must never leave a fresh child unrepresented - bail out
+    # to a full walk instead of shipping a wrong snapshot
+    for name in fresh:
+        if name not in vanished_new and prefix + name not in remote:
+            raise CliError(f"scope merge incomplete for {rpath} - full walk required")
+    log.info("push: refreshed %s (%d children, %d new subtree(s), %d dropped, %d renamed)",
+             rel, len(fresh), len(descend), dropped, renamed)
+    return "updated"
+
+
 # ------------------------------------------------------------------ one cycle
 
-def run_once(dry_run=False, force_full=False):
+def run_once(dry_run=False, force_full=False, push_pending=None):
     LOCAL_ROOT.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     if not dry_run:
@@ -1018,30 +1410,71 @@ def run_once(dry_run=False, force_full=False):
                      started=datetime.datetime.now().astimezone().isoformat(timespec="seconds"))
     log.info("scan: remote %s + local %s", REMOTE_ROOT, LOCAL_ROOT)
 
-    # smart cadence: a ~2.5s fingerprint peek decides if a full walk is needed
+    # smart cadence: push events decide first (targeted re-list of one folder),
+    # otherwise a ~2.5s fingerprint peek decides if a full walk is needed
     mode = "full"
     snap = fp = None
+    scoped = None
     if not (dry_run or force_full):
         snap = load_snapshot()
-        fp = remote_fingerprint()
-        if fp is None:
-            log.info("fingerprint unavailable - full walk")
-        elif snap is None:
-            log.info("no usable snapshot - full walk")
-        elif fp != snap.get("fp"):
-            log.info("peek: cloud changed - full walk")
-        elif PEEK_AGE and time.time() - float(snap.get("ts") or 0) > PEEK_AGE:
-            log.info("peek stale (> %ds) - full walk (cloud deletes hide behind the lagging size signal)",
-                     PEEK_AGE)
-        elif time.time() - float(snap.get("ts") or 0) > FULL_EVERY:
-            log.info("safety walk due (> %ds)", FULL_EVERY)
-        else:
-            mode = "keep"
+        push_handled = False
+        if snap is not None and push_pending and PUSH is not None:
+            rels, unknown = resolve_push_scopes(push_pending, snapshot_tree(snap),
+                                                PUSH.volume_id, PUSH.root_uid)
+            if unknown:
+                log.debug("push: %d event(s) unresolvable in snapshot", unknown)
+            if "" in rels:
+                log.info("push: change at the volume root - falling back to a full walk")
+            elif rels:
+                log.info("push: %d folder change(s) in scope: %s",
+                         len(push_pending), ", ".join(rels[:5]) + ("..." if len(rels) > 5 else ""))
+                mode, scoped, push_handled = "scope", rels, True
+            else:
+                # every event's parent is outside the snapshot - typically
+                # out-of-scope cloud activity (phone uploads at the volume root,
+                # other folders): adopt the fresh fingerprint so it stops
+                # scheduling wasted scope walks. The one alternative - an
+                # in-scope parent not observed yet (new folder chain race, see
+                # resolve_push_scopes) - stays bounded by the PEEK_AGE walk.
+                fp = remote_fingerprint()
+                if fp is not None:
+                    save_snapshot(snapshot_tree(snap), fp)
+                log.info("push: %d event(s) outside the synced scope - adopted", len(push_pending))
+                mode, push_handled = "keep", True
+        if not push_handled:
+            fp = remote_fingerprint()
+            if fp is None:
+                log.info("fingerprint unavailable - full walk")
+            elif snap is None:
+                log.info("no usable snapshot - full walk")
+            elif fp != snap.get("fp"):
+                log.info("peek: cloud changed - full walk")
+            elif PEEK_AGE and time.time() - float(snap.get("ts") or 0) > PEEK_AGE:
+                log.info("peek stale (> %ds) - full walk (cloud deletes hide behind the lagging size signal)",
+                         PEEK_AGE)
+            elif time.time() - float(snap.get("ts") or 0) > FULL_EVERY:
+                log.info("safety walk due (> %ds)", FULL_EVERY)
+            else:
+                mode = "keep"
 
     if mode == "keep":
         remote = snapshot_tree(snap)
         log.debug("peek: cloud unchanged - reusing snapshot (%d entries)", len(remote))
-    else:
+    elif mode == "scope":
+        remote = snapshot_tree(snap)
+        try:
+            for rel in scoped:
+                apply_scope(remote, rel)
+        except CliError as e:
+            log.info("push: scoped refresh failed (%s) - full walk instead", str(e)[:140])
+            mode = "full"
+        else:
+            fp_after = remote_fingerprint()
+            if fp_after is not None:
+                save_snapshot(remote, fp_after)
+            else:
+                log.info("push: fingerprint unavailable - snapshot left for the next peek")
+    if mode == "full":
         remote = scan_remote()
         fp_after = remote_fingerprint()
         if fp_after is None and fp is not None:
@@ -1170,7 +1603,7 @@ class InotifyWatcher(threading.Thread):
 # ------------------------------------------------------------------------ main
 
 def loop_forever():
-    global FORCE_NEXT
+    global FORCE_NEXT, PUSH
     wake = threading.Event()
     if INOTIFY_ENABLED:
         try:
@@ -1181,38 +1614,64 @@ def loop_forever():
     else:
         log.info("inotify disabled - polling every %ds", INTERVAL)
 
+    if PUSH_ENABLED:
+        try:
+            PUSH = PushListener(wake)
+            PUSH.start()
+            log.info("push listener active (cloud changes detected in ~1s)")
+        except Exception as e:  # noqa: BLE001 - degraded mode must keep running
+            PUSH = None
+            log.info("push unavailable (%s) - falling back to %ds interval polling", e, INTERVAL)
+    else:
+        log.info("push disabled (PROTON_SYNC_PUSH=0) - %ds interval polling", INTERVAL)
+
+    def drain_push():
+        return PUSH.drain() if PUSH is not None else set()
+
+    push_pending = None
     while True:
         started = time.time()
         force = FORCE_NEXT
         FORCE_NEXT = False
         try:
-            run_once(force_full=force)
+            run_once(force_full=force, push_pending=push_pending)
         except CliError as e:
             log.error("cycle failed: %s (next try in %ds)", e, INTERVAL)
             write_health(status="error", error=str(e)[:300], interval=INTERVAL)
         except Exception as e:  # noqa: BLE001 - keep the loop alive, report it
             log.exception("cycle crashed (next try in %ds)", INTERVAL)
             write_health(status="error", error=str(e)[:300], interval=INTERVAL)
+        push_pending = None   # events are hints; peek/PEEK_AGE are the backstop
         wake.clear()
 
-        # sleep until the interval expires, a local change, or a wake request
+        # sleep until the interval expires, a local change, or a push event
         deadline = time.time() + INTERVAL
         write_health(next_poll=datetime.datetime.fromtimestamp(deadline)
                      .astimezone().isoformat(timespec="seconds"), interval=INTERVAL)
         while time.time() < deadline:
-            triggered = wake.wait(timeout=1)
+            more = drain_push()
+            if more:
+                push_pending = (push_pending or set()) | more
+                log.info("push: %d folder change event(s) queued", len(more))
+            triggered = bool(more) or wake.wait(timeout=1)
             if WAKE_FILE.exists():
                 WAKE_FILE.unlink(missing_ok=True)
                 log.info("manual sync requested (wake)")
                 FORCE_NEXT = True
+                push_pending = None     # manual wake runs a full walk anyway
                 triggered = True
             if triggered:
-                # debounce: wait until events stop for a while, respect min spacing
-                quiet = time.time() + DEBOUNCE_QUIET
+                # debounce: local writes need settling time; push events are
+                # atomic server-side commits and coalesce much faster
+                quiet = time.time() + (PUSH_QUIET if push_pending else DEBOUNCE_QUIET)
                 while time.time() < quiet:
                     wake.clear()
-                    if wake.wait(timeout=2):
+                    if wake.wait(timeout=0.5):
                         quiet = time.time() + DEBOUNCE_QUIET
+                    more = drain_push()
+                    if more:
+                        push_pending = (push_pending or set()) | more
+                        quiet = time.time() + PUSH_QUIET
                 gap = MIN_CYCLE_GAP - (time.time() - started)
                 if gap > 0:
                     time.sleep(gap)

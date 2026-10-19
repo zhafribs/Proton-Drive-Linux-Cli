@@ -81,6 +81,11 @@ loads); the licence texts ship inside every AppImage under
 * **PyQt6-sip 13.13** — *Owner: Riverbank Computing Ltd*. Licence:
   **GPL-3.0-only or commercial** (terms travel inside the wheel's
   `pyqt6_sip-*.dist-info/`); same distribution terms as PyQt6 above.
+* **jeepney 0.9.0** (from the `jeepney` wheel) — *Owner: Thomas Kluyver and
+  contributors*. Licence: **MIT** (terms travel inside the wheel's
+  `jeepney-0.9.0.dist-info/`). Pure-Python D-Bus client; the sync engine's
+  real-time listener uses it to read the official CLI's session from the OS
+  Secret Service - which is what keeps that feature free of any host package.
 * Downloaded by `scripts/fetch-desktop-deps.sh` for **both** architectures
   (x86_64 wheels require glibc ≥ 2.34, aarch64 wheels ≥ 2.39), never
   executed at build time, never modified: wheels are extracted verbatim into
