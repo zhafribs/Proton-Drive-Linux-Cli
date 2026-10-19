@@ -1,3 +1,14 @@
+## 3.13.1 — 2026-10-19
+
+- **Deleting a folder now deletes it in the cloud too.** Removing files
+  locally already propagated, but folders were silently kept on the server
+  forever (a folder has no saved local fingerprint to compare against), so
+  an empty folder you trashed would linger in Drive and the two sides
+  drifted apart with no error anywhere. Folder deletions now reach cloud
+  trash (recoverable), a folder re-created in the cloud is downloaded
+  instead of trashed, and its contents ride along with it rather than
+  erroring one by one.
+
 ## 3.13.0 — 2026-10-19
 
 - **Cloud changes now sync in ~10 seconds instead of a minute or more.**

@@ -635,9 +635,12 @@ def plan_cycle(remote, local, state):
                   "holding deletions this cycle",
                   "local" if local_dead else "cloud")
 
+    trashed = set()                                     # folders sent to cloud trash this cycle
     for rel in sorted(set(remote) | set(local), key=lambda p: (p.count("/"), p)):
         if rel in moved:
             continue
+        if trashed and any(rel.startswith(p + "/") for p in trashed):
+            continue                                    # child rides along inside its trashed folder
         r, l, s = remote.get(rel), local.get(rel), state.get(rel)
 
         if r and r.get("doc"):                          # Proton Doc/Sheet: CLI cannot download
@@ -649,6 +652,17 @@ def plan_cycle(remote, local, state):
         if r and not l:
             if s is None:                               # never seen -> new remotely
                 actions.append(("dl", rel, r))
+            elif (r["type"] == "dir" and s.get("r_uid") == r.get("uid")
+                  and PROPAGATE_DELETES and not local_dead):
+                # folders carry no local fingerprint (state only remembers
+                # their cloud identity), but a record with THIS uid proves
+                # the folder was mirrored here before: cloud copy present +
+                # folder gone locally = the user deleted it -> propagate to
+                # cloud trash (recoverable). A folder re-created in the cloud
+                # carries a different uid and falls through to the mirror-down
+                # below; a wiped local tree is held by local_dead above.
+                actions.append(("trash_remote", rel, r))
+                trashed.add(rel)
             elif PROPAGATE_DELETES and not local_dead and s.get("l_mtime_ns") is not None:
                 actions.append(("trash_remote", rel, r))    # deleted locally, deletes on
             elif remote_changed(r, s):
