@@ -100,11 +100,12 @@ pub fn status_text(status: UiStatus) -> (&'static str, &'static str) {
 pub fn synced_line(h: &Health) -> String {
     let last = rel_time(h.ts_dt());
     // Prefer the engine's own next_poll timestamp; fall back to the interval.
+    // A stale/past next_poll clamps to 0 rather than panicking.
     let nxt = h
         .next_poll_dt()
         .map(|dt| {
             let secs = (dt - chrono::Utc::now().fixed_offset()).num_seconds();
-            secs.clamp(0, u64::MAX as i64) as u64
+            secs.max(0) as u64
         })
         .or(h.interval);
     match (last.is_empty(), nxt) {

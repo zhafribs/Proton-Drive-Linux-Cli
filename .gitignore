@@ -17,3 +17,6 @@ squashfs-root/
 
 # python bytecode (proton-sync.py)
 __pycache__/
+
+# Rust build artifacts
+gui/target/

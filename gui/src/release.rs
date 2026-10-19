@@ -6,12 +6,14 @@ use crate::paths::{Paths, RELEASE_API};
 use serde_json::Value;
 use std::time::Duration;
 
+#[derive(Clone, Debug)]
 pub struct Asset {
     pub name: String,
     pub url: String,
     pub size: u64,
 }
 
+#[derive(Clone, Debug)]
 pub struct Release {
     pub tag: String,
     /// ("0.9.0", "3.14.0") from a `v0.9.0-gui3.14.0` tag.

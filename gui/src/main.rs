@@ -17,6 +17,7 @@ mod prefs;
 mod release;
 mod service;
 mod theme;
+mod tray;
 mod ui;
 mod util;
 
@@ -72,6 +73,28 @@ fn main() -> eframe::Result<()> {
     }
 
     let prefs = prefs::Prefs::load(&p.prefs_file);
+
+    // Wayland compositors cannot hide, focus, or un-minimize a window
+    // client-side (winit no-ops all three on Wayland), which would break
+    // close-to-tray; the Qt app could do it because QWindow::hide() unmaps
+    // the surface. When XWayland is available, put the window on X11, where
+    // hide/show/focus/minimize behave exactly like they did under Qt.
+    // PROTON_SYNC_WAYLAND=1 opts back into native Wayland (e.g. for crisp
+    // HiDPI) at the cost of window hiding.
+    let saved_wayland = {
+        let wl = std::env::var_os("WAYLAND_DISPLAY");
+        let force_wayland = std::env::var_os("PROTON_SYNC_WAYLAND").is_some();
+        if wl.is_some() && !force_wayland && std::env::var_os("DISPLAY").is_some() {
+            // SAFETY: still single-threaded - nothing else can be reading the
+            // environment during this call; ui::App::new restores the variable
+            // once the window exists.
+            unsafe { std::env::remove_var("WAYLAND_DISPLAY") };
+            wl
+        } else {
+            None
+        }
+    };
+
     let icon = ui::decode_png(include_bytes!("icon-256.png")).map(|(w, h, rgba)| {
         egui::IconData { rgba, width: w as u32, height: h as u32 }
     });
@@ -79,7 +102,9 @@ fn main() -> eframe::Result<()> {
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_title("Proton Drive")
         .with_inner_size([prefs.window_w as f32, prefs.window_h as f32])
-        .with_min_inner_size([920.0, 540.0]);
+        .with_min_inner_size([920.0, 540.0])
+        // Start quietly in the tray without a window flash (honored on X11).
+        .with_visible(!prefs.start_in_tray());
     if let Some(ic) = icon {
         viewport = viewport.with_icon(ic);
     }
@@ -92,7 +117,7 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Proton Drive",
         options,
-        Box::new(move |cc| ui::App::new(cc, lock)),
+        Box::new(move |cc| ui::App::new(cc, lock, saved_wayland)),
     )
 }
 

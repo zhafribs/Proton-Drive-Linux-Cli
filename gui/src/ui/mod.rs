@@ -9,7 +9,7 @@ pub mod home;
 pub mod settings;
 pub mod widgets;
 
-use crate::{cli, conf, health, journal, notify, paths::Paths, prefs, release, service, theme};
+use crate::{cli, conf, health, journal, notify, paths::Paths, prefs, release, service, theme, tray};
 use eframe::egui;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -26,6 +26,7 @@ pub enum Page {
 }
 
 /// Messages from the poller/worker threads to the UI.
+#[derive(Clone)]
 pub enum Back {
     Poll { health: health::Health, active: bool, enabled: bool },
     Journal(Vec<String>),
@@ -40,6 +41,14 @@ pub enum Back {
     SelFolders { parent: String, folders: Vec<(String, String)> },
     /// Whether the sync unit is enabled at login (slow systemctl call).
     UnitEnabled(bool),
+    /// Tray menu/activation actions (sent from the ksni service thread).
+    TrayToggle,
+    TrayQuit,
+    TraySyncNow,
+    TrayOpenFolder,
+    TrayOpenPath(String),
+    TrayPause(Option<u64>),
+    TrayResume,
 }
 
 #[derive(Clone, Debug)]
@@ -107,6 +116,10 @@ pub struct App {
     pub quitting: bool,
     pub style_dirty: bool,
     pub icon_tex: Option<egui::TextureHandle>,
+    /// The system tray (None when the desktop has no tray host).
+    pub tray: Option<ksni::blocking::Handle<tray::AppTray>>,
+    /// Running on the Wayland backend (no working client-side hide).
+    pub wayland_fallback: bool,
 }
 
 /// "ProtonDrive" or "~/stuff" -> absolute path (the GUI only deals in
@@ -187,7 +200,21 @@ impl App {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         lock: std::fs::File,
+        saved_wayland: Option<std::ffi::OsString>,
     ) -> Result<Box<dyn eframe::App>, Box<dyn std::error::Error + Send + Sync>> {
+        // Window already created on the X11/XWayland backend when we removed
+        // WAYLAND_DISPLAY in main() - restore the session env so child
+        // processes (the login terminal, xdg-open) see it again. Pure-Wayland
+        // sessions (no XWayland) keep the Wayland backend: hiding then falls
+        // back to compositor minimize, which not all compositors honor.
+        let wayland_fallback =
+            saved_wayland.is_none() && std::env::var_os("WAYLAND_DISPLAY").is_some();
+        if let Some(wl) = saved_wayland {
+            // SAFETY: the window exists and no thread spawned so far reads
+            // WAYLAND_DISPLAY; later readers are child processes, which get
+            // the restored session value.
+            unsafe { std::env::set_var("WAYLAND_DISPLAY", wl) };
+        }
         let paths = crate::paths::resolve();
         let _ = std::fs::create_dir_all(&paths.state_dir);
         let prefs = prefs::Prefs::load(&paths.prefs_file);
@@ -239,13 +266,22 @@ impl App {
             });
         }
 
-        let icon_tex = decode_png(include_bytes!("../icon-64.png")).map(|(w, h, px)| {
-            cc.egui_ctx.load_texture(
+        // Decode the app icon once: sidebar texture + tray base.
+        let (icon_rgba, icon_w) = decode_png(include_bytes!("../icon-64.png"))
+            .map(|(w, _h, px)| (px, w))
+            .unwrap_or_else(|| (Vec::new(), 0));
+        let icon_tex = if icon_rgba.is_empty() {
+            None
+        } else {
+            Some(cc.egui_ctx.load_texture(
                 "app-icon",
-                egui::ColorImage::from_rgba_unmultiplied([w, h], &px),
+                egui::ColorImage::from_rgba_unmultiplied([icon_w, icon_w], &icon_rgba),
                 egui::TextureOptions::LINEAR,
-            )
-        });
+            ))
+        };
+
+        // System tray (Qt built it whenever a tray host existed).
+        let tray = tray::spawn(tx.clone(), icon_rgba, icon_w);
 
         Ok(Box::new(App {
             hide_on_start: prefs.start_in_tray(),
@@ -279,6 +315,8 @@ impl App {
             quitting: false,
             style_dirty: false,
             icon_tex,
+            tray,
+            wayland_fallback,
         }))
     }
 
@@ -288,14 +326,10 @@ impl App {
         health::map_status(self.active, &self.health.status).key()
     }
 
+    /// Qt put the STATUS_TEXT title on the side status label and the tray
+    /// tooltip ("You're up to date", not a short chip).
     pub fn side_label(&self) -> &'static str {
-        match self.status_key() {
-            "synced" => "Synced",
-            "syncing" => "Syncing",
-            "paused" => "Paused",
-            "error" => "Error",
-            _ => "Checking...",
-        }
+        health::status_text(health::map_status(self.active, &self.health.status)).0
     }
 
     pub fn logged_in(&self) -> bool {
@@ -338,6 +372,33 @@ impl App {
                 .stderr(std::process::Stdio::null())
                 .spawn();
         });
+    }
+
+    /// Qt `_open_sync_path`: open a change's parent folder (falling back to
+    /// the sync root when the target is gone).
+    pub fn action_open_sync_path(&self, rel: &str) {
+        let root = expand_user(self.conf.get("PROTON_SYNC_LOCAL").map(String::as_str).unwrap_or(""));
+        let rel = rel.trim_matches('/');
+        let target = if rel.is_empty() { root.clone() } else { root.join(rel) };
+        let dir = if target.is_dir() { target } else { root };
+        std::thread::spawn(move || {
+            let _ = std::process::Command::new("xdg-open")
+                .arg(&dir)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+        });
+    }
+
+    /// Push status/tooltip/menu state to the tray (Qt refreshed the icon,
+    /// tooltip and action enablement on every status refresh).
+    fn tray_sync(&self) {
+        let Some(handle) = &self.tray else { return };
+        let status_key = self.status_key().to_string();
+        let title = self.side_label().to_string();
+        let active = self.active;
+        let recent = tray::recent_labels(&self.changes);
+        handle.update(move |t| t.apply(status_key, title, active, recent));
     }
 
     pub fn action_login(&mut self) {
@@ -466,8 +527,12 @@ impl App {
             match back {
                 Back::Poll { health, active, enabled } => {
                     self.on_poll(health, active, enabled);
+                    self.tray_sync();
                 }
-                Back::Journal(lines) => self.on_journal(lines),
+                Back::Journal(lines) => {
+                    self.on_journal(lines);
+                    self.tray_sync();
+                }
                 Back::Identity(id) => {
                     self.identity = Some(id);
                 }
@@ -476,6 +541,7 @@ impl App {
                 }
                 Back::ShowWindow => {
                     self.hidden = false;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
@@ -495,6 +561,24 @@ impl App {
                     }
                 }
                 Back::UnitEnabled(b) => self.draft.autostart = b,
+                Back::TrayToggle => {
+                    let minimized =
+                        ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+                    if self.hidden || minimized {
+                        self.hidden = false;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    } else {
+                        self.hide_to_tray(ctx);
+                    }
+                }
+                Back::TrayQuit => self.quit(ctx),
+                Back::TraySyncNow => self.action_sync_now(),
+                Back::TrayOpenFolder => self.action_open_folder(),
+                Back::TrayOpenPath(rel) => self.action_open_sync_path(&rel),
+                Back::TrayPause(secs) => self.action_pause(secs),
+                Back::TrayResume => self.action_resume(),
                 Back::Update(r) => {
                     self.upd.checking = false;
                     match r {
@@ -602,6 +686,17 @@ impl App {
                  icon to quit.",
             );
         }
+    }
+
+    /// Hide the window the way Qt's QWindow::hide() did: unmap it (real on
+    /// X11/XWayland). On the Wayland backend the unmap is a winit no-op, so
+    /// fall back to asking the compositor to minimize instead.
+    fn hide_to_tray(&mut self, ctx: &egui::Context) {
+        self.remember_window_size(ctx);
+        if self.wayland_fallback {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        }
+        self.hide_window(ctx);
     }
 
     fn quit(&mut self, ctx: &egui::Context) {
@@ -865,8 +960,7 @@ impl eframe::App for App {
         if ctx.input(|i| i.viewport().close_requested()) && !self.quitting {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             if self.prefs.close_to_tray() {
-                self.remember_window_size(ctx);
-                self.hide_window(ctx);
+                self.hide_to_tray(ctx);
             } else {
                 self.quit(ctx);
             }
