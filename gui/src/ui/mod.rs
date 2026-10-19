@@ -1,0 +1,899 @@
+//! The application: shell (sidebar + pages), background message plumbing,
+//! dialogs, and notification triggers - ported from the PyQt GUI's window
+//! logic with the same strings and behaviors.
+
+pub mod about;
+pub mod activity;
+pub mod cloud;
+pub mod home;
+pub mod settings;
+pub mod widgets;
+
+use crate::{cli, conf, health, journal, notify, paths::Paths, prefs, release, service, theme};
+use eframe::egui;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Page {
+    Home,
+    Cloud,
+    Activity,
+    Settings,
+    About,
+}
+
+/// Messages from the poller/worker threads to the UI.
+pub enum Back {
+    Poll { health: health::Health, active: bool, enabled: bool },
+    Journal(Vec<String>),
+    Identity(cli::Identity),
+    Stats { files: u64, bytes: u64 },
+    ShowWindow,
+    SaveHint(String),
+    SelHint(String),
+    Toast(String),
+    Update(Result<release::Release, String>),
+    /// Selective-sync folder listing (parent rel "" = the root level).
+    SelFolders { parent: String, folders: Vec<(String, String)> },
+    /// Whether the sync unit is enabled at login (slow systemctl call).
+    UnitEnabled(bool),
+}
+
+#[derive(Clone, Debug)]
+pub enum Dialog {
+    Info { title: String, body: String },
+    ConfirmSave,
+    ConfirmLogout,
+    PauseMenu,
+    DirBrowse { cwd: PathBuf },
+}
+
+/// What a dialog close/confirm should do once the UI closure returns.
+#[derive(Debug)]
+enum DlgAct {
+    Close,
+    Save,
+    Logout,
+    Pause(Option<u64>),
+    BrowseGo(PathBuf),
+    BrowseSet(PathBuf),
+}
+
+#[derive(Default)]
+pub struct UpdateUi {
+    pub label: String,
+    pub available: Option<release::Release>,
+    pub checking: bool,
+}
+
+pub struct App {
+    pub paths: Paths,
+    pub prefs: prefs::Prefs,
+    pub conf: BTreeMap<String, String>,
+    pub conf_extras: Vec<String>,
+    pub tx: mpsc::Sender<Back>,
+    pub rx: mpsc::Receiver<Back>,
+    pub _lock: std::fs::File,
+
+    pub health: health::Health,
+    pub active: bool,
+    pub enabled: bool,
+    pub page: Page,
+
+    pub identity: Option<cli::Identity>,
+    pub stats: Option<(u64, u64)>,
+
+    pub draft: settings::Draft,
+    pub changes: Vec<journal::ChangeRow>,
+    pub log_lines: Vec<String>,
+    pub act: activity::ActivityState,
+
+    pub cool: notify::Cooldowns,
+    pub last_seen: Option<chrono::DateTime<chrono::FixedOffset>>,
+    pub prev_hstatus: String,
+    pub tray_warned: bool,
+
+    pub dialog: Option<Dialog>,
+    pub save_hint: String,
+    pub sub_override: Option<(String, f64)>,
+    pub toast: Option<(String, f64)>,
+    pub upd: UpdateUi,
+
+    pub hidden: bool,
+    pub hide_on_start: bool,
+    pub quitting: bool,
+    pub style_dirty: bool,
+    pub icon_tex: Option<egui::TextureHandle>,
+}
+
+/// "ProtonDrive" or "~/stuff" -> absolute path (the GUI only deals in
+/// absolute paths, but be forgiving).
+pub fn expand_user(s: &str) -> PathBuf {
+    let s = s.trim();
+    if s == "~" {
+        return dirs::home_dir().unwrap_or_else(|| "/".into());
+    }
+    if let Some(rest) = s.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(s)
+}
+
+/// Decode a PNG into (width, height, RGBA8) - used for the window and menu
+/// icon and the sidebar texture. RGB sources get an opaque alpha added.
+pub fn decode_png(bytes: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
+    let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0u8; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut buf).ok()?;
+    let (w, h) = (info.width as usize, info.height as usize);
+    let rgba = match info.color_type {
+        png::ColorType::Rgba => {
+            buf.truncate(w * h * 4);
+            buf
+        }
+        png::ColorType::Rgb => {
+            let mut out = Vec::with_capacity(w * h * 4);
+            for px in buf[..w * h * 3].chunks_exact(3) {
+                out.extend_from_slice(&[px[0], px[1], px[2], 255]);
+            }
+            out
+        }
+        _ => return None,
+    };
+    Some((w, h, rgba))
+}
+
+fn spawn_poller(tx: mpsc::Sender<Back>, paths: Paths) {
+    std::thread::spawn(move || {
+        let mut tick: u64 = 0;
+        loop {
+            let h = health::read(&paths.health_file);
+            let active = service::is_active();
+            let enabled = service::is_enabled();
+            if tx.send(Back::Poll { health: h, active, enabled }).is_err() {
+                break;
+            }
+            if tx.send(Back::Journal(service::journal_lines(600))).is_err() {
+                break;
+            }
+            if tick % 7 == 0 {
+                let c = conf::read(&paths.conf_file);
+                let local = c.get("PROTON_SYNC_LOCAL").cloned().unwrap_or_default();
+                let (files, bytes) = service::folder_stats(&expand_user(&local).to_string_lossy());
+                if tx.send(Back::Stats { files, bytes }).is_err() {
+                    break;
+                }
+            }
+            let show = paths.state_dir.join("show-request");
+            if show.exists() {
+                let _ = std::fs::remove_file(&show);
+                if tx.send(Back::ShowWindow).is_err() {
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_secs(3));
+            tick = tick.wrapping_add(1);
+        }
+    });
+}
+
+impl App {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        lock: std::fs::File,
+    ) -> Result<Box<dyn eframe::App>, Box<dyn std::error::Error + Send + Sync>> {
+        let paths = crate::paths::resolve();
+        let _ = std::fs::create_dir_all(&paths.state_dir);
+        let prefs = prefs::Prefs::load(&paths.prefs_file);
+        theme::apply(&cc.egui_ctx, &prefs.theme());
+        let conf = conf::read(&paths.conf_file);
+        let conf_extras = conf::read_extras(&paths.conf_file);
+        let draft = settings::Draft::load(&conf, &conf_extras, &prefs, &paths);
+        let (tx, rx) = mpsc::channel();
+
+        spawn_poller(tx.clone(), paths.clone());
+
+        // Identity (version + sign-in) as soon as the window exists.
+        let tx_id = tx.clone();
+        std::thread::spawn(move || {
+            let ident = match cli::resolve_cli() {
+                Some(c) => cli::fetch_identity(&c),
+                None => cli::Identity {
+                    version: "?".into(),
+                    error: Some("not found".into()),
+                    ..Default::default()
+                },
+            };
+            let _ = tx_id.send(Back::Identity(ident));
+        });
+
+        // Keep the installed unit pointing at this copy (Qt parity).
+        let appimage = paths.appimage.clone();
+        std::thread::spawn(move || {
+            let _ = service::ensure_service_unit(appimage.as_deref(), false);
+        });
+
+        // Login-enable state of the unit (slow systemctl call, off-thread).
+        let tx_en = tx.clone();
+        std::thread::spawn(move || {
+            let _ = tx_en.send(Back::UnitEnabled(service::is_enabled()));
+        });
+
+        // Selective-sync roots load in the background at startup (Qt parity).
+        let mut draft = draft;
+        if draft.loading.insert(String::new()) {
+            let remote = draft.remote.clone();
+            let tx_sel = tx.clone();
+            std::thread::spawn(move || {
+                let folders = cli::fetch_remote_folders(&remote, "");
+                let _ = tx_sel.send(Back::SelFolders {
+                    parent: String::new(),
+                    folders,
+                });
+            });
+        }
+
+        let icon_tex = decode_png(include_bytes!("../icon-64.png")).map(|(w, h, px)| {
+            cc.egui_ctx.load_texture(
+                "app-icon",
+                egui::ColorImage::from_rgba_unmultiplied([w, h], &px),
+                egui::TextureOptions::LINEAR,
+            )
+        });
+
+        Ok(Box::new(App {
+            hide_on_start: prefs.start_in_tray(),
+            prefs,
+            paths,
+            conf,
+            conf_extras,
+            tx,
+            rx,
+            _lock: lock,
+            health: health::Health::default(),
+            active: false,
+            enabled: false,
+            page: Page::Home,
+            identity: None,
+            stats: None,
+            draft,
+            changes: Vec::new(),
+            log_lines: Vec::new(),
+            act: activity::ActivityState::default(),
+            cool: notify::Cooldowns::default(),
+            last_seen: Some(chrono::Utc::now().into()),
+            prev_hstatus: String::new(),
+            tray_warned: false,
+            dialog: None,
+            save_hint: String::new(),
+            sub_override: None,
+            toast: None,
+            upd: UpdateUi::default(),
+            hidden: false,
+            quitting: false,
+            style_dirty: false,
+            icon_tex,
+        }))
+    }
+
+    // ------------------------------------------------------------- status
+
+    pub fn status_key(&self) -> &'static str {
+        health::map_status(self.active, &self.health.status).key()
+    }
+
+    pub fn side_label(&self) -> &'static str {
+        match self.status_key() {
+            "synced" => "Synced",
+            "syncing" => "Syncing",
+            "paused" => "Paused",
+            "error" => "Error",
+            _ => "Checking...",
+        }
+    }
+
+    pub fn logged_in(&self) -> bool {
+        self.identity.as_ref().is_some_and(|i| i.logged_in)
+    }
+
+    pub fn toast(&mut self, msg: impl Into<String>) {
+        self.toast = Some((msg.into(), self.now()));
+    }
+
+    fn now(&self) -> f64 {
+        // ctx.time is captured in update; Approximation via Instant is fine
+        // for a 4-second toast lifetime - keep a monotonic clock here.
+        static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+        START.get_or_init(Instant::now).elapsed().as_secs_f64()
+    }
+
+    // ------------------------------------------------------------- actions
+
+    pub fn action_sync_now(&mut self) {
+        if !self.active {
+            self.dialog = Some(Dialog::Info {
+                title: "Sync is paused".into(),
+                body: "Syncing is paused. Press Resume first.".into(),
+            });
+            return;
+        }
+        let _ = std::fs::create_dir_all(&self.paths.state_dir);
+        let _ = std::fs::write(&self.paths.wake_file, b"");
+        self.sub_override = Some(("On it - checking for new changes...".into(), self.now() + 8.0));
+    }
+
+    pub fn action_open_folder(&self) {
+        let root = expand_user(self.conf.get("PROTON_SYNC_LOCAL").map(String::as_str).unwrap_or(""));
+        let _ = std::fs::create_dir_all(&root);
+        std::thread::spawn(move || {
+            let _ = std::process::Command::new("xdg-open")
+                .arg(&root)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+        });
+    }
+
+    pub fn action_login(&mut self) {
+        let Some(cli) = cli::resolve_cli() else {
+            self.dialog = Some(Dialog::Info {
+                title: "Not found".into(),
+                body: "The Proton command-line tool is missing. Reinstall the app and try again."
+                    .into(),
+            });
+            return;
+        };
+        match cli::find_terminal() {
+            Some((exe, args)) => {
+                let script = cli::login_script(&cli);
+                let mut a: Vec<String> = args;
+                a.extend(["sh".into(), "-c".into(), script]);
+                std::thread::spawn(move || {
+                    let _ = std::process::Command::new(exe)
+                        .args(&a)
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn();
+                });
+                // Qt re-checked identity 10 s after opening the terminal.
+                let tx = self.tx.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(10));
+                    if let Some(c) = cli::resolve_cli() {
+                        let _ = tx.send(Back::Identity(cli::fetch_identity(&c)));
+                    }
+                });
+            }
+            None => {
+                self.dialog = Some(Dialog::Info {
+                    title: "Sign in".into(),
+                    body: "A terminal window could not be opened automatically.\n\nPlease open \
+                           a terminal yourself and run:\n\n    proton-drive auth login"
+                        .into(),
+                });
+            }
+        }
+    }
+
+    pub fn action_logout_confirmed(&self) {
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            if let Some(c) = cli::resolve_cli() {
+                cli::logout(&c);
+                let _ = tx.send(Back::Identity(cli::fetch_identity(&c)));
+            }
+        });
+    }
+
+    pub fn action_pause(&self, secs: Option<u64>) {
+        std::thread::spawn(move || {
+            let _ = service::pause_for(secs);
+        });
+    }
+
+    pub fn action_resume(&self) {
+        let appimage = self.paths.appimage.clone();
+        std::thread::spawn(move || {
+            let _ = service::ensure_service_unit(appimage.as_deref(), false);
+            let _ = service::resume();
+        });
+    }
+
+    pub fn action_restart_service(&mut self) {
+        let appimage = self.paths.appimage.clone();
+        std::thread::spawn(move || {
+            let r = service::ensure_service_unit(appimage.as_deref(), false);
+            let ok = r != "failed" && service::restart();
+            if ok {
+                // Toast from the worker is fine (channel-backed).
+            }
+        });
+        self.toast("Syncing restarted.");
+    }
+
+    pub fn action_check_updates(&mut self) {
+        if self.upd.checking {
+            return;
+        }
+        self.upd.checking = true;
+        self.upd.label = "Checking...".into();
+        let paths = self.paths.clone();
+        let tx = self.tx.clone();
+        let current_gui = crate::GUI_VERSION.to_string();
+        let current_cli = self
+            .identity
+            .as_ref()
+            .and_then(|i| util_semver(&i.version));
+        std::thread::spawn(move || {
+            let r = release::check(&paths).map(|(rel, _cached)| rel);
+            let r = r.and_then(|rel| {
+                let gui_ok = crate::util::is_newer(&current_gui, &rel.gui);
+                let cli_ok = match &current_cli {
+                    Some(cur) => *cur == rel.cli,
+                    None => true,
+                };
+                if gui_ok && cli_ok {
+                    Ok(rel)
+                } else {
+                    Err(String::new()) // up to date marker
+                }
+            });
+            let _ = tx.send(Back::Update(r));
+        });
+    }
+
+    pub fn open_url(url: &str) {
+        let u = url.to_string();
+        std::thread::spawn(move || {
+            let _ = std::process::Command::new("xdg-open")
+                .arg(&u)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+        });
+    }
+
+    // ------------------------------------------------------------- draining
+
+    fn drain(&mut self, ctx: &egui::Context) {
+        while let Ok(back) = self.rx.try_recv() {
+            match back {
+                Back::Poll { health, active, enabled } => {
+                    self.on_poll(health, active, enabled);
+                }
+                Back::Journal(lines) => self.on_journal(lines),
+                Back::Identity(id) => {
+                    self.identity = Some(id);
+                }
+                Back::Stats { files, bytes } => {
+                    self.stats = Some((files, bytes));
+                }
+                Back::ShowWindow => {
+                    self.hidden = false;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+                Back::SaveHint(h) => self.save_hint = h,
+                Back::SelHint(h) => self.draft.sel_hint = h,
+                Back::Toast(m) => self.toast(m),
+                Back::SelFolders { parent, folders } => {
+                    let selective = self.draft.selective;
+                    self.draft.on_folders(&parent, folders);
+                    if parent.is_empty() && selective {
+                        self.draft.sel_hint = self
+                            .draft
+                            .children
+                            .get("")
+                            .map(|c| format!("{} folders", c.len()))
+                            .unwrap_or_default();
+                    }
+                }
+                Back::UnitEnabled(b) => self.draft.autostart = b,
+                Back::Update(r) => {
+                    self.upd.checking = false;
+                    match r {
+                        Ok(rel) => {
+                            self.upd.label =
+                                format!("A newer version is available: v{}", rel.tag);
+                            self.upd.available = Some(rel);
+                        }
+                        Err(e) if e.is_empty() => {
+                            self.upd.label = "You're up to date (latest release checked just now)"
+                                .to_string();
+                            self.upd.available = None;
+                        }
+                        Err(e) => {
+                            self.upd.label = e;
+                            self.upd.available = None;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn on_poll(&mut self, health: health::Health, active: bool, enabled: bool) {
+        // "All done" transition notification (Qt parity).
+        if self.prev_hstatus == "syncing"
+            && health.status == "ok"
+            && (health.uploaded > 0 || health.downloaded > 0)
+            && self.prefs.notify_complete()
+            && self.cool.cool_ok("done", 60)
+        {
+            notify::send(
+                "All done",
+                &format!(
+                    "{} file(s) uploaded, {} downloaded.",
+                    health.uploaded, health.downloaded
+                ),
+            );
+        }
+        self.prev_hstatus = health.status.clone();
+        self.health = health;
+        self.active = active;
+        self.enabled = enabled;
+    }
+
+    fn on_journal(&mut self, lines: Vec<String>) {
+        // Notifications: walk new lines chronologically (Qt parity).
+        for ln in &lines {
+            let Some(ts) = journal::ts(ln) else { continue };
+            if self.last_seen.is_some_and(|last| ts <= last) {
+                continue;
+            }
+            self.last_seen = Some(ts);
+            let body = journal::body(ln);
+            let name = journal::change_name(body);
+            if body.contains("CONFLICT")
+                && self.prefs.notify_conflicts()
+                && self.cool.cool_ok("conflict", 30)
+            {
+                notify::send(
+                    "Two versions were kept",
+                    &format!("'{name}' changed in two places - both copies are safe."),
+                );
+            } else if (body.contains("ERROR") || body.contains("FAILED"))
+                && self.prefs.notify_errors()
+                && self.cool.cool_ok("error", 30)
+            {
+                let short: String = body.chars().take(150).collect();
+                notify::send("Sync problem", &short);
+            }
+        }
+
+        self.log_lines = if lines.len() > 600 {
+            lines[lines.len() - 600..].to_vec()
+        } else {
+            lines.clone()
+        };
+        let mut rows = journal::parse_changes(&lines);
+        if rows.len() > 300 {
+            rows = rows.split_off(rows.len() - 300);
+        }
+        self.changes = rows;
+    }
+
+    // ------------------------------------------------------------- window
+
+    fn remember_window_size(&mut self, ctx: &egui::Context) {
+        let size = ctx.input(|i| i.viewport().inner_rect.map(|r| r.size()));
+        if let Some(sz) = size {
+            let (w, h) = (sz.x as u32, sz.y as u32);
+            if w != self.prefs.window_w || h != self.prefs.window_h {
+                self.prefs.set_window_size(w, h);
+            }
+        }
+    }
+
+    fn hide_window(&mut self, ctx: &egui::Context) {
+        self.hidden = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        if !self.tray_warned {
+            self.tray_warned = true;
+            notify::send(
+                "Proton Drive",
+                "Still running - syncing continues in the background. Right-click the tray \
+                 icon to quit.",
+            );
+        }
+    }
+
+    fn quit(&mut self, ctx: &egui::Context) {
+        self.quitting = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    // ------------------------------------------------------------- shell
+
+    fn sidebar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if let Some(tex) = &self.icon_tex {
+                ui.add(egui::Image::new((tex.id(), egui::vec2(30.0, 30.0))));
+            }
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("Proton Drive").strong().size(17.0));
+                ui.label(egui::RichText::new("for Linux").size(12.0).weak());
+            });
+        });
+        ui.add_space(20.0);
+
+        for (page, label) in [
+            (Page::Home, "Home"),
+            (Page::Cloud, "Cloud"),
+            (Page::Activity, "Activity"),
+            (Page::Settings, "Settings"),
+            (Page::About, "About"),
+        ] {
+            if widgets::nav_row(ui, label, self.page == page) {
+                self.page = page;
+            }
+        }
+
+        ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+            ui.add_space(14.0);
+            ui.horizontal(|ui| {
+                let key = self.status_key();
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                ui.painter().circle_filled(rect.center(), 5.0, theme::status_color(key));
+                ui.label(egui::RichText::new(self.side_label()).size(13.0));
+            });
+            ui.label(egui::RichText::new("Unofficial community app").size(12.0).weak());
+        });
+    }
+
+    fn central(&mut self, ui: &mut egui::Ui) {
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::central_panel(ui.style())
+                    .inner_margin(egui::Margin::symmetric(30, 20)),
+            )
+            .show(ui, |ui| match self.page {
+                Page::Home => home::draw(self, ui),
+                Page::Cloud => cloud::draw(self, ui),
+                Page::Activity => activity::draw(self, ui),
+                Page::Settings => settings::draw(self, ui),
+                Page::About => about::draw(self, ui),
+            });
+    }
+
+    fn toast_ui(&mut self, ctx: &egui::Context) {
+        let t = ctx.input(|i| i.time);
+        if let Some((msg, at)) = &self.toast {
+            if t - *at > 4.0 {
+                self.toast = None;
+                return;
+            }
+            let msg = msg.clone();
+            egui::Area::new(egui::Id::unique("toast"))
+                .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-18.0, -18.0))
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.label(msg);
+                    });
+                });
+        }
+    }
+
+    fn dialog_ui(&mut self, ctx: &egui::Context) {
+        let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        let Some(dlg) = self.dialog.clone() else { return };
+        let mut open = true;
+        let mut act: Option<DlgAct> = None;
+
+        match &dlg {
+            Dialog::Info { title, body } => {
+                egui::Window::new(title.clone())
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .open(&mut open)
+                    .show(ctx, |ui| {
+                        ui.label(body.clone());
+                        ui.add_space(10.0);
+                        if widgets::primary_button(ui, "OK") || escape {
+                            act = Some(DlgAct::Close);
+                        }
+                    });
+            }
+            Dialog::ConfirmSave => {
+                egui::Window::new("Save changes")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .open(&mut open)
+                    .show(ctx, |ui| {
+                        ui.label("Save your settings and restart syncing now?");
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() || escape {
+                                act = Some(DlgAct::Close);
+                            }
+                            if widgets::primary_button(ui, "Save") {
+                                act = Some(DlgAct::Save);
+                            }
+                        });
+                    });
+            }
+            Dialog::ConfirmLogout => {
+                egui::Window::new("Sign out")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .open(&mut open)
+                    .show(ctx, |ui| {
+                        ui.label(
+                            "Sign out of Proton on this computer?\n\nYour synced files stay on \
+                             this computer.",
+                        );
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() || escape {
+                                act = Some(DlgAct::Close);
+                            }
+                            if widgets::primary_button(ui, "Sign out") {
+                                act = Some(DlgAct::Logout);
+                            }
+                        });
+                    });
+            }
+            Dialog::PauseMenu => {
+                egui::Window::new("Pause syncing")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .open(&mut open)
+                    .show(ctx, |ui| {
+                        if ui.button("Pause for 15 minutes").clicked() {
+                            act = Some(DlgAct::Pause(Some(900)));
+                        }
+                        if ui.button("Pause for 1 hour").clicked() {
+                            act = Some(DlgAct::Pause(Some(3600)));
+                        }
+                        if ui.button("Pause until I resume").clicked() {
+                            act = Some(DlgAct::Pause(None));
+                        }
+                        if escape {
+                            act = Some(DlgAct::Close);
+                        }
+                    });
+            }
+            Dialog::DirBrowse { cwd } => {
+                let cwd = cwd.clone();
+                egui::Window::new("Choose the folder to sync")
+                    .collapsible(false)
+                    .resizable(false)
+                    .default_size([420.0, 480.0])
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .open(&mut open)
+                    .show(ctx, |ui| {
+                        ui.label(
+                            egui::RichText::new(widgets::elide(&cwd.to_string_lossy(), 70))
+                                .weak(),
+                        );
+                        ui.add_space(6.0);
+                        egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
+                            if let Some(parent) = cwd.parent() {
+                                if ui.button("\u{2191}  Go up").clicked() {
+                                    act = Some(DlgAct::BrowseGo(parent.to_path_buf()));
+                                }
+                            }
+                            let mut dirs: Vec<String> = std::fs::read_dir(&cwd)
+                                .map(|it| {
+                                    it.flatten()
+                                        .filter(|e| e.path().is_dir())
+                                        .map(|e| e.file_name().to_string_lossy().into_owned())
+                                        .filter(|n| !n.starts_with('.'))
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            dirs.sort();
+                            for name in dirs {
+                                if ui.button(format!("\u{25b8}  {name}")).clicked() {
+                                    act = Some(DlgAct::BrowseGo(cwd.join(name)));
+                                }
+                            }
+                        });
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() || escape {
+                                act = Some(DlgAct::Close);
+                            }
+                            if widgets::primary_button(ui, "Choose this folder") {
+                                act = Some(DlgAct::BrowseSet(cwd.clone()));
+                            }
+                        });
+                    });
+            }
+        }
+
+        match act {
+            Some(a) => self.apply_dialog(a),
+            None if !open => self.dialog = None,
+            None => {}
+        }
+    }
+
+    /// Act on a confirmed dialog (after the closure releases &mut self).
+    fn apply_dialog(&mut self, act: DlgAct) {
+        match act {
+            DlgAct::Close => self.dialog = None,
+            DlgAct::Save => {
+                self.dialog = None;
+                settings::do_save(self);
+            }
+            DlgAct::Logout => {
+                self.dialog = None;
+                self.action_logout_confirmed();
+            }
+            DlgAct::Pause(secs) => {
+                self.dialog = None;
+                self.action_pause(secs);
+            }
+            DlgAct::BrowseGo(p) => self.dialog = Some(Dialog::DirBrowse { cwd: p }),
+            DlgAct::BrowseSet(p) => {
+                self.draft.local = p.to_string_lossy().into_owned();
+                self.dialog = None;
+            }
+        }
+    }
+}
+
+/// First semver-looking triple inside a `--version` banner.
+pub fn util_semver(s: &str) -> Option<String> {
+    let re = regex::Regex::new(r"(\d+\.\d+\.\d+)").ok()?;
+    re.find(s).map(|m| m.as_str().to_string())
+}
+
+impl eframe::App for App {
+    /// Called every frame while visible, and also while hidden (via
+    /// `run_logic`) - so the sync poller keeps flowing to the tray even when
+    /// the window is closed to the background.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.drain(ctx);
+
+        if self.hide_on_start {
+            self.hide_on_start = false;
+            self.hide_window(ctx);
+        }
+
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quitting {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            if self.prefs.close_to_tray() {
+                self.remember_window_size(ctx);
+                self.hide_window(ctx);
+            } else {
+                self.quit(ctx);
+            }
+        }
+
+        if self.style_dirty {
+            theme::apply(ctx, &self.prefs.theme());
+            self.style_dirty = false;
+        }
+
+        ctx.request_repaint_after(Duration::from_millis(900));
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        egui::Panel::left("nav")
+            .resizable(false)
+            .exact_size(216.0)
+            .frame(
+                egui::Frame::side_top_panel(ui.style())
+                    .inner_margin(egui::Margin::symmetric(16, 18)),
+            )
+            .show(ui, |ui| self.sidebar(ui));
+
+        self.central(ui);
+
+        let ctx = ui.ctx().clone();
+        self.toast_ui(&ctx);
+        self.dialog_ui(&ctx);
+    }
+}
