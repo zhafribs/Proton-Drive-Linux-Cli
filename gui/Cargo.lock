@@ -2848,6 +2848,7 @@ dependencies = [
  "sha2",
  "tokio",
  "ureq",
+ "zbus",
 ]
 
 [[package]]

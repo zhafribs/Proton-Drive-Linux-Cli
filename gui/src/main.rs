@@ -13,6 +13,7 @@ mod health;
 mod journal;
 mod notify;
 mod paths;
+mod portal;
 mod prefs;
 mod release;
 mod service;

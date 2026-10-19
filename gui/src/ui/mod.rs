@@ -41,6 +41,16 @@ pub enum Back {
     SelFolders { parent: String, folders: Vec<(String, String)> },
     /// Whether the sync unit is enabled at login (slow systemctl call).
     UnitEnabled(bool),
+    /// Cloud browser: a folder listing landed (key + serial guard staleness).
+    CloudEntries { key: String, serial: u64, result: Result<Vec<cli::RemoteEntry>, String> },
+    /// Cloud browser: a CLI mutation finished (refresh follows).
+    CloudMutated { ok: bool, err: String, done: String, notify: Option<(String, String)> },
+    /// Cloud browser: a download finished.
+    CloudDownload { ok: bool, err: String, name: String, n: usize },
+    /// Cloud browser: a file dialog returned (None = cancelled).
+    CloudPicked(Option<Picked>),
+    /// Cloud browser: the move-to picker's folder listing landed.
+    PickerFolders { parent: String, folders: Vec<(String, String)> },
     /// Tray menu/activation actions (sent from the ksni service thread).
     TrayToggle,
     TrayQuit,
@@ -51,6 +61,15 @@ pub enum Back {
     TrayResume,
 }
 
+/// A file-dialog answer from the Cloud page (portal/zenity/kdialog).
+#[derive(Clone, Debug)]
+pub enum Picked {
+    UploadFiles(Vec<PathBuf>),
+    UploadFolder(PathBuf),
+    DownloadSave { rpath: String, dest: PathBuf },
+    DownloadDir { rpaths: Vec<String>, dest: PathBuf, n: usize },
+}
+
 #[derive(Clone, Debug)]
 pub enum Dialog {
     Info { title: String, body: String },
@@ -58,6 +77,17 @@ pub enum Dialog {
     ConfirmLogout,
     PauseMenu,
     DirBrowse { cwd: PathBuf },
+    /// Text input (Cloud: rename / new folder); the buffer lives on App.
+    Input { title: String, label: String, intent: InputIntent },
+    ConfirmTrash { n: usize },
+    /// The "Move to..." cloud folder picker.
+    CloudMove,
+}
+
+#[derive(Clone, Debug)]
+pub enum InputIntent {
+    CloudRename(String), // old rel
+    CloudNewFolder,
 }
 
 /// What a dialog close/confirm should do once the UI closure returns.
@@ -69,6 +99,11 @@ enum DlgAct {
     Pause(Option<u64>),
     BrowseGo(PathBuf),
     BrowseSet(PathBuf),
+    CloudRename { old: String, name: String },
+    NewFolder(String),
+    TrashConfirm,
+    MoveSel(String), // picker row clicked
+    MovePick(String), // picker confirmed: move selection here
 }
 
 #[derive(Default)]
@@ -99,6 +134,10 @@ pub struct App {
     pub changes: Vec<journal::ChangeRow>,
     pub log_lines: Vec<String>,
     pub act: activity::ActivityState,
+    pub cloud: cloud::CloudState,
+    /// Buffer of the open text-input dialog (rename / new folder).
+    pub input_buf: String,
+    pub input_focus: bool,
 
     pub cool: notify::Cooldowns,
     pub last_seen: Option<chrono::DateTime<chrono::FixedOffset>>,
@@ -302,6 +341,9 @@ impl App {
             changes: Vec::new(),
             log_lines: Vec::new(),
             act: activity::ActivityState::default(),
+            cloud: cloud::CloudState::default(),
+            input_buf: String::new(),
+            input_focus: false,
             cool: notify::Cooldowns::default(),
             last_seen: Some(chrono::Utc::now().into()),
             prev_hstatus: String::new(),
@@ -561,6 +603,19 @@ impl App {
                     }
                 }
                 Back::UnitEnabled(b) => self.draft.autostart = b,
+                Back::CloudEntries { key, serial, result } => {
+                    cloud::on_entries(self, key, serial, result)
+                }
+                Back::CloudMutated { ok, err, done, notify } => {
+                    cloud::on_mutated(self, ok, err, done, notify)
+                }
+                Back::CloudDownload { ok, err, name, n } => {
+                    cloud::on_downloaded(self, ok, err, name, n)
+                }
+                Back::CloudPicked(p) => cloud::on_picked(self, p),
+                Back::PickerFolders { parent, folders } => {
+                    cloud::on_picker_folders(self, parent, folders)
+                }
                 Back::TrayToggle => {
                     let minimized =
                         ctx.input(|i| i.viewport().minimized.unwrap_or(false));
@@ -726,6 +781,9 @@ impl App {
             (Page::About, "About"),
         ] {
             if widgets::nav_row(ui, label, self.page == page) {
+                if self.page != page && page == Page::Cloud {
+                    cloud::on_shown(self); // re-list on every visit (browser-style)
+                }
                 self.page = page;
             }
         }
@@ -905,6 +963,114 @@ impl App {
                         });
                     });
             }
+            Dialog::Input { title, label, intent, .. } => {
+                let title = title.clone();
+                let label = label.clone();
+                let intent = intent.clone();
+                egui::Window::new(title)
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .open(&mut open)
+                    .show(ctx, |ui| {
+                        ui.label(label);
+                        ui.add_space(6.0);
+                        let id = egui::Id::unique("cloud-text-input");
+                        let r = ui.add(
+                            egui::TextEdit::singleline(&mut self.input_buf)
+                                .id(id)
+                                .desired_width(300.0),
+                        );
+                        if self.input_focus {
+                            ui.memory_mut(|m| m.request_focus(id));
+                            self.input_focus = false;
+                        }
+                        let enter =
+                            r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() || escape {
+                                act = Some(DlgAct::Close);
+                            }
+                            if widgets::primary_button(ui, "OK") || enter {
+                                let name = self.input_buf.clone();
+                                act = Some(match intent {
+                                    InputIntent::CloudRename(old) => {
+                                        DlgAct::CloudRename { old, name }
+                                    }
+                                    InputIntent::CloudNewFolder => DlgAct::NewFolder(name),
+                                });
+                            }
+                        });
+                    });
+            }
+            Dialog::ConfirmTrash { n } => {
+                let word = if *n == 1 {
+                    "this item".to_string()
+                } else {
+                    format!("these {n} items")
+                };
+                egui::Window::new("Move to trash?")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .open(&mut open)
+                    .show(ctx, |ui| {
+                        ui.label(format!(
+                            "Move {word} to the Proton trash? You can restore it later from \
+                             Trash."
+                        ));
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() || escape {
+                                act = Some(DlgAct::Close);
+                            }
+                            if widgets::primary_button(ui, "Move to trash") {
+                                act = Some(DlgAct::TrashConfirm);
+                            }
+                        });
+                    });
+            }
+            Dialog::CloudMove => {
+                let root = cloud::remote_root(&self.conf);
+                egui::Window::new("Move to")
+                    .collapsible(false)
+                    .resizable(false)
+                    .default_size([430.0, 480.0])
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .open(&mut open)
+                    .show(ctx, |ui| {
+                        egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                            self.picker_row(
+                                ui,
+                                "",
+                                &format!("My Files ({root})"),
+                                0,
+                                &mut act,
+                            );
+                        });
+                        ui.add_space(10.0);
+                        let can = self
+                            .cloud
+                            .picker
+                            .as_ref()
+                            .is_some_and(|p| p.sel.is_some());
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() || escape {
+                                act = Some(DlgAct::Close);
+                            }
+                            if can && widgets::primary_button(ui, "Move here") {
+                                let sel = self
+                                    .cloud
+                                    .picker
+                                    .as_ref()
+                                    .and_then(|p| p.sel.clone())
+                                    .unwrap_or_default();
+                                act = Some(DlgAct::MovePick(sel));
+                            }
+                        });
+                    });
+            }
         }
 
         match act {
@@ -914,10 +1080,60 @@ impl App {
         }
     }
 
+    /// One row of the "Move to..." folder tree (lazily expanded, like the
+    /// PyQt picker dialog).
+    fn picker_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        rel: &str,
+        label: &str,
+        depth: usize,
+        act: &mut Option<DlgAct>,
+    ) {
+        let (expanded, selected) = {
+            match self.cloud.picker.as_ref() {
+                None => (false, false),
+                Some(p) => (
+                    p.expanded.contains(rel),
+                    p.sel.as_deref() == Some(rel),
+                ),
+            }
+        };
+        ui.horizontal(|ui| {
+            ui.add_space(depth as f32 * 16.0);
+            if ui
+                .button(if expanded { "\u{25be}" } else { "\u{25b8}" })
+                .clicked()
+            {
+                cloud::picker_expand(self, rel.to_string());
+            }
+            if ui.selectable_label(selected, label).clicked() {
+                *act = Some(DlgAct::MoveSel(rel.to_string()));
+            }
+        });
+        if expanded {
+            let children = self
+                .cloud
+                .picker
+                .as_ref()
+                .and_then(|p| p.children.get(rel))
+                .cloned()
+                .unwrap_or_default();
+            for (name, child_rel) in children {
+                self.picker_row(ui, &child_rel, &name, depth + 1, act);
+            }
+        }
+    }
+
     /// Act on a confirmed dialog (after the closure releases &mut self).
     fn apply_dialog(&mut self, act: DlgAct) {
         match act {
-            DlgAct::Close => self.dialog = None,
+            DlgAct::Close => {
+                if matches!(self.dialog, Some(Dialog::CloudMove)) {
+                    self.cloud.picker = None;
+                }
+                self.dialog = None;
+            }
             DlgAct::Save => {
                 self.dialog = None;
                 settings::do_save(self);
@@ -935,6 +1151,28 @@ impl App {
                 self.draft.local = p.to_string_lossy().into_owned();
                 self.dialog = None;
             }
+            DlgAct::CloudRename { old, name } => {
+                self.dialog = None;
+                cloud::action_rename(self, old, name);
+            }
+            DlgAct::NewFolder(name) => {
+                self.dialog = None;
+                cloud::action_new_folder(self, name);
+            }
+            DlgAct::TrashConfirm => {
+                self.dialog = None;
+                cloud::action_trash(self);
+            }
+            DlgAct::MoveSel(rel) => {
+                if let Some(p) = self.cloud.picker.as_mut() {
+                    p.sel = Some(rel);
+                }
+            }
+            DlgAct::MovePick(rel) => {
+                self.dialog = None;
+                self.cloud.picker = None;
+                cloud::action_move(self, rel);
+            }
         }
     }
 }
@@ -951,6 +1189,13 @@ impl eframe::App for App {
     /// the window is closed to the background.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain(ctx);
+
+        // Cloud: ensure the initial listing even if the page was reached
+        // without a nav click (e.g. it becomes the startup page one day).
+        if self.page == Page::Cloud && !self.cloud.opened {
+            self.cloud.opened = true;
+            cloud::on_shown(self);
+        }
 
         if self.hide_on_start {
             self.hide_on_start = false;
