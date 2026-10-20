@@ -130,7 +130,7 @@ jobs:
           VERSION: ${{ steps.upstream.outputs.version }}
         run: |
           set -euo pipefail
-          GUI="$(sed -n 's/^pub const GUI_VERSION: &str = "\(.*\)"$/\1/p' gui/src/main.rs | head -1)"
+          GUI="$(sed -n 's/^pub const GUI_VERSION: &str = "\(.*\)";$/\1/p' gui/src/main.rs | head -1)"
           [ -n "$GUI" ] || { echo "GUI_VERSION missing from gui/src/main.rs" >&2; exit 1; }
           TAG="v${VERSION}-gui${GUI}"
           NOTES="$RUNNER_TEMP/release-notes.md"
