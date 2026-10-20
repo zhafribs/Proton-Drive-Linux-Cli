@@ -2,6 +2,7 @@
 name = "proton-drive-gui"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 anyhow = "1.0.104"
@@ -19,3 +20,10 @@ sha2 = "0.11.1"
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "time", "sync"] }
 ureq = "3.4.2"
 zbus = { version = "5.19.0", features = ["blocking-api"] }
+
+# The binary ships inside the AppImage - size matters (this replaced a
+# bundled Qt6 stack, the whole point being a smaller app).
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

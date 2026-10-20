@@ -20,10 +20,10 @@
       Google Takeout import); --help lists everything.
     </p>
     <p>
-      Nothing else to install: the AppImage carries its own Python and Qt
-      desktop runtime inside, so it runs on any glibc 2.34+ system (glibc
-      2.39+ on aarch64) with FUSE and OpenGL - the things every graphical
-      session already has.
+      Nothing else to install: the AppImage carries its own sync-engine
+      runtime inside (the desktop app is a native binary since GUI 3.14.0),
+      so it runs on any glibc 2.28+ system with FUSE and OpenGL - the
+      things every graphical session already has.
     </p>
     <p>
       This package is not produced or endorsed by Proton AG: it is unofficial

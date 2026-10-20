@@ -5,14 +5,15 @@
 #                      user service the app installs on first run)
 #   anything else   -> the upstream CLI, argv untouched (auth login, --help...)
 #
-# Everything the app needs travels inside: this project's MIT scripts in
-# usr/lib/proton-sync, a portable CPython + Qt6/PyQt6 runtime in
-# usr/lib/bundled-python, and the unmodified upstream CLI in usr/bin. A host
-# desktop needs nothing installed - only the usual FUSE + OpenGL, and a
-# terminal emulator for the one-time Proton sign-in.
+# Everything the app needs travels inside: this project's Rust GUI in
+# usr/bin, this project's MIT sync-engine script with a portable CPython in
+# usr/lib/proton-sync + usr/lib/bundled-python, and the unmodified upstream
+# CLI in usr/bin. A host desktop needs nothing installed - only the usual
+# FUSE + OpenGL, and a terminal emulator for the one-time Proton sign-in.
 
 HERE="$(CDPATH='' cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)"
 CLI="$HERE/usr/bin/proton-drive"
+GUI="$HERE/usr/bin/proton-drive-gui"
 LIB="$HERE/usr/lib/proton-sync"
 PYBUNDLE="$HERE/usr/lib/bundled-python"
 
@@ -21,15 +22,14 @@ if [ ! -x "$CLI" ]; then
     exit 127
 fi
 
-# Run a script with the bundled Python/Qt stack when present (releases);
-# fall back to the host's python3 + PyQt6 (source-checkout dev runs).
+# Run a script with the bundled Python when present (releases); fall back to
+# the host's python3 (source-checkout dev runs). The engine is the only
+# Python left in the app since 3.14.0 (the GUI is a native binary).
 #
-# No LD_LIBRARY_PATH/QT_* exports here, on purpose: the PyQt6 wheels carry
-# RPATHs and Qt locates its plugins relative to its own libQt6Core.so, so the
-# bundled stack works with a clean environment. Exporting those variables
-# instead leaks into every child process the app starts (xdg-open -> kde-open5,
-# dolphin, the sign-in terminal...) and makes those host apps load *our* Qt
-# 6.11, which crashes them on a host running any other Qt version.
+# No LD_LIBRARY_PATH exports here, on purpose: they would leak into every
+# child process the app starts (xdg-open -> kde-open5, dolphin, the
+# sign-in terminal...) and make those host apps load *our* libraries,
+# which crashes them on a host running other versions.
 run_python() {
     if [ -x "$PYBUNDLE/bin/python3" ]; then
         exec "$PYBUNDLE/bin/python3" "$@"
@@ -46,22 +46,11 @@ case "${1:-}" in
     # start-up self-test the updater runs on a freshly downloaded build
     # (verify_staged_build) - it must reach the GUI, not the CLI.
     __gui|--smoke|"")
-        if [ ! -x "$PYBUNDLE/bin/python3" ]; then
-            if ! command -v python3 >/dev/null 2>&1; then
-                echo "This build carries no bundled Python and the host has none." >&2
-                echo "Install python3, or use an official release AppImage." >&2
-                exit 1
-            fi
-            if ! python3 -c 'import PyQt6.QtWidgets' >/dev/null 2>&1; then
-                echo "This build carries no bundled Python; the host's PyQt6 is missing." >&2
-                echo "Install it from your distribution's official repositories:" >&2
-                echo "  Debian / Ubuntu:   sudo apt install python3-pyqt6" >&2
-                echo "  Fedora:            sudo dnf install python3-qt6" >&2
-                echo "  Arch / CachyOS:    sudo pacman -S python-pyqt6" >&2
-                exit 1
-            fi
+        if [ ! -x "$GUI" ]; then
+            echo "GUI missing from AppImage ($GUI)" >&2
+            exit 127
         fi
-        run_python "$LIB/proton-sync-gui.py" "$@"
+        exec "$GUI" "$@"
         ;;
     *)
         exec "$CLI" "$@"

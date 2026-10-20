@@ -3,10 +3,11 @@
 # build.sh - Build Proton Drive CLI AppImages (x86_64 + aarch64)
 #
 # Downloads the official Proton Drive CLI binaries, verifies them against the
-# SHA-512 checksums published by Proton, adds this project's scripts plus a
-# portable Python/Qt desktop stack (scripts/fetch-desktop-deps.sh), wraps it
-# all in an AppDir and produces portable AppImages with appimagetool. The
-# result needs nothing installed on the host beyond a normal desktop.
+# SHA-512 checksums published by Proton, builds this project's Rust GUI
+# (gui/), adds the sync-engine script plus a portable CPython runtime
+# (scripts/fetch-desktop-deps.sh), wraps it all in an AppDir and produces
+# portable AppImages with appimagetool. The result needs nothing installed on
+# the host beyond a normal desktop.
 #
 # Usage:
 #   ./build.sh                   # build both architectures
@@ -71,8 +72,8 @@ load_upstream() {
     DOWNLOAD_BASE="$(lock_get DOWNLOAD_BASE)"
     [ -n "$VERSION" ]           || die "upstream.lock is missing VERSION - run scripts/check-upstream.sh"
     # The GUI carries its own version; AppImages are named for BOTH versions.
-    GUI_VERSION="$(sed -n 's/^GUI_VERSION = "\(.*\)"$/\1/p' "$ROOT/scripts/proton-sync-gui.py" | head -1)"
-    [ -n "$GUI_VERSION" ]       || die "scripts/proton-sync-gui.py is missing GUI_VERSION"
+    GUI_VERSION="$(sed -n 's/^pub const GUI_VERSION: &str = "\(.*\)";$/\1/p' "$ROOT/gui/src/main.rs" | head -1)"
+    [ -n "$GUI_VERSION" ]       || die "gui/src/main.rs is missing GUI_VERSION"
     [ -n "$DOWNLOAD_BASE" ]     || die "upstream.lock is missing DOWNLOAD_BASE - run scripts/check-upstream.sh"
     [ -n "$PAGE_URL" ]          || PAGE_URL="https://proton.me/download/drive/cli/index.html"
     [ -n "$RELEASE_DATE" ]      || RELEASE_DATE="unknown"
@@ -117,6 +118,33 @@ fetch_payload() {
         || die "checksum mismatch for ${platform} - refusing to package a tampered binary"
 }
 
+# Build the Rust GUI for one architecture. Release AppImages cross-compile
+# with cargo-zigbuild so the binary's glibc floor is pinned to 2.28 (older
+# than every desktop we support) instead of inheriting the build host's
+# glibc; a plain cargo build is the fallback for local dev machines that
+# match the target and have no zigbuild.
+build_gui() {
+    local arch="$1" target bin_dir
+    case "$arch" in
+        x86_64)  target="x86_64-unknown-linux-gnu.2.28" ;;
+        aarch64) target="aarch64-unknown-linux-gnu.2.28" ;;
+    esac
+    bin_dir="$ROOT/gui/target/$target/release"
+    if command -v cargo-zigbuild >/dev/null 2>&1; then
+        log "building GUI (${target}, zigbuild)"
+        ( cd "$ROOT/gui" && cargo zigbuild --release --target "$target" )
+    elif [ "$(uname -m)" = "$arch" ]; then
+        log "building GUI (${arch}, native build - install cargo-zigbuild for the glibc-pinned one)"
+        ( cd "$ROOT/gui" && cargo build --release )
+        bin_dir="$ROOT/gui/target/release"
+    else
+        die "cargo-zigbuild not found and this host is not ${arch} - cannot build the GUI"
+    fi
+    [ -x "$bin_dir/proton-drive-gui" ] \
+        || die "GUI binary missing at $bin_dir/proton-drive-gui"
+    GUI_BIN="$bin_dir/proton-drive-gui"
+}
+
 render_icon() {
     # original cloud-upload glyph (src/protondrive-icon.svg), Proton-purple
     # gradient baked into the SVG - rendered straight to PNG for the AppDir
@@ -141,14 +169,15 @@ make_appdir() {
 
     install -m 0755 "$SRC/AppRun" "$appdir/AppRun"
     install -m 0755 "$payload"    "$appdir/usr/bin/proton-drive"
-    # GUI + sync engine: this project's own MIT scripts, run by AppRun with the
-    # portable Python/Qt stack bundled by bundle_python below (the host's
-    # python3/PyQt6 is only a dev fallback for source checkouts). The CLI
-    # payload above stays unmodified.
+    # GUI: this project's own Rust binary (built by build_gui), statically
+    # carrying everything it needs beyond the usual desktop libs - no
+    # bundled Qt, no bundled GUI runtime. The sync engine stays Python and
+    # runs on the portable CPython bundled by bundle_python (dev source
+    # checkouts fall back to the host's python3). The CLI payload above
+    # stays unmodified.
+    install -m 0755 "$GUI_BIN" "$appdir/usr/bin/proton-drive-gui"
     install -m 0644 "$ROOT/scripts/proton-sync.py" \
         "$appdir/usr/lib/proton-sync/proton-sync.py"
-    install -m 0644 "$ROOT/scripts/proton-sync-gui.py" \
-        "$appdir/usr/lib/proton-sync/proton-sync-gui.py"
     # The app icon: the GUI renders it for the window title, the tray and the
     # "add to app menu" entry - inside the AppImage it must ship next to the
     # script (find_icon() looks there first).
@@ -162,13 +191,17 @@ make_appdir() {
     # every copy of the Proton payload, so it ships inside the AppImage too.
     install -m 0644 "$SRC/licenses/Proton-Drive-SDK-MIT.txt" \
         "$appdir/usr/share/licenses/proton-drive/LICENSE"
-    # The bundled desktop stack is copyleft: PyQt6 is GPL-3.0-only, the Qt6
-    # libraries are LGPL-3.0-only and CPython is PSF-2.0. Each of those
-    # licences must accompany the binaries, so all three travel inside the
-    # AppImage as well (catalogued in THIRD_PARTY_NOTICES.md).
-    install -m 0644 "$SRC/licenses/GPL-3.0-only.txt"  "$appdir/usr/share/licenses/GPL-3.0-only.txt"
-    install -m 0644 "$SRC/licenses/LGPL-3.0-only.txt" "$appdir/usr/share/licenses/LGPL-3.0-only.txt"
-    install -m 0644 "$SRC/licenses/PSF-2.0.txt"       "$appdir/usr/share/licenses/PSF-2.0.txt"
+    # The bundled runtime is CPython (PSF-2.0), whose licence must accompany
+    # the binary, and jeepney (MIT) for the engine's Secret Service reads -
+    # jeepney's own licence travels inside its wheel's dist-info. The GUI
+    # brings no copyleft of its own: Qt/PyQt6 are gone since 3.14.0. The
+    # aggregated texts of the GUI's crate graph (generated from Cargo.lock
+    # by scripts/gen-licenses.sh) travel next to it.
+    install -m 0644 "$SRC/licenses/PSF-2.0.txt" "$appdir/usr/share/licenses/PSF-2.0.txt"
+    [ -f "$SRC/licenses/proton-drive-gui-THIRD-PARTY.txt" ] \
+        || die "missing $SRC/licenses/proton-drive-gui-THIRD-PARTY.txt - run scripts/gen-licenses.sh"
+    install -m 0644 "$SRC/licenses/proton-drive-gui-THIRD-PARTY.txt" \
+        "$appdir/usr/share/licenses/proton-drive-gui-THIRD-PARTY.txt"
 
     install -m 0644 "$BUILD/icon-256.png" "$appdir/proton-drive.png"
     install -m 0644 "$BUILD/icon-256.png" "$appdir/usr/share/icons/hicolor/256x256/apps/proton-drive.png"
@@ -176,22 +209,24 @@ make_appdir() {
     ln -sfn proton-drive.png "$appdir/.DirIcon"
 }
 
-# Assemble the portable desktop stack - CPython + the PyQt6/Qt6 wheels - into
-# the AppDir so the AppImage needs nothing installed on the host. This only
-# extracts and copies, never runs target-architecture binaries, so an x86_64
-# machine prepares the aarch64 bundle the same way. Trimmed: Python pieces a
-# sync client never imports (tcl/tk, idle, 2to3, pip) and Qt's QML/translations
-# (~40 MB). Licence texts are kept - they are the compliance obligation.
+# Assemble the portable runtime - CPython plus the engine's wheels (jeepney,
+# for the Secret Service session reads) - into the AppDir so the AppImage
+# needs nothing installed on the host. The GUI has not been Python since
+# 3.14.0 (it is a self-contained Rust binary). This only extracts and copies,
+# never runs target-architecture binaries, so an x86_64 machine prepares the
+# aarch64 bundle the same way. Trimmed: Python pieces a sync client never
+# imports (tcl/tk, idle, 2to3, pip). Licence texts are kept - they are the
+# compliance obligation.
 bundle_python() {
     local arch="$1" appdir="$2"
     local bdir="$ROOT/download/bundle/$arch"
     local py_file dest sp whl
     py_file="$(ls -1 "$bdir"/cpython-*-install_only.tar.gz 2>/dev/null | head -1 || true)"
     [ -n "$py_file" ] || die "portable CPython missing for ${arch} - run scripts/fetch-desktop-deps.sh ${arch}"
-    ls -1 "$bdir"/wheels/*.whl >/dev/null 2>&1 || die "PyQt6 wheels missing for ${arch} - run scripts/fetch-desktop-deps.sh ${arch}"
+    ls -1 "$bdir"/wheels/*.whl >/dev/null 2>&1 || die "engine wheels missing for ${arch} - run scripts/fetch-desktop-deps.sh ${arch}"
 
     dest="$appdir/usr/lib/bundled-python"
-    log "bundling portable Python + Qt6 (${arch})"
+    log "bundling portable CPython (${arch})"
     rm -rf "$dest"
     mkdir -p "$dest"
     tar -xzf "$py_file" -C "$dest" --strip-components=1
@@ -200,15 +235,29 @@ bundle_python() {
     for whl in "$bdir"/wheels/*.whl; do
         python3 -m zipfile -e "$whl" "$sp"
     done
+    # What a sync client never touches: tcl/tk (and its whole runtime - the
+    # trimmed tkinter module leaves the shared libraries behind), pip, idle,
+    # 2to3, pydoc, the dev configs and the test suite.
     rm -rf "$dest/lib/python3.12/idlelib" \
            "$dest/lib/python3.12/lib2to3" \
            "$dest/lib/python3.12/turtledemo" \
            "$dest/lib/python3.12/tkinter" \
+           "$dest/lib/python3.12/test" \
            "$dest/lib/python3.12/ensurepip" \
            "$dest/lib/python3.12/site-packages/pip" \
            "$dest"/lib/python3.12/site-packages/pip-*.dist-info \
-           "$sp/PyQt6/Qt6/qml" \
-           "$sp/PyQt6/Qt6/translations"
+           "$dest"/lib/itcl* "$dest"/lib/tcl9* "$dest"/lib/tk9* \
+           "$dest"/lib/thread3* "$dest"/lib/libtcl* "$dest"/lib/libtk* \
+           "$dest"/lib/pkgconfig "$dest"/lib/python3.12/lib-dynload/_tkinter* \
+           "$dest"/bin/2to3* "$dest"/bin/idle* "$dest"/bin/pip* \
+           "$dest"/bin/pydoc* "$dest"/bin/python*-config
+    # Strip debug symbols from libpython (114 MB unstripped; distro packages
+    # strip theirs too). The interpreter BINARY is deliberately NOT stripped:
+    # python-build-standalone's link layout puts .dynstr outside its segment,
+    # and strip corrupts it - verified: the stripped binary dies with
+    # "undefined symbol: , version" at first run.
+    strip --strip-unneeded "$dest"/lib/libpython3.12.so.1.0 \
+        || die "stripping the bundled libpython failed"
 }
 
 validate() {
@@ -232,6 +281,7 @@ build_one() {
     local out="$DIST/${APPIMAGE_NAME}-${VERSION}-GUI-${GUI_VERSION}-${arch}.AppImage"
 
     fetch_payload "$platform"
+    build_gui "$arch"
     make_appdir "$platform" "$appdir"
     "$ROOT/scripts/fetch-desktop-deps.sh" "$arch"
     bundle_python "$arch" "$appdir"

@@ -202,13 +202,12 @@ What the settings mean (the app keeps this short - the details live here):
 
 ## Distro notes
 
-The AppImage needs a normal desktop session and **glibc ≥ 2.34 on x86_64**
-(Debian 12 / Ubuntu 22.04 / Fedora 36 era or newer) or **glibc ≥ 2.39 on
-aarch64** (Debian 13 / Ubuntu 24.04 / Fedora 40 era or newer) - those floors
-come from the bundled PyQt6/Qt6 wheels. The Proton CLI payload itself needs
-only glibc ≥ 2.17, so `--help`-style CLI use stays even more portable. On
-Debian/Ubuntu, Fedora, Arch/CachyOS and derivatives there is **nothing else
-to install** - no python3-pyqt6, no python3-qt6, no python-pyqt6:
+The AppImage needs a normal desktop session and **glibc ≥ 2.28** (Debian 10 /
+Ubuntu 20.04 / Fedora 32 era or newer) - the floor comes from the Rust GUI
+binary, whose glibc requirement is pinned at build time; the bundled CPython
+needs only glibc ≥ 2.17 and the Proton CLI payload itself is equally
+portable. On Debian/Ubuntu, Fedora, Arch/CachyOS and derivatives there is
+**nothing else to install** - no Qt, no PyQt6, no python3 of your own:
 
 * **Arch / CachyOS** — works out of the box if `fuse2` is installed (this build
   was made and tested here, on CachyOS).
@@ -305,25 +304,26 @@ Local equivalent of CI: `./scripts/check-upstream.sh && ./build.sh && ./scripts/
 ## Project layout
 
 ```
-build.sh          reproducible build script (download -> verify -> package -> validate)
+build.sh          reproducible build script (download -> verify -> build GUI -> package -> validate)
 upstream.lock     VERSION + Proton's published SHA-512s - written by check-upstream.sh only
 scripts/check-upstream.sh   parse proton.me, refresh upstream.lock (CI runs this)
 scripts/release-notes.sh    render release-notes.md.tmpl for the built artifacts
 scripts/proton-sync.py      two-way folder sync on top of the official CLI (stdlib only)
 scripts/install-sync.sh     install/uninstall the sync as a systemd user service
-scripts/proton-sync-gui.py  Qt6 desktop app (dashboard, logs, settings, tray)
-scripts/install-gui.sh      install the app: launcher + menu entry + icon
-scripts/fetch-desktop-deps.sh  fetch the bundled portable Python + PyQt6/Qt6 wheels (pinned + checksummed)
+gui/               Rust desktop app (egui): dashboard, cloud browser, tray, settings, updater
+scripts/install-gui.sh      install a source checkout's GUI: binary + menu entry + icon
+scripts/fetch-desktop-deps.sh  fetch the bundled portable CPython + jeepney (pinned + checksummed)
+scripts/gen-licenses.sh     regenerate the GUI's aggregated crate licence texts (cargo-about)
 release-notes.md.tmpl       release notes template (hashes filled in at build time)
 .github/workflows/release.yml  scheduled upstream check + build + publish
 install-command.sh  symlink the built AppImage into ~/.local/bin
-LICENSE           MIT, this project's own scripts
+LICENSE           MIT, this project's own code
 THIRD_PARTY_NOTICES.md  Proton's MIT payload license, trademarks, tooling credits
 src/AppRun        AppImage entry point (pure argv pass-through)
 src/io.github.zhafrisbs.ProtonDriveCLI.desktop     desktop entry
 src/io.github.zhafrisbs.ProtonDriveCLI.appdata.xml AppStream metadata
 src/licenses/Proton-Drive-SDK-MIT.txt  Proton's MIT notice (also inside every AppImage)
-src/licenses/GPL-3.0-only.txt LGPL-3.0-only.txt PSF-2.0.txt  licences of the bundled PyQt6 / Qt6 / CPython (inside every AppImage)
+src/licenses/PSF-2.0.txt proton-drive-gui-THIRD-PARTY.txt  licences of the bundled CPython + GUI crate graph (inside every AppImage)
 src/protondrive-icon.svg  Proton Drive glyph (simple-icons, CC0), tinted #6D4AFF
 download/         upstream binaries (SHA-512-verified, git-ignored)
 tools/            appimagetool + aarch64 runtime (auto-fetched, git-ignored)
@@ -341,21 +341,28 @@ equal the component id. Change the string in `build.sh` (`DESKTOP_ID`,
 
 **Your safety rules, in short: source links + disclaimers + shipped notices.**
 
-* **This repository's scripts** (`build.sh`, `install-command.sh`, `src/AppRun`,
-  the desktop/AppStream metadata, the icon file) are **MIT** — see
+* **This repository's own code** (the Rust GUI in `gui/`, `build.sh`,
+  `install-command.sh`, `src/AppRun`, the sync engine script, the
+  desktop/AppStream metadata, the icon file) is **MIT** — see
   [`LICENSE`](LICENSE).
-* **The bundled desktop stack** (portable CPython, Qt6 libraries, PyQt6 and
-  PyQt6-sip wheels, all fetched by `scripts/fetch-desktop-deps.sh` and shipped
-  inside release AppImages at `usr/lib/bundled-python/`) keeps its own
-  licences: CPython **PSF-2.0**, Qt6 **LGPL-3.0-only** (with Qt's FOSS
-  exception), PyQt6 and PyQt6-sip **GPL-3.0-only**. All three texts ship
-  inside every AppImage at `usr/share/licenses/` — LGPL and PSF accompany
-  their binaries as those licences require, and because PyQt6 is copyleft
-  **the AppImage as a whole is distributed under GPL-3.0-only** (this
-  project's own code stays MIT; the packaged combination does not). Its
-  complete corresponding source is this public repository: the build recipe,
-  `src/AppRun`, the GUI and sync engine, plus the pinned third-party versions
-  above. Inventory: [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+* **What release AppImages additionally bundle** keeps its own licences:
+  * CPython 3.12, a portable build (**PSF-2.0**) — the sync engine's
+    runtime — and jeepney (**MIT**), both fetched by
+    `scripts/fetch-desktop-deps.sh` and shipped at
+    `usr/lib/bundled-python/`;
+  * the GUI binary's crate graph (~450 crates from crates.io, nearly all
+    MIT/Apache-2.0 and other permissive licences), with every licence text
+    generated from the exact `gui/Cargo.lock` graph by
+    `scripts/gen-licenses.sh`.
+  No dependency puts the binary under a copyleft licence: multi-licensed
+  crates take their permissive option (`gui/about.toml`), and the one
+  MPL-2.0 crate is weak, file-level copyleft that explicitly permits static
+  linking. All of those texts ship inside every AppImage at
+  `usr/share/licenses/` (`PSF-2.0.txt` and
+  `proton-drive-gui-THIRD-PARTY.txt`). Since GUI 3.14.0 the AppImage
+  carries no Qt, no PyQt6 and no copyleft component — unlike earlier
+  versions, it is **not** a GPL-3.0-only distribution. Inventory:
+  [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 * **The payload** (the Proton Drive CLI binary inside each AppImage) is owned by
   Proton AG and is **MIT, `Copyright (c) 2025-2026 Proton AG`**. Its source is
   the SDK Proton publishes at <https://github.com/ProtonDriveApps/sdk>, which

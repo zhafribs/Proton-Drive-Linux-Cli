@@ -23,8 +23,8 @@ VERSION="${1:-$(lock_get VERSION)}"
 [ -n "$VERSION" ] || { echo "error: no version given and none in upstream.lock" >&2; exit 1; }
 
 # The GUI version travels in the tag and in every asset name.
-GUI_VERSION="$(sed -n 's/^GUI_VERSION = "\(.*\)"$/\1/p' "$ROOT/scripts/proton-sync-gui.py" | head -1)"
-[ -n "$GUI_VERSION" ] || { echo "error: GUI_VERSION not found in proton-sync-gui.py" >&2; exit 1; }
+GUI_VERSION="$(sed -n 's/^pub const GUI_VERSION: &str = "\(.*\)";$/\1/p' "$ROOT/gui/src/main.rs" | head -1)"
+[ -n "$GUI_VERSION" ] || { echo "error: GUI_VERSION not found in gui/src/main.rs" >&2; exit 1; }
 [ -f "$ROOT/CHANGELOG.md" ] || { echo "error: CHANGELOG.md missing" >&2; exit 1; }
 
 RELEASE_DATE="$(lock_get RELEASE_DATE)"

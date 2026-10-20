@@ -32,6 +32,7 @@ on:
       - release-notes.md.tmpl
       - 'src/**'
       - 'scripts/**'
+      - 'gui/**'
       - '.github/workflows/release.yml'
   pull_request:
     branches: [main]
@@ -57,17 +58,48 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends librsvg2-bin desktop-file-utils appstream
 
+      # The GUI is a Rust binary; it cross-builds with cargo-zigbuild so its
+      # glibc floor is pinned to 2.28 (Debian 10 era) instead of the runner's
+      # own glibc. zig comes from ziglang.org directly: the PyPI ziglang
+      # package ships its entry point as python-zig, which cargo-zigbuild
+      # does not find on PATH.
+      - name: Install the Rust toolchain and zig (GUI builds)
+        run: |
+          rustup toolchain install stable --profile minimal \
+            --target x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
+          rustup default stable
+          ZIG_VERSION=0.15.2
+          wget -q "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
+               -O "$RUNNER_TEMP/zig.tar.xz"
+          mkdir -p "$RUNNER_TEMP/zig"
+          tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP/zig" --strip-components=1
+          echo "$RUNNER_TEMP/zig" >> "$GITHUB_PATH"
+          command -v cargo-zigbuild >/dev/null || cargo install cargo-zigbuild --locked
+
+      - name: Cache the Rust build (cargo registry + zigbuild)
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/bin/cargo-zigbuild
+            ~/.cargo/registry
+            ~/.cargo/git
+            gui/target
+          key: rust-v1-${{ runner.os }}-${{ hashFiles('gui/Cargo.lock') }}
+          restore-keys: |
+            rust-v1-${{ runner.os }}-
+
       - name: Cache Proton binaries, build tools and the desktop bundle
         uses: actions/cache@v6
         with:
           path: |
             tools
             download
-          # v2: download/ now also holds the portable Python + PyQt6 wheels
-          # (scripts/fetch-desktop-deps.sh pins them), so the key hashes that
-          # script too and the first run with the bundle saves a fresh cache.
-          key: build-v2-${{ runner.os }}-${{ hashFiles('upstream.lock', 'scripts/fetch-desktop-deps.sh') }}
+          # v3: the bundle is engine-only now (portable CPython + jeepney -
+          # scripts/fetch-desktop-deps.sh pins them); the PyQt6/Qt6 wheels
+          # are gone since the GUI became a Rust binary (3.14.0).
+          key: build-v3-${{ runner.os }}-${{ hashFiles('upstream.lock', 'scripts/fetch-desktop-deps.sh') }}
           restore-keys: |
+            build-v3-${{ runner.os }}-
             build-v2-${{ runner.os }}-
             build-${{ runner.os }}-
 
@@ -98,8 +130,8 @@ jobs:
           VERSION: ${{ steps.upstream.outputs.version }}
         run: |
           set -euo pipefail
-          GUI="$(sed -n 's/^GUI_VERSION = "\(.*\)"$/\1/p' scripts/proton-sync-gui.py | head -1)"
-          [ -n "$GUI" ] || { echo "GUI_VERSION missing from proton-sync-gui.py" >&2; exit 1; }
+          GUI="$(sed -n 's/^pub const GUI_VERSION: &str = "\(.*\)"$/\1/p' gui/src/main.rs | head -1)"
+          [ -n "$GUI" ] || { echo "GUI_VERSION missing from gui/src/main.rs" >&2; exit 1; }
           TAG="v${VERSION}-gui${GUI}"
           NOTES="$RUNNER_TEMP/release-notes.md"
           ASSETS=(dist/ProtonDrive-CLI-"${VERSION}"-GUI-"${GUI}"-x86_64.AppImage
