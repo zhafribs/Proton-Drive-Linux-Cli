@@ -862,8 +862,10 @@ fn top_row(app: &mut App, ui: &mut egui::Ui) {
             go_fwd(app);
         }
 
-        // Breadcrumbs: "My Files > a > b", collapsing the middle when the
-        // row would overflow ("..." stays inert).
+        // Breadcrumbs: "My Files > a > b", compact - unframed segments,
+        // tight chevrons - collapsing the middle when the row would
+        // overflow ("..." stays inert). The crumb area is bounded so it
+        // can never stretch into the Refresh button's room.
         let (segs, trash_view) = {
             let c = &app.cloud;
             let mut segs: Vec<String> = vec!["My Files".to_string()];
@@ -872,62 +874,71 @@ fn top_row(app: &mut App, ui: &mut egui::Ui) {
             }
             (segs, c.trash_view)
         };
-        let avail = (ui.available_width() - 110.0).max(160.0);
+        // Room for Refresh + a gap, reserved up front.
+        let crumb_w = (ui.available_width() - 86.0).max(120.0);
         let est = |parts: &[String]| -> f32 {
-            parts.iter().map(|s| widgets::elide(s, 60).len() as f32 * 7.0 + 24.0).sum()
+            parts
+                .iter()
+                .map(|s| widgets::elide(s, 34).len() as f32 * 6.9 + 8.0)
+                .sum::<f32>()
+                + 12.0
         };
         let mut segs = segs;
-        while segs.len() > 2 && est(&segs) > avail && !segs.iter().any(|s| s == "...") {
+        while segs.len() > 2 && est(&segs) > crumb_w && !segs.iter().any(|s| s == "...") {
             segs.insert(segs.len() / 2, "...".to_string());
         }
-        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            if trash_view {
-                ui.label(egui::RichText::new("Trash").strong());
-                return;
-            }
-            for (i, seg) in segs.iter().enumerate() {
-                if i > 0 {
-                    ui.label(egui::RichText::new("\u{203a}").weak().size(13.0));
+        ui.allocate_ui_with_layout(
+            egui::vec2(crumb_w, 26.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                if trash_view {
+                    ui.label(egui::RichText::new("Trash").strong());
+                    return;
                 }
-                if seg == "..." {
-                    ui.add_enabled(false, egui::Button::new("...").frame_when_inactive(false));
-                    continue;
-                }
-                let parts: Vec<&str> = segs[1..=i]
-                    .iter()
-                    .map(String::as_str)
-                    .filter(|s| *s != "...")
-                    .collect();
-                let prefix = parts.join("/");
-                let current = i == segs.len() - 1;
-                let label = widgets::elide(seg, 34);
-                if current {
-                    // Proton's breadcrumb: the open folder reads as bold navy,
-                    // ancestors are quiet and gain a soft pill on hover.
-                    ui.label(egui::RichText::new(&label).strong().size(13.5))
-                        .on_hover_text(format!("/{prefix}"));
-                } else {
-                    let resp = ui
-                        .add(
-                            egui::Button::new(egui::RichText::new(&label).size(13.5))
-                                .frame(true)
-                                .frame_when_inactive(false),
-                        )
-                        .on_hover_text(format!("/{prefix}"));
-                    if resp.clicked() {
-                        load(app, prefix, true, true, true);
+                for (i, seg) in segs.iter().enumerate() {
+                    if i > 0 {
+                        ui.label(egui::RichText::new("\u{203a}").weak().size(12.0));
+                    }
+                    if seg == "..." {
+                        ui.add_enabled(false, egui::Button::new("...").frame_when_inactive(false));
+                        continue;
+                    }
+                    let parts: Vec<&str> = segs[1..=i]
+                        .iter()
+                        .map(String::as_str)
+                        .filter(|s| *s != "...")
+                        .collect();
+                    let prefix = parts.join("/");
+                    let current = i == segs.len() - 1;
+                    let label = widgets::elide(seg, 34);
+                    if current {
+                        // Proton's breadcrumb: the open folder reads as bold
+                        // navy; ancestors are quiet, clickable text.
+                        ui.label(egui::RichText::new(&label).strong().size(13.5))
+                            .on_hover_text(format!("/{prefix}"));
+                    } else {
+                        let resp = ui
+                            .add(
+                                egui::Label::new(egui::RichText::new(&label).size(13.5))
+                                    .sense(egui::Sense::click()),
+                            )
+                            .on_hover_text(format!("/{prefix}"));
+                        if resp.clicked() {
+                            load(app, prefix, true, true, true);
+                        }
                     }
                 }
-            }
-        });
+            },
+        );
 
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Refresh").clicked() {
-                let rel = app.cloud.rel.clone();
-                load(app, rel, false, true, true);
-            }
-            ui.add_space(8.0);
-        });
+        // Refresh: placed after the bounded crumb area, so the address can
+        // never slide underneath it.
+        ui.add_space(6.0);
+        if ui.button("Refresh").clicked() {
+            let rel = app.cloud.rel.clone();
+            load(app, rel, false, true, true);
+        }
     });
 }
 

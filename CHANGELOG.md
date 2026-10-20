@@ -1,3 +1,15 @@
+## 3.16.1 — 2026-10-20
+
+- **Compact address bar for deep folders.** A long path (e.g. My Files >
+  UUM-Bungalow > Zhafri > PTW > New > Ah Beh) used to stretch the
+  breadcrumb across the whole row — and slide it under the Refresh
+  button. Breadcrumb segments are now unframed and tight, collapse
+  earlier, and their area is bounded so Refresh can never be overlapped.
+- **The Home status orb is now a status ring:** a soft halo, a Proton-navy
+  glass core, and the status color worn as a ring — a smooth comet sweep
+  with pulsing dots while syncing, a checkmark when synced, pause bars
+  when paused, an exclamation on errors.
+
 ## 3.16.0 — 2026-10-20
 
 - **All six pages live in the left pane now, in Proton Drive's own order:**

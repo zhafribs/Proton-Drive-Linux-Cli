@@ -11,11 +11,11 @@ sync engine and the app window, in one double-clickable file.
 
 | Artifact | Arch | Size |
 | --- | --- | --- |
-| `dist/ProtonDrive-CLI-0.9.0-GUI-3.16.0-x86_64.AppImage` | x86_64 (Intel/AMD) | 81 MB |
+| `dist/ProtonDrive-CLI-0.9.0-GUI-3.16.1-x86_64.AppImage` | x86_64 (Intel/AMD) | 81 MB |
 | `dist/SHA256SUMS` | checksums of the outputs | |
 
 Upstream version: **0.9.0** (released 2026-10-05), `cli-drive@0.9.0+75612299`.
-Desktop app version: **3.16.0** — every release note ships the app's [development log](CHANGELOG.md).
+Desktop app version: **3.16.1** — every release note ships the app's [development log](CHANGELOG.md).
 
 ## Quick start
 

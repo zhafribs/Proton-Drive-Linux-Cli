@@ -65,8 +65,9 @@ pub fn toggle(ui: &mut egui::Ui, label: &str, value: &mut bool, hint: Option<&st
     changed
 }
 
-/// Status orb: filled disc in the status color, with a rotating arc while
-/// syncing (repaints requested by the App).
+/// Status orb: a modern status ring - a soft ambient halo, a Proton-navy
+/// glass core, the status color as the ring (a comet sweep + pulsing dots
+/// while syncing) and a state glyph in the middle.
 pub fn status_orb(ui: &mut egui::Ui, status: &str) {
     let size = 104.0;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
@@ -75,29 +76,95 @@ pub fn status_orb(ui: &mut egui::Ui, status: &str) {
     let painter = ui.painter();
     let r = size / 2.0 - 8.0;
 
-    painter.circle_filled(c, r + 5.0, color.gamma_multiply(0.10));
-    painter.circle_filled(c, r, color.gamma_multiply(0.85));
+    // Ambient halo: two ultra-soft discs so the ring glows instead of
+    // sitting flat on the page.
+    painter.circle_filled(c, r + 9.0, color.gamma_multiply(0.05));
+    painter.circle_filled(c, r + 4.5, color.gamma_multiply(0.09));
+
+    // Glass core: Proton navy with a lighter cap for a domed sheen.
+    painter.circle_filled(c, r - 7.0, theme::NAVY);
     painter.circle_filled(
-        c + egui::vec2(0.0, -r * 0.18),
-        r * 0.72,
-        color.gamma_multiply(0.45),
+        c + egui::vec2(0.0, -r * 0.14),
+        (r - 7.0) * 0.80,
+        theme::NAVY.gamma_multiply(1.5),
     );
-    painter.circle_stroke(c, r, egui::Stroke::new(1.5, egui::Color32::WHITE.gamma_multiply(0.35)));
+
+    // The ring itself: a calm track in the status color.
+    painter.circle_stroke(
+        c,
+        r,
+        egui::Stroke::new(6.0, color.gamma_multiply(0.22)),
+    );
 
     if status == "syncing" {
+        // Smooth motion: ~25 fps while the orb is on screen and animating.
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(40));
         let t = ui.ctx().input(|i| i.time) as f32;
+        // Comet sweep riding the ring.
         let a0 = (t * 140.0f32).to_radians().rem_euclid(std::f32::consts::TAU);
-        let steps = 40;
+        let a1 = a0 + std::f32::consts::FRAC_PI_2;
+        let steps = 24;
         let pts: Vec<egui::Pos2> = (0..=steps)
             .map(|i| {
                 let a = a0 + (i as f32 / steps as f32) * std::f32::consts::FRAC_PI_2;
-                c + egui::vec2(a.cos(), a.sin()) * (r + 5.0)
+                c + egui::vec2(a.cos(), a.sin()) * r
             })
             .collect();
-        painter.add(egui::Shape::line(
-            pts,
-            egui::Stroke::new(4.0, color.gamma_multiply(0.9)),
-        ));
+        painter.add(egui::Shape::line(pts, egui::Stroke::new(6.0, color)));
+        painter.circle_filled(
+            c + egui::vec2(a1.cos(), a1.sin()) * r,
+            3.2,
+            color.gamma_multiply(1.6),
+        );
+        // Three pulsing dots in the core.
+        for k in 0..3 {
+            let ph = (t * 3.0 + k as f32 * std::f32::consts::TAU / 3.0)
+                .rem_euclid(std::f32::consts::TAU);
+            let a = 0.35 + 0.65 * ((ph.sin() + 1.0) / 2.0);
+            let dx = (k as f32 - 1.0) * 11.0;
+            painter.circle_filled(
+                c + egui::vec2(dx, 0.0),
+                3.4,
+                egui::Color32::WHITE.gamma_multiply(a),
+            );
+        }
+        return;
+    }
+
+    // Static glyph per state, painted white on the glass core.
+    let white = egui::Color32::WHITE;
+    match status {
+        "synced" => {
+            let w = egui::Stroke::new(3.8, white);
+            painter.add(egui::Shape::line(
+                vec![c + egui::vec2(-9.0, 0.5), c + egui::vec2(-3.0, 6.5)],
+                w,
+            ));
+            painter.add(egui::Shape::line(
+                vec![c + egui::vec2(-3.0, 6.5), c + egui::vec2(9.5, -6.5)],
+                w,
+            ));
+        }
+        "paused" => {
+            for dx in [-5.5f32, 5.5] {
+                let bar = egui::Rect::from_center_size(
+                    c + egui::vec2(dx, 0.0),
+                    egui::vec2(4.5, 17.0),
+                );
+                painter.rect_filled(bar, egui::CornerRadius::same(2), white);
+            }
+        }
+        "error" => {
+            let bar =
+                egui::Rect::from_center_size(c + egui::vec2(0.0, -3.0), egui::vec2(4.5, 14.0));
+            painter.rect_filled(bar, egui::CornerRadius::same(2), white);
+            painter.circle_filled(c + egui::vec2(0.0, 8.5), 2.6, white);
+        }
+        _ => {
+            // Unknown: a quiet white ring.
+            painter.circle_stroke(c, 8.0, egui::Stroke::new(2.6, white));
+        }
     }
 }
 
