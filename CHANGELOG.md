@@ -1,3 +1,11 @@
+## 3.16.9 — 2026-10-21
+
+- **The Home status ring is concentric again.** The orb's inner glass
+  disc was painted slightly above the centre as a fake dome highlight,
+  which read as a circle sitting off-centre in both the idle and syncing
+  states. The core is now a flat disc, so the ring, core and state glyph
+  share one centre.
+
 ## 3.16.8 — 2026-10-21
 
 - **Autostart keeps working after the AppImage moves.** The login entry

@@ -81,13 +81,9 @@ pub fn status_orb(ui: &mut egui::Ui, status: &str) {
     painter.circle_filled(c, r + 9.0, color.gamma_multiply(0.05));
     painter.circle_filled(c, r + 4.5, color.gamma_multiply(0.09));
 
-    // Glass core: Proton navy with a lighter cap for a domed sheen.
+    // Glass core: Proton navy, flat - a lighter cap would sit off-centre
+    // and read as a misplaced circle in both idle and syncing states.
     painter.circle_filled(c, r - 7.0, theme::NAVY);
-    painter.circle_filled(
-        c + egui::vec2(0.0, -r * 0.14),
-        (r - 7.0) * 0.80,
-        theme::NAVY.gamma_multiply(1.5),
-    );
 
     // The ring itself: a calm track in the status color.
     painter.circle_stroke(
