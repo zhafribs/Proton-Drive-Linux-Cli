@@ -87,6 +87,11 @@ pub fn on_shown(app: &mut App) {
 }
 
 pub fn load(app: &mut App, rel: String, push: bool, announce: bool, paint: bool) {
+    if push {
+        // Navigation: reveal the folder in the sidebar tree. Nothing is
+        // forced open afterwards, so every branch can still be collapsed.
+        expand_path(app, &rel);
+    }
     {
         let c = &mut app.cloud;
         if push && rel != c.rel {
@@ -153,12 +158,14 @@ pub fn load_trash(app: &mut App, announce: bool) {
 pub fn go_back(app: &mut App) {
     let Some(prev) = app.cloud.hist.pop() else { return };
     app.cloud.fwd.push(app.cloud.rel.clone());
+    expand_path(app, &prev);
     load(app, prev, false, true, true);
 }
 
 pub fn go_fwd(app: &mut App) {
     let Some(next) = app.cloud.fwd.pop() else { return };
     app.cloud.hist.push(app.cloud.rel.clone());
+    expand_path(app, &next);
     load(app, next, false, true, true);
 }
 
@@ -890,6 +897,24 @@ fn collapse_segments(segs: &mut Vec<(String, String)>, crumb_w: f32) {
             }
         }
     }
+    // Extreme narrow (minimum window with the widest sidebar): even
+    // [first, "...", last] can overshoot. Shave the last label - it keeps
+    // its full path - until the estimate fits.
+    while est(segs) > crumb_w - 16.0 {
+        let Some((label, _)) = segs.last_mut() else { break };
+        let has_ellipsis = label.ends_with('\u{2026}');
+        let n = label.chars().count();
+        if n <= if has_ellipsis { 6 } else { 5 } {
+            break;
+        }
+        // With an ellipsis already there, drop it plus one more character -
+        // otherwise take(n - 1) would remove the ellipsis and re-add it,
+        // leaving the string unchanged.
+        let keep = if has_ellipsis { n - 2 } else { n - 1 };
+        let mut s: String = label.chars().take(keep).collect();
+        s.push('\u{2026}');
+        *label = s;
+    }
 }
 
 fn top_row(app: &mut App, ui: &mut egui::Ui) {
@@ -1062,12 +1087,30 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
             // the pane for the rows below - header and rows would end up on
             // different bases.
             let gap = ui.spacing().item_spacing.x;
-            let name_w = (full_w - col_size_w - col_mtime_w - 2.0 * gap).max(140.0);
+            let name_min = 140.0;
+            // Compositors may resize below the requested minimum (X11 hints
+            // are advisory), so the list degrades: drop Modified first, then
+            // Size, keeping the Name column readable instead of overlapping.
+            let show_size = full_w >= name_min + gap + col_size_w;
+            let show_mtime =
+                show_size && full_w >= name_min + col_size_w + col_mtime_w + 2.0 * gap;
+            let mut name_w = full_w;
+            if show_size {
+                name_w -= gap + col_size_w;
+            }
+            if show_mtime {
+                name_w -= gap + col_mtime_w;
+            }
+            let name_w = name_w.max(name_min);
 
             ui.horizontal(|ui| {
                 header_cell(ui, "Name", 0, name_w, app);
-                header_cell(ui, "Size", 1, col_size_w, app);
-                header_cell(ui, "Modified", 2, col_mtime_w, app);
+                if show_size {
+                    header_cell(ui, "Size", 1, col_size_w, app);
+                }
+                if show_mtime {
+                    header_cell(ui, "Modified", 2, col_mtime_w, app);
+                }
             });
             ui.separator();
 
@@ -1087,7 +1130,17 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
                 .max_height(max_h)
                 .show(ui, |ui| {
                     for e in &rows {
-                        row(app, ui, e, name_w, col_size_w, &mut open_rel, &mut menu_item);
+                        row(
+                            app,
+                            ui,
+                            e,
+                            name_w,
+                            col_size_w,
+                            show_size,
+                            show_mtime,
+                            &mut open_rel,
+                            &mut menu_item,
+                        );
                     }
                     // Empty area: click clears the selection, right-click offers the
                     // folder-level menu (Qt's empty-item context menu).
@@ -1176,6 +1229,8 @@ fn row(
     e: &cli::RemoteEntry,
     name_w: f32,
     size_w: f32,
+    show_size: bool,
+    show_mtime: bool,
     open_rel: &mut Option<String>,
     menu_item: &mut Option<&'static str>,
 ) {
@@ -1233,7 +1288,7 @@ fn row(
         name_font,
         if selected { visuals.selection.stroke.color } else { visuals.text_color() },
     );
-    if !e.dir {
+    if show_size && !e.dir {
         // Same column boundaries as the header: Name | gap | Size.
         ui.painter().text(
             egui::pos2(
@@ -1246,13 +1301,15 @@ fn row(
             visuals.weak_text_color(),
         );
     }
-    ui.painter().text(
-        egui::pos2(rect.right() - 8.0, cy),
-        egui::Align2::RIGHT_CENTER,
-        e.mtime.clone(),
-        egui::FontId::proportional(12.5),
-        visuals.weak_text_color(),
-    );
+    if show_mtime {
+        ui.painter().text(
+            egui::pos2(rect.right() - 8.0, cy),
+            egui::Align2::RIGHT_CENTER,
+            e.mtime.clone(),
+            egui::FontId::proportional(12.5),
+            visuals.weak_text_color(),
+        );
+    }
 
     if resp.hovered() {
         resp.clone().on_hover_text(e.name.clone());
@@ -1550,12 +1607,20 @@ fn toggle_tree(app: &mut App, rel: &str) {
     }
 }
 
-/// Is `node` a folder on the path down to `rel`? (auto-expand the open route)
-fn under_path(node: &str, rel: &str) -> bool {
-    if node.is_empty() {
-        return !rel.is_empty();
+/// Expand the tree down to `rel`: the root section and every ancestor go
+/// into `tree_open`, so navigation lands with the path visible. Nothing is
+/// forced open later - any branch can still be collapsed by its caret.
+fn expand_path(app: &mut App, rel: &str) {
+    app.cloud.tree_open.insert(String::new());
+    let mut prefix = String::new();
+    for part in rel.split('/').filter(|p| !p.is_empty()) {
+        if !prefix.is_empty() {
+            prefix.push('/');
+        }
+        prefix.push_str(part);
+        app.cloud.tree_open.insert(prefix.clone());
+        ensure_children(app, &prefix);
     }
-    rel.strip_prefix(node).is_some_and(|rest| rest.starts_with('/'))
 }
 
 /// The pane's "+ New" pill (Proton's sidebar button): a menu for creating
@@ -1632,12 +1697,11 @@ pub fn nav_ui(app: &mut App, ui: &mut egui::Ui) {
         app.page = super::Page::Activity;
     }
     ui.add_space(8.0);
-    let in_files = app.page == super::Page::Cloud && !app.cloud.trash_view;
     // Proton's sidebar shows "My files" open by default once its folders are
-    // known; an explicit toggle wins, and the open route always expands.
+    // known; an explicit toggle wins. Navigation inserts itself into
+    // tree_open, so nothing needs to be forced open while browsing.
     let root_open = app.cloud.tree_open.contains("")
-        || (!app.cloud.tree_root_touched && children(app, "").is_some())
-        || (in_files && !app.cloud.rel.is_empty());
+        || (!app.cloud.tree_root_touched && children(app, "").is_some());
     my_files_row(app, ui, root_open);
     if root_open {
         tree_rows(app, ui, "", 0);
@@ -1733,8 +1797,7 @@ fn tree_rows(app: &mut App, ui: &mut egui::Ui, parent: &str, depth: usize) {
     let in_files = app.page == super::Page::Cloud && !app.cloud.trash_view;
     for e in &dirs {
         let r = e.rel.trim_end_matches('/').to_string();
-        let forced = in_files && under_path(&r, &app.cloud.rel);
-        let open = app.cloud.tree_open.contains(&r) || forced;
+        let open = app.cloud.tree_open.contains(&r);
         let active = in_files && app.cloud.rel == r;
         let indent = 16.0 + depth as f32 * 14.0;
         let (rect, resp) = ui.allocate_exact_size(
@@ -1786,8 +1849,8 @@ fn tree_rows(app: &mut App, ui: &mut egui::Ui, parent: &str, depth: usize) {
             }
         }
         if open {
-            if forced && children(app, &r).is_none() {
-                ensure_children(app, &r); // the auto-open route fetches its data once
+            if children(app, &r).is_none() {
+                ensure_children(app, &r); // expanded node: fetch its listing once
             }
             tree_rows(app, ui, &r, depth + 1);
         }
@@ -1851,5 +1914,24 @@ mod tests {
             }
             assert!(original.contains(&(s.clone(), p.clone())));
         }
+    }
+
+    #[test]
+    fn extreme_narrow_shaves_the_last_crumb_but_keeps_its_path() {
+        let mut segs: Vec<(String, String)> = vec![
+            ("My Files".into(), String::new()),
+            (
+                "Muhammad Al-Mu_izz Bin Safie".into(),
+                "UUM-Bungalow/Muhammad Al-Mu_izz Bin Safie".into(),
+            ),
+        ];
+        let last_path = segs.last().unwrap().1.clone();
+        collapse_segments(&mut segs, 240.0);
+        let (label, path) = segs.last().unwrap();
+        // The label was shortened with an ellipsis...
+        assert!(label.ends_with('\u{2026}'));
+        assert!(label.chars().count() < "Muhammad Al-Mu_izz Bin Safie".chars().count());
+        // ...but it still points at the full folder.
+        assert_eq!(path, &last_path);
     }
 }

@@ -1370,11 +1370,17 @@ impl eframe::App for App {
         // is the width this pane has always had, so a fresh install looks
         // exactly like before, and egui remembers a dragged width across
         // restarts.
+        // Keep the central pane above its layout floor: the file list needs
+        // the card margins (28) plus the three columns (min Name 140 + Size
+        // 96 + Modified 132 + two 10px gaps) and the page margins (60).
+        // 480 = 60 + 28 + 388 + a few px of rounding slack. Below this the
+        // list would have to overlap.
+        let nav_max = (ui.available_width() - 480.0).clamp(176.0, 400.0);
         egui::Panel::left("nav")
             .resizable(true)
             .default_size(216.0)
             .min_size(176.0)
-            .max_size(400.0)
+            .max_size(nav_max)
             .frame(
                 egui::Frame::side_top_panel(ui.style())
                     .inner_margin(egui::Margin::symmetric(16, 18))

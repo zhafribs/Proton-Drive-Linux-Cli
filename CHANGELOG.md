@@ -1,3 +1,18 @@
+## 3.16.7 — 2026-10-21
+
+- **A designed minimum window size.** The window now bottoms out at
+  720x540 - half of a 1440-wide screen, enough for the sidebar plus the
+  three list columns. The sidebar's drag limit follows the window, so it
+  can never squeeze the file list below the width its columns need.
+  Should a compositor still force a smaller window (X11 size hints are
+  advisory), the list degrades cleanly: it drops the Modified column,
+  then Size, instead of letting names overlap values.
+- **Sidebar folders always expand and collapse from the caret.** The tree
+  used to force the path you were inside open, so its caret did nothing
+  until you navigated elsewhere. Navigation now expands the path once,
+  and every branch collapses immediately - the current folder keeps its
+  highlight.
+
 ## 3.16.6 — 2026-10-21
 
 - **Long names stay in the Name column.** Dragging the sidebar wide makes
