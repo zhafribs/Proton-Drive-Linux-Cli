@@ -1,3 +1,19 @@
+## 3.16.4 — 2026-10-21
+
+- **The file list stays aligned after you shrink the window.** Going deep
+  into folders while the window was stretched and then narrowing it left
+  Size and Modified misaligned against their values, dates clipped at the
+  window edge and the address bar running past the pane. Two rows could
+  claim more width than the card they sit in: the breadcrumb's collapse
+  step inserted "..." without ever dropping a segment, and the header row
+  forgot the spacing between its three cells - egui grows a row's frame
+  to whatever its content claims, so the table inherited that inflated
+  width while the header kept the real one. The breadcrumb now actually
+  drops middle segments (first and last crumbs always kept, each still
+  pointing at its full path) and the Name column subtracts the cell
+  spacing, so header, values and dates share one width at every window
+  size.
+
 ## 3.16.3 — 2026-10-20
 
 - **Folder changes finally show their name.** The engine logs whole-subtree

@@ -859,6 +859,39 @@ fn top_icon_button(ui: &mut egui::Ui, kind: widgets::TopIcon, enabled: bool, hov
     resp.clicked()
 }
 
+/// Collapse the middle of the breadcrumb until the row fits `crumb_w`:
+/// a single "..." replaces segments (first and last crumbs are always
+/// kept), preferring to drop the ones after the "...". Each remaining
+/// crumb keeps the label and full path it arrived with.
+///
+/// The row must never outgrow `crumb_w` - anything wider here widens the
+/// pane for every widget below it (the card would be laid out on that
+/// inflated width, so header and rows end up on different bases). The
+/// width estimate is rough, hence the 16px of slack.
+fn collapse_segments(segs: &mut Vec<(String, String)>, crumb_w: f32) {
+    let est = |parts: &[(String, String)]| -> f32 {
+        parts
+            .iter()
+            .map(|(s, _)| widgets::elide(s, 34).len() as f32 * 6.9 + 8.0)
+            .sum::<f32>()
+            + 12.0
+    };
+    while segs.len() > 2 && est(segs) > crumb_w - 16.0 {
+        match segs.iter().position(|(s, _)| s == "...") {
+            Some(p) if p + 1 < segs.len() - 1 => {
+                segs.remove(p + 1);
+            }
+            Some(p) if p > 1 => {
+                segs.remove(p - 1);
+            }
+            Some(_) => break, // down to [first, "...", last]
+            None => {
+                segs.insert(segs.len() / 2, ("...".to_string(), String::new()));
+            }
+        }
+    }
+}
+
 fn top_row(app: &mut App, ui: &mut egui::Ui) {
     let (has_back, has_fwd, busy) = {
         let c = &app.cloud;
@@ -895,17 +928,22 @@ fn top_row(app: &mut App, ui: &mut egui::Ui) {
         // anymore, so long paths get maximum room before the middle
         // collapses to "...".
         let crumb_w = ui.available_width().max(120.0);
-        let est = |parts: &[String]| -> f32 {
-            parts
-                .iter()
-                .map(|s| widgets::elide(s, 34).len() as f32 * 6.9 + 8.0)
-                .sum::<f32>()
-                + 12.0
-        };
-        let mut segs = segs;
-        while segs.len() > 2 && est(&segs) > crumb_w && !segs.iter().any(|s| s == "...") {
-            segs.insert(segs.len() / 2, "...".to_string());
-        }
+        // Each crumb carries its path from the uncollapsed list, so hiding
+        // middle segments never breaks where a visible crumb points.
+        let mut segs: Vec<(String, String)> = segs
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let prefix = segs[1..=i]
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|x| *x != "...")
+                    .collect::<Vec<_>>()
+                    .join("/");
+                (s.clone(), prefix)
+            })
+            .collect();
+        collapse_segments(&mut segs, crumb_w);
         ui.allocate_ui_with_layout(
             egui::vec2(crumb_w, 26.0),
             egui::Layout::left_to_right(egui::Align::Center),
@@ -915,7 +953,7 @@ fn top_row(app: &mut App, ui: &mut egui::Ui) {
                     ui.label(egui::RichText::new("Trash").strong());
                     return;
                 }
-                for (i, seg) in segs.iter().enumerate() {
+                for (i, (seg, prefix)) in segs.iter().enumerate() {
                     if i > 0 {
                         ui.label(egui::RichText::new("\u{203a}").weak().size(12.0));
                     }
@@ -923,12 +961,6 @@ fn top_row(app: &mut App, ui: &mut egui::Ui) {
                         ui.add_enabled(false, egui::Button::new("...").frame_when_inactive(false));
                         continue;
                     }
-                    let parts: Vec<&str> = segs[1..=i]
-                        .iter()
-                        .map(String::as_str)
-                        .filter(|s| *s != "...")
-                        .collect();
-                    let prefix = parts.join("/");
                     let current = i == segs.len() - 1;
                     let label = widgets::elide(seg, 34);
                     if current {
@@ -944,7 +976,7 @@ fn top_row(app: &mut App, ui: &mut egui::Ui) {
                             )
                             .on_hover_text(format!("/{prefix}"));
                         if resp.clicked() {
-                            load(app, prefix, true, true, true);
+                            load(app, prefix.clone(), true, true, true);
                         }
                     }
                 }
@@ -1007,7 +1039,13 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
             let col_size_w = 96.0f32;
             let col_mtime_w = 132.0f32;
             let full_w = ui.available_width();
-            let name_w = (full_w - col_size_w - col_mtime_w).max(140.0);
+            // The header row is three cells separated by item_spacing; that
+            // spacing comes out of the flexible Name column so the row adds
+            // up to exactly full_w. A row wider than the card would widen
+            // the pane for the rows below - header and rows would end up on
+            // different bases.
+            let gap = ui.spacing().item_spacing.x;
+            let name_w = (full_w - col_size_w - col_mtime_w - 2.0 * gap).max(140.0);
 
             ui.horizontal(|ui| {
                 header_cell(ui, "Name", 0, name_w, app);
@@ -1142,8 +1180,12 @@ fn row(
         if selected { visuals.selection.stroke.color } else { visuals.text_color() },
     );
     if !e.dir {
+        // Same column boundaries as the header: Name | gap | Size.
         ui.painter().text(
-            egui::pos2(rect.left() + name_w + size_w - 8.0, cy),
+            egui::pos2(
+                rect.left() + name_w + ui.spacing().item_spacing.x + size_w - 8.0,
+                cy,
+            ),
             egui::Align2::RIGHT_CENTER,
             fmt_size(e.size),
             egui::FontId::proportional(12.5),
@@ -1694,6 +1736,66 @@ fn tree_rows(app: &mut App, ui: &mut egui::Ui, parent: &str, depth: usize) {
                 ensure_children(app, &r); // the auto-open route fetches its data once
             }
             tree_rows(app, ui, &r, depth + 1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::collapse_segments;
+
+    /// What top_row feeds the collapse: (label, full path to that crumb).
+    fn crumbs() -> Vec<(String, String)> {
+        [
+            "My Files",
+            "UUM-Bungalow",
+            "Zhafri",
+            "Worker Document",
+            "E&Z WB Venture (Airconditioner)",
+            "Ibrani",
+        ]
+        .iter()
+        .map(|s| (s.to_string(), s.to_string()))
+        .collect()
+    }
+
+    #[test]
+    fn wide_enough_keeps_every_crumb() {
+        let mut segs = crumbs();
+        collapse_segments(&mut segs, 4000.0);
+        assert_eq!(segs.len(), 6);
+        assert!(!segs.iter().any(|(s, _)| s == "..."));
+    }
+
+    #[test]
+    fn narrow_collapses_but_keeps_both_ends() {
+        let mut segs = crumbs();
+        let first = segs[0].clone();
+        let last = segs[segs.len() - 1].clone();
+        collapse_segments(&mut segs, 400.0);
+        // Exactly one ellipsis, and the ends of the path are untouched.
+        assert_eq!(segs.iter().filter(|(s, _)| s == "...").count(), 1);
+        assert_eq!(segs.first(), Some(&first));
+        assert_eq!(segs.last(), Some(&last));
+        // Never below [first, "...", last].
+        assert!(segs.len() >= 3);
+    }
+
+    #[test]
+    fn survivors_keep_their_original_paths() {
+        let mut segs: Vec<(String, String)> = (1..=8)
+            .map(|i| (format!("segment-{i:02}"), format!("UUM-Bungalow/folder/{i}")))
+            .collect();
+        let original: Vec<(String, String)> = segs.clone();
+        collapse_segments(&mut segs, 300.0);
+        assert!(segs.len() < original.len());
+        // Every surviving crumb still carries the path it arrived with, so
+        // hiding middle segments never breaks navigation.
+        for (s, p) in &segs {
+            if s == "..." {
+                continue;
+            }
+            assert!(original.contains(&(s.clone(), p.clone())));
         }
     }
 }
