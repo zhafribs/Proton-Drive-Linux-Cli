@@ -154,8 +154,12 @@ pub fn move_row(ui: &mut egui::Ui, row: &ChangeRow, parent: &str, when: &str) {
 /// Line/solid glyphs painted for the sidebar nav (Proton-style icons).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum NavIcon {
+    Home,
+    Activity,
     Folder,
+    Settings,
     Trash,
+    About,
 }
 
 /// Paint one nav glyph into `r` - hand-drawn from lines and rounded rects so
@@ -165,6 +169,35 @@ pub fn nav_icon(painter: &egui::Painter, r: egui::Rect, kind: NavIcon, c: egui::
     let stroke = egui::Stroke::new(1.6, c);
     let p = |x: f32, y: f32| egui::pos2(r.left() + x * r.width(), r.top() + y * r.height());
     match kind {
+        NavIcon::Home => {
+            // Line house: roof, walls, door.
+            painter.add(egui::Shape::line(
+                vec![p(0.08, 0.46), p(0.50, 0.10), p(0.92, 0.46)],
+                stroke,
+            ));
+            painter.add(egui::Shape::line(
+                vec![p(0.20, 0.42), p(0.20, 0.88), p(0.80, 0.88), p(0.80, 0.42)],
+                stroke,
+            ));
+            painter.add(egui::Shape::line(
+                vec![p(0.41, 0.88), p(0.41, 0.64), p(0.59, 0.64), p(0.59, 0.88)],
+                stroke,
+            ));
+        }
+        NavIcon::Activity => {
+            // Pulse line - the activity feed's heartbeat.
+            painter.add(egui::Shape::line(
+                vec![
+                    p(0.06, 0.56),
+                    p(0.30, 0.56),
+                    p(0.42, 0.24),
+                    p(0.56, 0.76),
+                    p(0.66, 0.50),
+                    p(0.94, 0.50),
+                ],
+                stroke,
+            ));
+        }
         NavIcon::Folder => {
             // Filled silhouette: tab + body (Proton's solid folder glyph).
             painter.rect_filled(
@@ -177,6 +210,22 @@ pub fn nav_icon(painter: &egui::Painter, r: egui::Rect, kind: NavIcon, c: egui::
                 egui::CornerRadius::same(4),
                 c,
             );
+        }
+        NavIcon::Settings => {
+            // Gear: teeth fused to the spindle ring, so it reads as a gear
+            // and not a sun.
+            let ctr = p(0.5, 0.5);
+            for i in 0..8 {
+                let a = (i as f32) * std::f32::consts::TAU / 8.0;
+                let (s, cs) = a.sin_cos();
+                let dir = egui::vec2(cs, s);
+                painter.add(egui::Shape::line(
+                    vec![ctr + dir * (0.24 * r.width()), ctr + dir * (0.42 * r.width())],
+                    stroke,
+                ));
+            }
+            painter.circle_stroke(ctr, 0.26 * r.width(), stroke);
+            painter.circle_stroke(ctr, 0.09 * r.width(), stroke);
         }
         NavIcon::Trash => {
             // Lid + handle, then the tapered bin with two ribs.
@@ -194,6 +243,12 @@ pub fn nav_icon(painter: &egui::Painter, r: egui::Rect, kind: NavIcon, c: egui::
             ));
             painter.add(egui::Shape::line(vec![p(0.44, 0.48), p(0.46, 0.76)], stroke));
             painter.add(egui::Shape::line(vec![p(0.56, 0.48), p(0.54, 0.76)], stroke));
+        }
+        NavIcon::About => {
+            // Info bubble: ring with an "i".
+            painter.circle_stroke(p(0.5, 0.5), 0.42 * r.width(), stroke);
+            painter.circle_filled(p(0.5, 0.32), 0.05 * r.width(), c);
+            painter.add(egui::Shape::line(vec![p(0.5, 0.46), p(0.5, 0.72)], stroke));
         }
     }
 }

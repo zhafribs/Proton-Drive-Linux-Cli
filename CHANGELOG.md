@@ -1,3 +1,13 @@
+## 3.16.0 — 2026-10-20
+
+- **All six pages live in the left pane now, in Proton Drive's own order:**
+  Home, Activity, My files, Settings, Trash, About. The four pages that
+  3.15.0 had moved behind the account row are first-class nav rows again;
+  the account row stays at the bottom showing your avatar and e-mail.
+- **The pane is resizable:** drag its right edge (176–400 px wide). The
+  default width is unchanged - 216 px, exactly what the pane has always
+  been - and the width you pick is remembered across restarts.
+
 ## 3.15.1 — 2026-10-20
 
 - **The in-app updater works again.** Releases listed their checksums as

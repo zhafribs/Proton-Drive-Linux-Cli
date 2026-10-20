@@ -853,8 +853,9 @@ impl App {
         cloud::new_button(self, ui);
         ui.add_space(10.0);
 
-        // "My files" (expandable folder tree) + "Trash"; long trees scroll
-        // while the footer stays anchored at the bottom.
+        // Home, Activity, My files (expandable folder tree), Settings,
+        // Trash, About; long trees scroll while the footer stays anchored
+        // at the bottom.
         egui::ScrollArea::vertical()
             .id_salt("nav-scroll")
             .auto_shrink([false, false])
@@ -889,7 +890,8 @@ impl App {
     }
 
     /// The pane's account row (Proton Drive's sidebar footer): avatar +
-    /// identity, opening a menu with the app's other pages.
+    /// identity at the very bottom; the pages themselves live as rows in the
+    /// nav list above.
     fn account_row(&mut self, ui: &mut egui::Ui) {
         let email = self.identity.as_ref().and_then(|i| i.email.clone());
         let label = match (&self.identity, &email) {
@@ -897,14 +899,8 @@ impl App {
             (Some(_), Some(e)) => e.as_str(),
             (Some(_), None) => "You're not signed in yet",
         };
-        let (rect, resp) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
-        let fill = if resp.hovered() {
-            ui.visuals().widgets.hovered.bg_fill
-        } else {
-            egui::Color32::TRANSPARENT
-        };
-        ui.painter().rect_filled(rect, egui::CornerRadius::same(8), fill);
+        let (rect, _resp) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::hover());
         // Accent initial circle, like Home's account card.
         let c = egui::pos2(rect.left() + 14.0, rect.center().y);
         ui.painter().circle_filled(c, 11.0, theme::ACCENT.gamma_multiply(0.25));
@@ -927,31 +923,6 @@ impl App {
             egui::FontId::proportional(13.0),
             ui.visuals().text_color(),
         );
-        ui.painter().text(
-            rect.right_center() + egui::vec2(-12.0, 0.0),
-            egui::Align2::RIGHT_CENTER,
-            "\u{25be}",
-            egui::FontId::proportional(10.0),
-            ui.visuals().weak_text_color(),
-        );
-        let _ = egui::Popup::menu(&resp).show(|ui| {
-            if ui.button("Home").clicked() {
-                ui.close();
-                self.page = Page::Home;
-            }
-            if ui.button("Activity").clicked() {
-                ui.close();
-                self.page = Page::Activity;
-            }
-            if ui.button("Settings").clicked() {
-                ui.close();
-                self.page = Page::Settings;
-            }
-            if ui.button("About").clicked() {
-                ui.close();
-                self.page = Page::About;
-            }
-        });
     }
 
     fn central(&mut self, ui: &mut egui::Ui) {
@@ -1395,10 +1366,15 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // White sidebar against the lavender content page - the Proton Drive
-        // web layout.
+        // web layout. The pane's right edge is draggable (176-400 px); 216.0
+        // is the width this pane has always had, so a fresh install looks
+        // exactly like before, and egui remembers a dragged width across
+        // restarts.
         egui::Panel::left("nav")
-            .resizable(false)
-            .exact_size(216.0)
+            .resizable(true)
+            .default_size(216.0)
+            .min_size(176.0)
+            .max_size(400.0)
             .frame(
                 egui::Frame::side_top_panel(ui.style())
                     .inner_margin(egui::Margin::symmetric(16, 18))

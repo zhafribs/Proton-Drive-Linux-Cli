@@ -1492,13 +1492,27 @@ fn go_trash(app: &mut App) {
     trash_toggle(app, true);
 }
 
-/// The pane's nav list: "My files" with its lazy tree, then "Trash" (the
-/// "+ New" pill is drawn by the caller above it).
+/// The pane's nav list, in the product's left-rail order: Home, Activity,
+/// "My files" with its lazy tree, Settings, Trash, About (the "+ New" pill
+/// is drawn by the caller above it).
 pub fn nav_ui(app: &mut App, ui: &mut egui::Ui) {
     if !app.cloud.disk_loaded {
         app.cloud.disk_loaded = true;
         app.cloud.disk = load_disk_cache(&app.paths.cloud_cache_file);
     }
+    if widgets::nav_row(ui, widgets::NavIcon::Home, "Home", app.page == super::Page::Home) {
+        app.page = super::Page::Home;
+    }
+    ui.add_space(6.0);
+    if widgets::nav_row(
+        ui,
+        widgets::NavIcon::Activity,
+        "Activity",
+        app.page == super::Page::Activity,
+    ) {
+        app.page = super::Page::Activity;
+    }
+    ui.add_space(8.0);
     let in_files = app.page == super::Page::Cloud && !app.cloud.trash_view;
     // Proton's sidebar shows "My files" open by default once its folders are
     // known; an explicit toggle wins, and the open route always expands.
@@ -1510,9 +1524,22 @@ pub fn nav_ui(app: &mut App, ui: &mut egui::Ui) {
         tree_rows(app, ui, "", 0);
     }
     ui.add_space(8.0);
+    if widgets::nav_row(
+        ui,
+        widgets::NavIcon::Settings,
+        "Settings",
+        app.page == super::Page::Settings,
+    ) {
+        app.page = super::Page::Settings;
+    }
+    ui.add_space(6.0);
     let trash_active = app.page == super::Page::Cloud && app.cloud.trash_view;
     if widgets::nav_row(ui, widgets::NavIcon::Trash, "Trash", trash_active) && !app.cloud.busy {
         go_trash(app);
+    }
+    ui.add_space(6.0);
+    if widgets::nav_row(ui, widgets::NavIcon::About, "About", app.page == super::Page::About) {
+        app.page = super::Page::About;
     }
 }
 
