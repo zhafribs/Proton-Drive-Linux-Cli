@@ -267,6 +267,10 @@ impl App {
         }
         let paths = crate::paths::resolve();
         let _ = std::fs::create_dir_all(&paths.state_dir);
+        // Login/menu entries whose AppImage moved or vanished would silently
+        // never launch (the xdg-autostart generator skips missing Exec
+        // programs); point them at this copy again.
+        crate::desktop::refresh_entries(&paths);
         // The window exists: if this is the first launch after an update
         // swap, confirm health - drop the rollback marker and its .old
         // backup. Running as an AppImage only, so dev runs never consume a

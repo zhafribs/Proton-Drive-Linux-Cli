@@ -34,6 +34,55 @@ pub fn autostart_installed(paths: &Paths) -> bool {
     paths.autostart_file.is_file()
 }
 
+/// The `Exec=` program in a desktop file, unquoted.
+fn exec_program(text: &str) -> Option<String> {
+    let line = text.lines().find_map(|l| l.strip_prefix("Exec="))?;
+    let v = line.trim();
+    Some(
+        v.strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .unwrap_or(v)
+            .to_string(),
+    )
+}
+
+/// Self-heal the launch entries.
+///
+/// systemd's xdg-autostart generator silently skips an entry whose `Exec`
+/// program is missing ("not generating unit, executable ... does not
+/// exist"), and the app-menu entry fails the same way - which happens
+/// whenever the AppImage is moved or an old copy is removed. The Settings
+/// switch only checks that the file exists, so it kept showing ON while no
+/// login launch ever happened.
+///
+/// Rewrites either entry with the current launch command when its `Exec`
+/// points somewhere else. Only AppImage runs self-heal: they carry a
+/// moveable payload whose path can go stale. Manual installs use the stable
+/// `~/.local/bin` shim (already written into the entries) and dev runs must
+/// never repoint a user's files at a cargo target binary.
+pub fn refresh_entries(paths: &Paths) {
+    if paths.appimage.is_none() {
+        return;
+    }
+    let want = launch_command(paths);
+    for (file, autostart) in [
+        (&paths.autostart_file, true),
+        (&paths.menu_desktop_file, false),
+    ] {
+        let Ok(text) = std::fs::read_to_string(file) else {
+            continue;
+        };
+        if exec_program(&text).as_deref() == Some(want.as_str()) {
+            continue;
+        }
+        if autostart {
+            set_autostart(paths, true);
+        } else {
+            set_menu(paths, true);
+        }
+    }
+}
+
 pub fn set_autostart(paths: &Paths, on: bool) {
     if on {
         let _ = std::fs::create_dir_all(
@@ -136,6 +185,49 @@ mod tests {
         assert!(menu_installed(&paths));
         set_menu(&paths, false);
         assert!(!menu_installed(&paths));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn stale_launch_entries_are_rewritten() {
+        let tmp = std::env::temp_dir().join(format!("pddesktop-heal-{}", std::process::id()));
+        let mut paths = crate::paths::resolve();
+        paths.autostart_file = tmp.join("autostart/proton-drive.desktop");
+        paths.menu_desktop_file = tmp.join("applications/proton-drive.desktop");
+        paths.menu_icon_file = tmp.join("icons/proton-drive-gui.svg");
+        // Stand in for a running AppImage so the self-heal is armed.
+        paths.appimage = std::env::current_exe().ok();
+        let want = launch_command(&paths);
+
+        // A stale login entry (its program is gone) gets repointed.
+        std::fs::create_dir_all(paths.autostart_file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &paths.autostart_file,
+            "[Desktop Entry]\nType=Application\nName=Proton Drive\n\
+             Exec=/nonexistent/proton.AppImage\nX-GNOME-Autostart-enabled=true\n",
+        )
+        .unwrap();
+        refresh_entries(&paths);
+        let text = std::fs::read_to_string(&paths.autostart_file).unwrap();
+        assert!(text.contains(&format!("Exec={}", desktop_exec(&want))));
+
+        // The app-menu entry is healed the same way.
+        std::fs::create_dir_all(paths.menu_desktop_file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &paths.menu_desktop_file,
+            "[Desktop Entry]\nType=Application\nExec=/old/proton.AppImage\n",
+        )
+        .unwrap();
+        refresh_entries(&paths);
+        let text = std::fs::read_to_string(&paths.menu_desktop_file).unwrap();
+        assert!(text.contains(&format!("Exec={}", desktop_exec(&want))));
+        assert!(text.contains("Categories=Utility;Network;"));
+
+        // An up-to-date entry is left byte-identical.
+        let before = std::fs::read_to_string(&paths.autostart_file).unwrap();
+        refresh_entries(&paths);
+        assert_eq!(std::fs::read_to_string(&paths.autostart_file).unwrap(), before);
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

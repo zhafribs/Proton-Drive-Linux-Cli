@@ -1,3 +1,14 @@
+## 3.16.8 — 2026-10-21
+
+- **Autostart keeps working after the AppImage moves.** The login entry
+  used to keep whatever path existed when the switch was flipped; if the
+  AppImage was later moved (or an old copy removed), the entry pointed at
+  nothing and systemd's autostart generator skipped it silently - the
+  switch still showed on, but nothing started at login. The app now
+  rewrites its login and app-menu entries to the current AppImage path on
+  startup, so a moved file heals itself instead of needing the switch
+  toggled off and on again.
+
 ## 3.16.7 — 2026-10-21
 
 - **A designed minimum window size.** The window now bottoms out at
