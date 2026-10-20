@@ -205,13 +205,18 @@ fn http_get_text(url: &str, timeout_s: u64) -> Result<String, String> {
         .map_err(|e| format!("fetch body: {e}"))
 }
 
-/// The checksum line of SHA256SUMS for `name` ("<hash>  <name>", the name
-/// may carry a leading "*").
+/// The checksum line of SHA256SUMS for `name` ("<hash>  <name>"; the name
+/// may carry a leading "*" for binary mode, and releases up to 3.15.0
+/// listed it as "./name" the way sha256sum prints path arguments - match
+/// either form).
 fn sum_for(text: &str, name: &str) -> Option<String> {
     for line in text.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 2 && parts[1].trim_start_matches('*') == name {
-            return Some(parts[0].to_string());
+        if parts.len() >= 2 {
+            let file = parts[1].trim_start_matches('*').trim_start_matches("./");
+            if file == name {
+                return Some(parts[0].to_string());
+            }
         }
     }
     None
@@ -513,7 +518,8 @@ mod tests {
     #[test]
     fn finds_checksum_line() {
         let text = "aaaa  ProtonDrive-CLI-0.9.0-GUI-3.14.0-x86_64.AppImage\n\
-                    bbbb *ProtonDrive-CLI-0.9.0-GUI-3.14.0-aarch64.AppImage\n";
+                    bbbb *ProtonDrive-CLI-0.9.0-GUI-3.14.0-aarch64.AppImage\n\
+                    cccc  ./ProtonDrive-CLI-0.9.0-GUI-3.13.2-x86_64.AppImage\n";
         assert_eq!(
             sum_for(text, "ProtonDrive-CLI-0.9.0-GUI-3.14.0-x86_64.AppImage").as_deref(),
             Some("aaaa")
@@ -522,6 +528,11 @@ mod tests {
         assert_eq!(
             sum_for(text, "ProtonDrive-CLI-0.9.0-GUI-3.14.0-aarch64.AppImage").as_deref(),
             Some("bbbb")
+        );
+        // "./" prefix - how every release up to 3.15.0 listed its files
+        assert_eq!(
+            sum_for(text, "ProtonDrive-CLI-0.9.0-GUI-3.13.2-x86_64.AppImage").as_deref(),
+            Some("cccc")
         );
         assert_eq!(sum_for(text, "missing"), None);
     }

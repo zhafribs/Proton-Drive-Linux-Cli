@@ -308,4 +308,7 @@ for platform in "${TARGETS[@]}"; do
 done
 
 log "checksums"
-( cd "$DIST" && sha256sum ./*.AppImage | tee SHA256SUMS )
+# Plain file names: the in-app updater (PyQt <= 3.13.2 as well as the Rust
+# GUI) looks the file name up exactly, and sha256sum prints a "./" prefix
+# for path arguments - a prefix no shipped updater has ever accepted.
+( cd "$DIST" && sha256sum *.AppImage | tee SHA256SUMS )

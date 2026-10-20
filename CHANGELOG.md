@@ -1,3 +1,15 @@
+## 3.15.1 — 2026-10-20
+
+- **The in-app updater works again.** Releases listed their checksums as
+  `./ProtonDrive-...AppImage` (the way `sha256sum` prints path arguments)
+  while the updater looks entries up by the plain file name - a mismatch
+  that has failed every verified in-app update with "Update failed:
+  checksum entry not found" since checksum verification was introduced.
+  Releases now list plain file names, which every already-installed
+  version accepts, and the updater additionally understands the old `./`
+  form. Updating from the Settings page works again from any installed
+  version - including 3.13.x straight to this release.
+
 ## 3.15.0 — 2026-10-20
 
 - **The left pane now follows Proton Drive's own sidebar layout** (the one
