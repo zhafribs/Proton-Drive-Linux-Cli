@@ -958,7 +958,10 @@ fn top_row(app: &mut App, ui: &mut egui::Ui) {
                         ui.label(egui::RichText::new("\u{203a}").weak().size(12.0));
                     }
                     if seg == "..." {
-                        ui.add_enabled(false, egui::Button::new("...").frame_when_inactive(false));
+                        // A plain label keeps the same metrics as the crumbs
+                        // around it - a disabled Button sits a few px lower
+                        // and reads as a stumble in the row.
+                        ui.label(egui::RichText::new("\u{2026}").weak().size(13.5));
                         continue;
                     }
                     let current = i == segs.len() - 1;

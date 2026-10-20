@@ -1,3 +1,11 @@
+## 3.16.5 — 2026-10-21
+
+- **The collapsed address bar sits on one line again.** With a long final
+  folder name the breadcrumb's hidden-path "..." was drawn as a disabled
+  button, which dropped a few pixels below the crumbs either side of it.
+  It is now a plain ellipsis label on the same baseline as the rest of
+  the row.
+
 ## 3.16.4 — 2026-10-21
 
 - **The file list stays aligned after you shrink the window.** Going deep
