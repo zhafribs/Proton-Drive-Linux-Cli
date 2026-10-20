@@ -626,12 +626,20 @@ fn updates_card(app: &mut App, ui: &mut egui::Ui) {
             ui.label(egui::RichText::new(app.upd.label.clone()).size(12.0).weak());
         }
         ui.add_space(6.0);
+        let has_update = app.upd.available.is_some() && app.paths.appimage.is_some();
         ui.horizontal(|ui| {
-            if ui
-                .button(if app.upd.checking { "Checking..." } else { "Check now" })
-                .clicked()
-            {
+            if ui.button("Check now").clicked() {
                 app.action_check_updates();
+            }
+            if has_update
+                && ui
+                    .add_enabled(
+                        !app.upd.downloading,
+                        egui::Button::new("Download and restart"),
+                    )
+                    .clicked()
+            {
+                app.action_download_update();
             }
             if ui.button("Open download page").clicked() {
                 App::open_url(crate::paths::RELEASE_PAGE);

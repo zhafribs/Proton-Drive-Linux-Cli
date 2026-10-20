@@ -52,6 +52,19 @@ fn main() -> eframe::Result<()> {
     let p = paths::resolve();
     let _ = std::fs::create_dir_all(&p.state_dir);
 
+    // Update recovery: the marker decides whether this start is the freshly
+    // swapped-in version (health is confirmed once its window is up) or a
+    // version that never came up (its .old backup is restored and started).
+    if p.appimage.is_some() {
+        let (state, relaunch) = release::update_recovery_check(&p);
+        if state == "rolled-back" {
+            if let Some(target) = relaunch {
+                spawn_detached(&target);
+            }
+            return Ok(());
+        }
+    }
+
     // Single instance: the QLockFile equivalent. A second launch pokes the
     // running window to the front instead of opening a duplicate.
     use fs2::FileExt;
@@ -115,11 +128,31 @@ fn main() -> eframe::Result<()> {
     }
 
     let options = eframe::NativeOptions { viewport, ..Default::default() };
-    eframe::run_native(
+    let relaunch_slot: std::sync::Arc<std::sync::Mutex<Option<PathBuf>>> =
+        std::sync::Arc::default();
+    let slot = relaunch_slot.clone();
+    let res = eframe::run_native(
         "Proton Drive",
         options,
-        Box::new(move |cc| ui::App::new(cc, lock, saved_wayland)),
-    )
+        Box::new(move |cc| ui::App::new(cc, lock, saved_wayland, slot)),
+    );
+    // After an in-app update the freshly swapped-in version starts here: the
+    // App (and with it the single-instance lock) is dropped by now, so it
+    // takes the lock instead of reporting "Already running".
+    if let Some(target) = relaunch_slot.lock().unwrap().take() {
+        spawn_detached(&target);
+    }
+    res
+}
+
+/// Start a process detached from this session (like Qt's
+/// `Popen(..., start_new_session=True)`); it outlives us as an orphan.
+fn spawn_detached(target: &Path) {
+    let _ = std::process::Command::new(target)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 }
 
 fn smoke() -> Result<(), String> {

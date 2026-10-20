@@ -36,7 +36,10 @@ pub enum Back {
     SaveHint(String),
     SelHint(String),
     Toast(String),
-    Update(Result<release::Release, String>),
+    /// Release check: (release, update available, installed CLI version).
+    Update(Result<(release::Release, bool, String), String>),
+    /// Download + swap finished; Ok is the new AppImage's path.
+    UpdateInstalled(Result<String, String>),
     /// Selective-sync folder listing (parent rel "" = the root level).
     SelFolders { parent: String, folders: Vec<(String, String)> },
     /// Whether the sync unit is enabled at login (slow systemctl call).
@@ -111,6 +114,10 @@ pub struct UpdateUi {
     pub label: String,
     pub available: Option<release::Release>,
     pub checking: bool,
+    pub downloading: bool,
+    pub quit_at: Option<std::time::Instant>,
+    /// automatic check schedule (startup + every 6h, updates_auto pref)
+    pub next_check: Option<std::time::Instant>,
 }
 
 pub struct App {
@@ -159,6 +166,9 @@ pub struct App {
     pub tray: Option<ksni::blocking::Handle<tray::AppTray>>,
     /// Running on the Wayland backend (no working client-side hide).
     pub wayland_fallback: bool,
+    /// Slot main() reads after the event loop ends: the freshly swapped-in
+    /// AppImage to relaunch once the single-instance lock is free.
+    pub relaunch_slot: std::sync::Arc<std::sync::Mutex<Option<std::path::PathBuf>>>,
 }
 
 /// "ProtonDrive" or "~/stuff" -> absolute path (the GUI only deals in
@@ -240,6 +250,7 @@ impl App {
         cc: &eframe::CreationContext<'_>,
         lock: std::fs::File,
         saved_wayland: Option<std::ffi::OsString>,
+        relaunch_slot: std::sync::Arc<std::sync::Mutex<Option<std::path::PathBuf>>>,
     ) -> Result<Box<dyn eframe::App>, Box<dyn std::error::Error + Send + Sync>> {
         // Window already created on the X11/XWayland backend when we removed
         // WAYLAND_DISPLAY in main() - restore the session env so child
@@ -256,7 +267,17 @@ impl App {
         }
         let paths = crate::paths::resolve();
         let _ = std::fs::create_dir_all(&paths.state_dir);
+        // The window exists: if this is the first launch after an update
+        // swap, confirm health - drop the rollback marker and its .old
+        // backup. Running as an AppImage only, so dev runs never consume a
+        // real update's marker.
+        if paths.appimage.is_some() {
+            release::update_confirm_health(&paths);
+        }
         let prefs = prefs::Prefs::load(&paths.prefs_file);
+        let upd_next_check = prefs.updates_auto().then(|| {
+            std::time::Instant::now() + Duration::from_secs(5)
+        });
         theme::apply(&cc.egui_ctx, &prefs.theme());
         let conf = conf::read(&paths.conf_file);
         let conf_extras = conf::read_extras(&paths.conf_file);
@@ -352,13 +373,17 @@ impl App {
             save_hint: String::new(),
             sub_override: None,
             toast: None,
-            upd: UpdateUi::default(),
+            upd: UpdateUi {
+                next_check: upd_next_check,
+                ..Default::default()
+            },
             hidden: false,
             quitting: false,
             style_dirty: false,
             icon_tex,
             tray,
             wayland_fallback,
+            relaunch_slot,
         }))
     }
 
@@ -525,29 +550,45 @@ impl App {
             return;
         }
         self.upd.checking = true;
-        self.upd.label = "Checking...".into();
+        self.upd.label = "Checking for updates...".into();
         let paths = self.paths.clone();
         let tx = self.tx.clone();
-        let current_gui = crate::GUI_VERSION.to_string();
-        let current_cli = self
-            .identity
-            .as_ref()
-            .and_then(|i| util_semver(&i.version));
         std::thread::spawn(move || {
-            let r = release::check(&paths).map(|(rel, _cached)| rel);
-            let r = r.and_then(|rel| {
-                let gui_ok = crate::util::is_newer(&current_gui, &rel.gui);
-                let cli_ok = match &current_cli {
-                    Some(cur) => *cur == rel.cli,
-                    None => true,
-                };
-                if gui_ok && cli_ok {
-                    Ok(rel)
-                } else {
-                    Err(String::new()) // up to date marker
+            // The installed CLI version is read HERE, in the worker: the
+            // identity fetch waits for a full cloud listing (up to two
+            // minutes), so at the 5s startup check it is still empty and a
+            // bogus "you're up to date" was reported (Qt noted the same).
+            let cur = cli::resolve_cli()
+                .and_then(|c| crate::ui::util_semver(&cli::cli_version(&c)))
+                .unwrap_or_default();
+            let r = match release::check(&paths) {
+                Err(e) => Err(e),
+                Ok((rel, _cached)) => {
+                    let have = release::has_update(&cur, &rel);
+                    Ok((rel, have, cur))
                 }
-            });
+            };
             let _ = tx.send(Back::Update(r));
+        });
+    }
+
+    /// Qt's "Download and restart": download + checksum + staged start-up
+    /// check + swap, then quit and let main() relaunch the new build.
+    pub fn action_download_update(&mut self) {
+        let Some(rel) = self.upd.available.clone() else { return };
+        if self.upd.downloading {
+            return;
+        }
+        self.upd.downloading = true;
+        self.upd.label = "Downloading and verifying the update...".into();
+        let tx = self.tx.clone();
+        // x86_64 / aarch64, the release filenames' arch (uname -m).
+        let arch = std::env::consts::ARCH;
+        std::thread::spawn(move || {
+            let r = release::download_update(&rel, arch)
+                .and_then(|dl| release::install_update_and_restart(&dl, &rel.tag))
+                .map(|p| p.to_string_lossy().into_owned());
+            let _ = tx.send(Back::UpdateInstalled(r));
         });
     }
 
@@ -637,19 +678,52 @@ impl App {
                 Back::Update(r) => {
                     self.upd.checking = false;
                     match r {
-                        Ok(rel) => {
-                            self.upd.label =
-                                format!("A newer version is available: v{}", rel.tag);
-                            self.upd.available = Some(rel);
-                        }
-                        Err(e) if e.is_empty() => {
-                            self.upd.label = "You're up to date (latest release checked just now)"
-                                .to_string();
-                            self.upd.available = None;
+                        Ok((rel, have, cur)) => {
+                            if have {
+                                self.upd.label = format!(
+                                    "Update available: CLI {} + GUI {} (you have {} + {}).",
+                                    rel.cli, rel.gui, cur, crate::GUI_VERSION
+                                );
+                                self.upd.available = Some(rel.clone());
+                                if self.tray.is_some() && self.cool.cool_ok("update", 6 * 3600) {
+                                    notify::send(
+                                        "Update available",
+                                        &format!(
+                                            "Proton Drive {} is ready to install.",
+                                            rel.tag
+                                        ),
+                                    );
+                                }
+                            } else {
+                                self.upd.label = format!(
+                                    "You're up to date (latest release: {}, {}).",
+                                    rel.tag, rel.published
+                                );
+                                self.upd.available = None;
+                            }
                         }
                         Err(e) => {
-                            self.upd.label = e;
+                            let _ = e;
+                            self.upd.label =
+                                "Could not check for updates right now.".to_string();
                             self.upd.available = None;
+                        }
+                    }
+                }
+                Back::UpdateInstalled(r) => {
+                    self.upd.downloading = false;
+                    match r {
+                        Ok(target) => {
+                            self.upd.label =
+                                "Updated - the new version is starting...".to_string();
+                            // main() starts it once the lock is free.
+                            *self.relaunch_slot.lock().unwrap() =
+                                Some(std::path::PathBuf::from(target));
+                            self.upd.quit_at =
+                                Some(std::time::Instant::now() + Duration::from_millis(1500));
+                        }
+                        Err(e) => {
+                            self.upd.label = format!("Update failed: {e}");
                         }
                     }
                 }
@@ -1195,6 +1269,25 @@ impl eframe::App for App {
         if self.page == Page::Cloud && !self.cloud.opened {
             self.cloud.opened = true;
             cloud::on_shown(self);
+        }
+
+        // Updates: automatic check 5s after start, then every 6h (Qt's
+        // updates_timer); the ETag cache keeps this free of rate limits.
+        if let Some(t) = self.upd.next_check {
+            if std::time::Instant::now() >= t {
+                self.upd.next_check =
+                    Some(std::time::Instant::now() + Duration::from_secs(6 * 3600));
+                if self.prefs.updates_auto() {
+                    self.action_check_updates();
+                }
+            }
+        }
+        // After an update swap: quit once the status label has been seen.
+        if let Some(t) = self.upd.quit_at {
+            if std::time::Instant::now() >= t {
+                self.upd.quit_at = None;
+                self.quit(ctx);
+            }
         }
 
         if self.hide_on_start {
