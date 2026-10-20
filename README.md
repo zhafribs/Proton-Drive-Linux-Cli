@@ -1,405 +1,231 @@
-# Proton Drive — AppImage (x86_64)
+# Proton Drive for Linux — AppImage
 
-Unofficial AppImage packaging of the **official Proton Drive CLI** published by
-Proton AG at <https://proton.me/download/drive/cli/index.html>, plus an
-open-source desktop app built on top of it.
+![Latest release](https://img.shields.io/github/v/release/zhafribs/Proton-Drive-Linux-Cli)
+![License: MIT](https://img.shields.io/badge/license-MIT-blue)
+![Arch: x86_64](https://img.shields.io/badge/arch-x86_64-lightgrey)
+![Proton Drive CLI: 0.9.0](https://img.shields.io/badge/Proton%20Drive%20CLI-0.9.0-6D4AFF)
 
-Proton ships **no native Linux GUI** for Drive — only this CLI. That is what
-this project packages: the unmodified upstream binary (verified against
-Proton's published SHA-512 checksum before it is wrapped), the two-way folder
-sync engine and the app window, in one double-clickable file.
+One double-clickable file that gives Linux what Proton doesn't ship: an
+**unofficial desktop app** for Proton Drive — two-way folder sync, a cloud file
+manager, tray, notifications and in-app updates — built on Proton's
+**official, unmodified Drive CLI**. Nothing to install: no AUR, no Python
+setup, no Qt — the app and its sync runtime travel inside the AppImage.
 
-| Artifact | Arch | Size |
-| --- | --- | --- |
-| `dist/ProtonDrive-CLI-0.9.0-GUI-3.16.2-x86_64.AppImage` | x86_64 (Intel/AMD) | 81 MB |
-| `dist/SHA256SUMS` | checksums of the outputs | |
+> Unofficial. Not affiliated with, endorsed by, sponsored or supported by
+> Proton AG. "Proton Drive" is a trademark of Proton AG.
 
-Upstream version: **0.9.0** (released 2026-10-05), `cli-drive@0.9.0+75612299`.
-Desktop app version: **3.16.2** — every release note ships the app's [development log](CHANGELOG.md).
+**Get it:** [`ProtonDrive-CLI-0.9.0-GUI-3.16.2-x86_64.AppImage`](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/latest)
+(≈80 MB · x86_64 · [all releases](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases))
 
-## Quick start
+| Inside the file | Version |
+| --- | --- |
+| Proton Drive CLI — official, unmodified, SHA-512-verified at build | **0.9.0** (2026-10-05) |
+| Desktop app + folder-sync engine (this repo) | **3.16.2** |
 
-**The AppImage needs nothing else installed** - it carries its own Python and
-Qt6/PyQt6 desktop runtime inside. The host only needs a normal graphical
-session (FUSE for AppImages and OpenGL, present on any desktop - see
-[Distro notes](#distro-notes)) and a terminal emulator for the one-time
-Proton sign-in.
+## Start here
 
-Then download the AppImage and double-click it (or run it once from a shell):
+1. Download the AppImage and make it executable once:
+   ```bash
+   chmod +x ProtonDrive-CLI-0.9.0-GUI-3.16.2-x86_64.AppImage
+   ```
+2. Double-click it. Click **Sign in** — Proton's official login opens in a
+   terminal (that's how their CLI does 2FA); the app picks the session up.
+3. Settings → pick your sync folder → **Save**. The first save installs the
+   background sync service; from then on `~/ProtonDrive` mirrors your Drive
+   and the tray icon watches it.
 
-```bash
-chmod +x ProtonDrive-CLI-0.9.0-GUI-3.12.4-x86_64.AppImage
-./ProtonDrive-CLI-0.9.0-GUI-3.12.4-x86_64.AppImage
-```
+Works on any x86_64 desktop with **glibc ≥ 2.28** (Debian 10 / Ubuntu 20.04 /
+Fedora 32 era or newer). If it won't start you're missing FUSE — Arch
+`pacman -S fuse2` · Debian/Ubuntu `apt install libfuse2t64` · Fedora
+`dnf install fuse-libs` — or launch with `APPIMAGE_EXTRACT_AND_RUN=1`.
 
-The app opens. Click **Sign in** — Proton's official login runs once in a
-terminal window (that is how their CLI does 2FA), and the app picks the
-session up automatically. Choose your sync folder in Settings and save; the
-first save installs the background sync service and points it at wherever
-this AppImage file lives — move or upgrade the file later and the app
-re-points the service by itself. From then on it lives in the tray;
-*Start syncing when I log in* makes it automatic across reboots.
-
-The upstream CLI is untouched — any argument goes straight to it:
-
-```bash
-./ProtonDrive-CLI-0.9.0-GUI-3.12.4-x86_64.AppImage --version
-./ProtonDrive-CLI-0.9.0-GUI-3.12.4-x86_64.AppImage --help
-./ProtonDrive-CLI-0.9.0-GUI-3.12.4-x86_64.AppImage auth login   # same login the app uses
-```
-
-Put it on your `PATH` as `proton-drive` (creates `~/.local/bin/proton-drive` → symlink):
+The upstream CLI is untouched — arguments pass straight through:
 
 ```bash
-./install-command.sh
+./ProtonDrive-CLI-0.9.0-GUI-3.16.2-x86_64.AppImage --help
+./ProtonDrive-CLI-0.9.0-GUI-3.16.2-x86_64.AppImage auth login   # the app's sign-in
+./ProtonDrive-CLI-0.9.0-GUI-3.16.2-x86_64.AppImage filesystem list /
 ```
 
-Undo with `rm ~/.local/bin/proton-drive`.
+`auth login`, `filesystem …`, `sharing …`, `photo timeline`, `takeout run …` —
+full list in `--help`. Put it on your PATH as `proton-drive` with
+`./install-command.sh` (undo: `rm ~/.local/bin/proton-drive`).
 
-Typical commands: `auth login`, `filesystem list /`, `filesystem upload <local> /`,
-`filesystem download <remote> <local-folder>`, `sharing set-url ...`,
-`photo timeline`, `takeout run <folder>`. Full list: `--help`.
+## Screenshots
 
-## Folder sync (Google Drive-style)
-
-Want your Drive as a normal folder in the file manager instead of typing
-commands? The repo ships a two-way sync built **only on the official CLI** —
-no AUR, no third-party binaries, nothing but this project's own MIT scripts:
-
-```bash
-./scripts/install-sync.sh     # installs a systemd *user* service (no sudo)
-```
-
-That keeps `~/ProtonDrive` in sync with the `/my-files` section of your Drive:
-
-* **local edits upload within seconds** (inotify wakes the sync immediately);
-  **remote changes appear in ~10 seconds** - the engine follows Proton Drive's
-  own change events (reusing the official CLI's keyring session via a bundled
-  pure-Python D-Bus client) and re-lists only the folder that changed, with
-  the cheap size-peek and `PROTON_SYNC_PEEK_AGE` safety walk still running as
-  backstops
-* **renames and moves are followed, never re-uploaded**: a file you renamed
-  or moved is relocated server-side in one call (no bytes transferred) - the
-  same technique rclone ships as `--track-renames`; a rename done in the web
-  app or on another device is mirrored here with a plain local rename, no
-  re-download
-* runs at every login, restarts on failure, logs to the journal
-  (`journalctl --user -u proton-sync -f`)
-* dry run first: `python3 scripts/proton-sync.py --dry-run`
-
-Safety rules baked in:
-
-* **deletions follow you both ways, but only ever to trash** (never
-  permanent; turn off with `PROTON_SYNC_DELETES=0`): a local delete goes to
-  Proton's trash, a cloud delete goes to your desktop trash - both restorable
-* **a sick scan can never mass-delete**: if one side comes back empty while
-  the other has files (moved disk, broken login, wrong path), every deletion
-  is held for that cycle and logged
-* a file deleted on one side with deletion propagation off stays on the
-  other - no surprise data loss
-* conflicts keep **both** versions (`name (conflict <timestamp>)`), and uploads
-  use `create-new-revision`, so the old version stays in Proton's history
-* Proton Docs/Sheets cannot be downloaded by the CLI; they are skipped
-
-Knobs: `PROTON_SYNC_LOCAL`, `PROTON_SYNC_REMOTE`, `PROTON_SYNC_INTERVAL`,
-`PROTON_SYNC_FULL_EVERY`
-(seconds, default 300), `PROTON_SYNC_DELETES`, `PROTON_SYNC_WORKERS`,
-`PROTON_SYNC_RETRIES`, `PROTON_SYNC_SUBFOLDERS` (comma-separated folders to
-mirror instead of everything), `PROTON_SYNC_EXCLUDE` (comma-separated globs
-like `*.tmp,.cache` that are never synced), `PROTON_SYNC_INOTIFY=0` (disable
-the fast path), `PROTON_SYNC_DEBOUNCE` (seconds a local write must stay quiet
-before an upload starts, default 2), `PROTON_SYNC_MIN_GAP` (minimum seconds
-between cycles, default 4). Uninstall:
-`./scripts/install-sync.sh uninstall` (folder and state are kept).
-Settings live in `~/.config/proton-sync.conf` - edit by hand or with the app.
-
-## Desktop app (GUI)
-
-| Home | Cloud | Activity | Settings |
+| Home | My files | Activity | Settings |
 |:---:|:---:|:---:|:---:|
-| ![Home](docs/screenshots/home.png) | ![Cloud](docs/screenshots/cloud.png) | ![Activity](docs/screenshots/activity.png) | ![Settings](docs/screenshots/settings.png) |
+| ![Home](docs/screenshots/home.png) | ![My files](docs/screenshots/cloud.png) | ![Activity](docs/screenshots/activity.png) | ![Settings](docs/screenshots/settings.png) |
 
-*The compact floating window (940x780 default, 920x540 minimum - no page ever
-scrolls sideways, stays on top, size remembered) - light theme shown; dark and
-system themes included.*
+*Light theme shown; dark and system themes are built in. Compact floating
+window (940×780 default, no page ever scrolls sideways, size remembered).*
 
-```bash
-./scripts/install-sync.sh    # the sync service first (see above)
-./scripts/install-gui.sh     # then the app: menu entry + icon + launcher
-proton-drive-gui             # or search "Proton Drive" in your app menu
-```
+## What the app does
 
-A friendly Qt6 desktop app for the sync service - **in the AppImage it uses
-the Qt6/PyQt6 stack bundled inside the file** (nothing to install, no AUR);
-running these repo scripts directly instead uses your distro's PyQt6 from the
-**official** repositories (`python3-pyqt6` / `python3-qt6` / `python-pyqt6`).
-Designed for everyday users:
+* **Folder sync** — `~/ProtonDrive` mirrors the `/my-files` section of your
+  Drive both ways: local edits upload within seconds (inotify), cloud changes
+  appear in ~10 s (Proton's own change events), and renames/moves are
+  followed **server-side without re-uploading**. Install:
+  `./scripts/install-sync.sh` (systemd *user* service, no sudo); log:
+  `journalctl --user -u proton-sync -f`; try it first with
+  `python3 scripts/proton-sync.py --dry-run`.
+* **My files** — a full cloud file manager: upload files/folders, download,
+  rename, move, multi-select, sortable columns, back/forward + breadcrumbs,
+  and a **Trash** view where restore is one click.
+* **Home** — one big plain-language status with the sync orb, *Open my
+  folder* / *Sync now* / *Pause* (15 min, 1 h, until resumed), folder size
+  and recently synced files.
+* **Activity** — what moved recently (uploaded / downloaded / removed /
+  conflicts) with search and filters, plus a raw log tab.
+* **Settings** — selective sync (tick which cloud folders mirror), never-sync
+  patterns (`*.tmp`), instant upload, cloud checks as fast as every 30 s,
+  notifications with a test button, light/dark/system theme, tray and
+  start-at-login behaviour, one-click menu install, and **Updates** that
+  check GitHub releases and *Download and restart* (the download is verified
+  against the published SHA-256 before it replaces the file).
 
-* **Home** - a big friendly status ("You're up to date" / "Syncing..." /
-  "Sync is paused") with an animated status orb, one-click *Open my
-  folder*, *Sync now* and *Pause* (15 minutes, 1 hour, or until you
-  resume), your account, folder size and recently synced files
-* **Cloud** - a full file manager for your cloud drive, like browsing in a
-  web browser: Back/Forward buttons and clickable breadcrumbs, sortable
-  name/size/date columns (folders always on top), right-click for
-  *Rename*, *Move to...* and *Move to trash* (or press Delete), new
-  folders, uploads of files or whole folders, multi-select for batch
-  download/move/trash, and a **Trash** view with one-click *Restore* -
-  trash is never permanent. Every folder paints instantly - from the
-  sync engine's scan and your browsing history (remembered between
-  launches) - while fresh data loads behind it, and every view is live,
-  so website changes appear the moment you open a folder
-* **Activity** - what moved recently (uploaded / downloaded / removed /
-  conflicts) with search and filters, plus a technical log tab
-* **Settings** - plain-language options: which folder syncs, selective
-  sync (browse the cloud and pick folders), never-sync patterns
-  (`*.tmp`-style), instant upload, cloud check speed (as fast as every 30
-  seconds), notifications with a test button, plus these sections:
-  * *Running in the background* - keep this window floating above other
-    windows, keep-in-tray on close, start quietly in tray, start syncing
-    at login, and open the app itself at login
-  * *Appearance* - light/dark/system theme
-  * *Updates* - automatic GitHub release checks with a tray notice, and a
-    one-click *Download and restart* when running as an AppImage (the
-    download is verified against the published SHA256 checksum before it
-    replaces the old file)
-  * *Installing on Linux* - one click adds a menu entry + icon for the
-    current user (no admin rights; works with the AppImage on Debian,
-    Fedora and Arch)
-  * *Advanced* - connections, retries, extra environment variables, log
-    access
+**Sync safety rules, baked in**
 
-  Saving writes `~/.config/proton-sync.conf` and restarts syncing.
+* Deletions follow you **both ways — but only ever to trash**, never
+  permanent (off with `PROTON_SYNC_DELETES=0`): a local delete goes to
+  Proton's trash, a cloud delete to your desktop trash — both restorable.
+* A sick scan can never mass-delete: if one side comes back empty while the
+  other has files (moved disk, broken login, wrong path), every deletion is
+  held for that cycle and logged.
+* Conflicts keep **both** versions (`name (conflict <timestamp>)`), and
+  uploads are new revisions — the old version stays in Proton's history.
+* Proton Docs/Sheets can't be downloaded by the CLI; they are skipped.
 
-What the settings mean (the app keeps this short - the details live here):
+Tunables: `PROTON_SYNC_LOCAL/REMOTE/INTERVAL/FULL_EVERY/DELETES/WORKERS/
+SUBFOLDERS/EXCLUDE/INOTIFY/…` — settings live in
+`~/.config/proton-sync.conf` (edit by hand or in the app). Uninstall:
+`./scripts/install-sync.sh uninstall` (folder and state kept).
 
-* **Keep this window above other windows** - the app opens as a compact
-  centered window floating over your other apps; its size is remembered.
-  On Wayland sessions the app automatically runs its window through
-  X11/XWayland, because the Wayland protocol has no keep-above request.
-* **Keep running when I close the window** - the app hides to the tray
-  and syncing never stops. Turn off to fully quit on close.
-* **Start quietly in the tray** - launch as a small tray icon instead of
-  a window.
-* **Start syncing when I log in** - enables the background sync service
-  at login (systemd user service).
-* **Open Proton Drive when I log in** - starts the app itself at login
-  via a per-user autostart entry (`~/.config/autostart/`).
-* **Also remove files I delete** - deletions follow you both ways (on by
-  default): a local delete goes to Proton's trash, a cloud delete goes to
-  your desktop trash - nothing is ever deleted permanently, and a broken
-  scan can never empty a side (deletions pause instead).
-* **Updates** - checks the GitHub releases; *Download and restart* only
-  appears when running as an AppImage and replaces it after verifying the
-  SHA256 checksum (the old file is kept as `*.old`).
-* **Installing on Linux** - writes `~/.local/share/applications/
-  proton-drive.desktop` + a user icon; works with the AppImage on Debian,
-  Fedora and Arch, no admin rights.
-* **About** - what the app is, the good-to-know rules and the legal notes
-* **tray icon** - status at a glance plus desktop notifications; closing
-  the window keeps it running (right-click the tray icon to quit)
+### Good-to-know settings
 
-## Distro notes
+* **Keep this window above other windows** — the app floats over your apps;
+  on Wayland it runs through X11/XWayland because Wayland has no
+  keep-above request.
+* **Keep running when I close the window** — hides to the tray, syncing
+  never stops (turn off to fully quit on close).
+* **Start syncing when I log in** — enables the systemd user service at
+  login; **Open Proton Drive when I log in** starts the app itself.
+* **Also remove files I delete** — the both-ways-to-trash rule above.
+* **tray icon** — status at a glance, notifications, right-click to quit.
 
-The AppImage needs a normal desktop session and **glibc ≥ 2.28** (Debian 10 /
-Ubuntu 20.04 / Fedora 32 era or newer) - the floor comes from the Rust GUI
-binary, whose glibc requirement is pinned at build time; the bundled CPython
-needs only glibc ≥ 2.17 and the Proton CLI payload itself is equally
-portable. On Debian/Ubuntu, Fedora, Arch/CachyOS and derivatives there is
-**nothing else to install** - no Qt, no PyQt6, no python3 of your own:
-
-* **Arch / CachyOS** — works out of the box if `fuse2` is installed (this build
-  was made and tested here, on CachyOS).
-* **Debian / Ubuntu** — AppImages need the FUSE2 library:
-  `sudo apt install libfuse2t64` (Debian 13+/Ubuntu 24.04+) or `libfuse2` (older).
-* **Fedora** — `sudo dnf install fuse-libs` (provides `libfuse.so.2`).
-
-No FUSE at all (containers, restricted systems, any distro):
+## Optional: menu entry
 
 ```bash
-APPIMAGE_EXTRACT_AND_RUN=1 ./dist/ProtonDrive-CLI-0.9.0-GUI-3.12.4-x86_64.AppImage --help
-# or permanently:
-./dist/ProtonDrive-CLI-0.9.0-GUI-3.12.4-x86_64.AppImage --appimage-extract
+./scripts/install-sync.sh    # the sync service (above)
+./scripts/install-gui.sh     # app menu entry + icon for the current user
+proton-drive-gui             # or search "Proton Drive" in your menu
 ```
 
-Desktop menu entry: install [AppImageLauncher](https://github.com/AppImageCommunity/AppImageLauncher)
-or run `appimaged` — the AppImage ships a desktop file (double-click opens
-the app window, no terminal involved) plus 256/512 px icons and AppStream
-metadata, all of which validate cleanly.
+No admin rights; works with the AppImage on Debian, Fedora and Arch. Inside
+the AppImage the app uses the runtime bundled in the file; running these
+repo scripts directly uses your distro's `python3` for the sync engine.
 
-## Rebuilding / upgrading
+## Build it yourself
 
 ```bash
-./scripts/check-upstream.sh   # sync upstream.lock with Proton's latest release
-./build.sh                    # both architectures
-./build.sh x86_64             # one architecture
+./scripts/check-upstream.sh   # refresh upstream.lock from proton.me (--dry-run to only report)
+./build.sh                    # download -> SHA-512 verify -> build GUI -> package -> validate
+./scripts/release-notes.sh    # render the release notes for the built artifacts
 ```
 
-The version and its published checksums live in **`upstream.lock`** — you never
-edit numbers by hand. `check-upstream.sh` parses Proton's download page,
-rewrites the lock when a new release appears (or `--dry-run` to only report,
-exit 3 = update available), and `build.sh` reads it and **aborts if the SHA-512
-of the downloaded binary does not match**. A corrupt or incomplete lock fails
-the build with a message telling you to run `check-upstream.sh`.
+* **`upstream.lock`** is the single source of truth — CLI version + Proton's
+  published SHA-512s, written only by `check-upstream.sh`. `build.sh`
+  **aborts** if the downloaded binary doesn't match, so you never trust a
+  number typed by hand.
+* Build deps (nothing installed system-wide, no `sudo`): `bash`, `curl`/`wget`,
+  `python3` with pip (used only to *download* wheels), `rsvg-convert`
+  (`librsvg2-bin` / `librsvg`), optionally `desktop-file-validate` and
+  `appstreamcli`. First run fetches `appimagetool` into `tools/`.
+* GUI glibc floor is pinned at build time via `cargo-zigbuild` (glibc 2.28);
+  a plain `cargo build` is the local-dev fallback.
 
-`build.sh` downloads `appimagetool` into `tools/` on
-first run, fetches the upstream binaries, verifies them, then builds and
-validates.
+### Release automation
 
-Dependencies (all non-root, nothing is installed system-wide):
-
-* `wget` or `curl`, `bash`, `coreutils` — likely already present
-* `python3` **with pip** — only for `pip download` (fetches the PyQt6 and jeepney wheels;
-  pip never installs anything during the build)
-* `rsvg-convert` (`pacman -S librsvg` / `apt install librsvg2-bin` / `dnf install librsvg2-tools`) — renders the icon
-* `desktop-file-validate` (`desktop-file-utils`) and `appstreamcli` (`appstream`) — optional, used for validation
-
-The desktop bundle (portable CPython + PyQt6/Qt6 and jeepney wheels) is fetched by
-`scripts/fetch-desktop-deps.sh`, checksum-pinned, and cached in CI alongside
-`tools/` and `download/`.
-
-No `sudo` and no `mksquashfs` needed: appimagetool ships its own squashfs builder.
-
-## Automatic updates (future-proofing)
-
-The repository tracks upstream on its own — `.github/workflows/release.yml`:
+`.github/workflows/release.yml` runs on a schedule and on push:
 
 | Trigger | What happens |
 | --- | --- |
-| **schedule** (every 6 h) | Runs `check-upstream.sh`. If Proton shipped a new CLI: rewrites `upstream.lock`, commits it with `[skip ci]`, builds both AppImages, renders notes from `release-notes.md.tmpl` and **publishes a release tagged `v<cli>-gui<gui>`**. If nothing changed: validation build, no commit, no release churn. |
-| **workflow_dispatch** (manual) | Same, plus a `force_rebuild` input that re-uploads assets and refreshes notes for the current CLI+GUI version. |
-| **push to main** (packaging changed) | Rebuilds; a changed `GUI_VERSION` publishes the pair's **brand-new release** (existing releases are never overwritten). |
-| **pull_request** | Validation only — builds and checks metadata, never commits or publishes. |
+| **every 6 h** | Checks Proton's page. New CLI → rewrites `upstream.lock`, commits with `[skip ci]`, builds, publishes a release tagged `v<cli>-gui<gui>`. Nothing new → validation only, no churn. |
+| **push to main** (packaging/`gui/**` changed) | Rebuilds; a new `GUI_VERSION` publishes that pair's brand-new release. |
+| **manual dispatch** | Same, plus `force_rebuild` to re-upload assets for the current version. |
+| **pull request** | Validation build only — never commits or publishes. |
 
-Design notes:
-
-* **Idempotent**: the release step checks whether all three assets already
-  exist and skips them, so a green run does not silently replace the AppImages
-  people already downloaded (their hashes change on every rebuild).
-* **One release per update**: the tag is `v<cli>-gui<gui>` — the CLI from
-  `upstream.lock` plus `GUI_VERSION` from the source — so a new Proton CLI *or*
-  a new app version always lands as its own release with its own filenames
-  (`ProtonDrive-CLI-<cli>-GUI-<gui>-<arch>.AppImage`), and older builds stay
-  downloadable.
-* **Fails loudly**: if Proton restructures the page so nothing parses,
-  `check-upstream.sh` exits 2 and the scheduled run turns red (GitHub emails
-  you) instead of silently releasing a stale build.
-* **Caching**: `tools/` and `download/` (including the fetched Python/Qt
-  desktop bundle) are cached, keyed on `upstream.lock` **plus**
-  `scripts/fetch-desktop-deps.sh`, so routine runs only pay for the squashfs
-  build.
-* **Caveat**: GitHub disables scheduled workflows after ~60 days without
-  repository activity. A commit/release interaction resets that clock; if the
-  badge ever says "workflow disabled", re-enable it under the Actions tab.
-
-Adding a future platform (e.g. Proton's `linux-x64-musl` build) = add
-`SHA512_LINUX_X64_MUSL=…` to `upstream.lock`, map it in `APPIMAGE_ARCH` in
-`build.sh`, and add it to `REQUIRED_PLATFORMS` in
-`scripts/check-upstream.sh` — the checker already warns about upstream
-platforms it does not package, so new ones are visible in every run log.
-
-Local equivalent of CI: `./scripts/check-upstream.sh && ./build.sh && ./scripts/release-notes.sh`.
+Releases are **never overwritten** (asset-existence check), older builds stay
+downloadable, and a parsing failure on Proton's page turns the scheduled run
+red instead of shipping a stale build. GitHub disables scheduled workflows
+after ~60 idle days — re-enable under the Actions tab if the badge ever says
+so. Local equivalent:
+`./scripts/check-upstream.sh && ./build.sh && ./scripts/release-notes.sh`.
 
 ## Project layout
 
 ```
-build.sh          reproducible build script (download -> verify -> build GUI -> package -> validate)
-upstream.lock     VERSION + Proton's published SHA-512s - written by check-upstream.sh only
-scripts/check-upstream.sh   parse proton.me, refresh upstream.lock (CI runs this)
+build.sh               download -> verify -> build GUI -> package -> validate
+upstream.lock          CLI version + Proton's SHA-512s (written by check-upstream.sh only)
+scripts/check-upstream.sh   refresh upstream.lock from proton.me (CI runs this)
 scripts/release-notes.sh    render release-notes.md.tmpl for the built artifacts
-scripts/proton-sync.py      two-way folder sync on top of the official CLI (stdlib only)
+scripts/proton-sync.py      two-way sync engine (stdlib only, runs on python3)
 scripts/install-sync.sh     install/uninstall the sync as a systemd user service
-gui/               Rust desktop app (egui): dashboard, cloud browser, tray, settings, updater
-scripts/install-gui.sh      install a source checkout's GUI: binary + menu entry + icon
-scripts/fetch-desktop-deps.sh  fetch the bundled portable CPython + jeepney (pinned + checksummed)
-scripts/gen-licenses.sh     regenerate the GUI's aggregated crate licence texts (cargo-about)
-release-notes.md.tmpl       release notes template (hashes filled in at build time)
+scripts/install-gui.sh      menu entry + icon for a source checkout
+scripts/fetch-desktop-deps.sh  pinned CPython + jeepney wheels for the AppImage
+scripts/gen-licenses.sh     regenerate aggregated crate licence texts (cargo-about)
+gui/                   Rust desktop app (egui): Home, My files, Activity, tray, updater
+src/AppRun             AppImage entry point (argv pass-through)
+src/*.desktop, src/*.appdata.xml   desktop entry + AppStream metadata
+src/licenses/          Proton's MIT notice + bundled runtime licences (ship inside every build)
+release-notes.md.tmpl  release notes template (hashes filled in at build time)
 .github/workflows/release.yml  scheduled upstream check + build + publish
-install-command.sh  symlink the built AppImage into ~/.local/bin
-LICENSE           MIT, this project's own code
-THIRD_PARTY_NOTICES.md  Proton's MIT payload license, trademarks, tooling credits
-src/AppRun        AppImage entry point (pure argv pass-through)
-src/io.github.zhafrisbs.ProtonDriveCLI.desktop     desktop entry
-src/io.github.zhafrisbs.ProtonDriveCLI.appdata.xml AppStream metadata
-src/licenses/Proton-Drive-SDK-MIT.txt  Proton's MIT notice (also inside every AppImage)
-src/licenses/PSF-2.0.txt proton-drive-gui-THIRD-PARTY.txt  licences of the bundled CPython + GUI crate graph (inside every AppImage)
-src/protondrive-icon.svg  Proton Drive glyph (simple-icons, CC0), tinted #6D4AFF
-download/         upstream binaries (SHA-512-verified, git-ignored)
-tools/            appimagetool (auto-fetched, git-ignored)
-build/            generated AppDir and validation logs (git-ignored)
-dist/             final AppImages + SHA256SUMS (git-ignored, released via GitHub Releases)
+install-command.sh     symlink the AppImage into ~/.local/bin as proton-drive
+LICENSE                MIT (this project's own code)
+THIRD_PARTY_NOTICES.md full inventory of bundled components + trademarks
 ```
 
-Component id / file names share the id `io.github.zhafrisbs.ProtonDriveCLI`
-because appimagetool requires the metainfo file to be named
-`<desktop-basename>.appdata.xml` and appstreamcli requires that basename to
-equal the component id. Change the string in `build.sh` (`DESKTOP_ID`,
-`METAINFO_ID`), `src/*.desktop` and `src/*.appdata.xml` if you want your own id.
+No binaries live in git: `download/`, `dist/`, `tools/`, `build/` are
+git-ignored — the repo contains only scripts that fetch upstream bits from
+`proton.me` at build time.
 
 ## License and legal
 
-**Your safety rules, in short: source links + disclaimers + shipped notices.**
-
-* **This repository's own code** (the Rust GUI in `gui/`, `build.sh`,
-  `install-command.sh`, `src/AppRun`, the sync engine script, the
-  desktop/AppStream metadata, the icon file) is **MIT** — see
-  [`LICENSE`](LICENSE).
-* **What release AppImages additionally bundle** keeps its own licences:
-  * CPython 3.12, a portable build (**PSF-2.0**) — the sync engine's
-    runtime — and jeepney (**MIT**), both fetched by
-    `scripts/fetch-desktop-deps.sh` and shipped at
-    `usr/lib/bundled-python/`;
-  * the GUI binary's crate graph (~450 crates from crates.io, nearly all
-    MIT/Apache-2.0 and other permissive licences), with every licence text
-    generated from the exact `gui/Cargo.lock` graph by
-    `scripts/gen-licenses.sh`.
-  No dependency puts the binary under a copyleft licence: multi-licensed
-  crates take their permissive option (`gui/about.toml`), and the one
-  MPL-2.0 crate is weak, file-level copyleft that explicitly permits static
-  linking. All of those texts ship inside every AppImage at
-  `usr/share/licenses/` (`PSF-2.0.txt` and
-  `proton-drive-gui-THIRD-PARTY.txt`). Since GUI 3.14.0 the AppImage
-  carries no Qt, no PyQt6 and no copyleft component — unlike earlier
-  versions, it is **not** a GPL-3.0-only distribution. Inventory:
-  [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
-* **The payload** (the Proton Drive CLI binary inside each AppImage) is owned by
-  Proton AG and is **MIT, `Copyright (c) 2025-2026 Proton AG`**. Its source is
-  the SDK Proton publishes at <https://github.com/ProtonDriveApps/sdk>, which
-  Proton states the CLI is built on. MIT's condition — keep the copyright and
-  permission notice with all copies — is satisfied by
+* **This repo's own code** (Rust GUI, build scripts, sync engine, metadata,
+  icon) is **MIT** — see [`LICENSE`](LICENSE).
+* **The payload** (the Proton Drive CLI binary inside each AppImage) belongs
+  to Proton AG and is **MIT, © 2025-2026 Proton AG**; its source is the SDK
+  Proton publishes at <https://github.com/ProtonDriveApps/sdk>. MIT's notice
+  condition is satisfied by
   [`src/licenses/Proton-Drive-SDK-MIT.txt`](src/licenses/Proton-Drive-SDK-MIT.txt),
   which `build.sh` installs into every AppImage at
-  `usr/share/licenses/proton-drive/LICENSE`. Full inventory:
-  [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
-* **Binary integrity**: payloads are byte-identical to Proton's downloads
-  (`build.sh` aborts on SHA-512 mismatch) — nothing is patched, repacked or
-  re-signed. x64 `3533025b…`, arm64 `c8d5a6b1…`.
-* **No binaries in git**: `.gitignore` excludes `download/`, `dist/`, `tools/`
-  and `build/`, so this repository contains no Proton code — only a script that
-  fetches it from `proton.me` at build time.
-* **Trademarks**: "Proton", "Proton Drive" and the Proton logo are trademarks of
-  Proton AG, and their Terms of Service grant no trademark license. The name is
-  used only to identify the product being packaged (nominative use), the glyph
-  comes from simple-icons (CC0 file), and **this project is unofficial: not
-  affiliated with, endorsed, sponsored or supported by Proton AG**. This
-  disclaimer also appears in the AppStream metadata, the desktop entry comment
-  and the release notes.
-* Not legal advice — I am not a lawyer. If you want zero exposure, run
-  `./build.sh` yourself instead of downloading anyone's AppImage; the script
-  takes binaries straight from Proton.
+  `usr/share/licenses/proton-drive/LICENSE`.
+* **Bundled runtime** — portable CPython (**PSF-2.0**) for the sync engine
+  and jeepney (**MIT**), plus the GUI binary's crate graph (~450 crates,
+  permissive licences) with every licence text generated from
+  `gui/Cargo.lock` (`scripts/gen-licenses.sh`). All texts ship inside every
+  AppImage at `usr/share/licenses/`; inventory:
+  [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). No copyleft: since
+  GUI 3.14.0 the AppImage carries no Qt, no PyQt6 and no GPL-3.0-only
+  component.
+* **Binary integrity** — payloads are byte-identical to Proton's downloads
+  (`build.sh` aborts on SHA-512 mismatch); nothing is patched or re-signed.
+* **Trademarks** — "Proton", "Proton Drive" and the Proton logo are
+  trademarks of Proton AG, used here only to identify the packaged product
+  (nominative use); the glyph is from simple-icons (CC0). **Unofficial:
+  not affiliated with, endorsed, sponsored or supported by Proton AG** —
+  this disclaimer also ships in the AppStream metadata, desktop entry and
+  release notes.
+* Not legal advice — for zero exposure, run `./build.sh` yourself: the
+  script takes the binaries straight from Proton.
 
-## The GUI question
+## Why unofficial?
 
-**Short answer for daily use: the folder sync** (see
-[Folder sync](#folder-sync-google-drive-style) above) gives you a `~/ProtonDrive`
-folder in Dolphin/Nautilus — drag & drop, double-click to open, just like a
-local drive — on top of the official CLI only.
-
-Proton ships **no Linux desktop app** — only this CLI. For a Linux GUI, **no
-reverse engineering is needed**: Proton publishes the sources of its clients at
-<https://github.com/ProtonDriveApps> — `windows-drive` (C#, GPLv3),
-`mac-drive` (Swift, GPLv3), `android-drive` (Kotlin, GPLv3), plus the MIT
-`sdk` (TypeScript) this CLI is built on. There is no Linux client repo, so a
-Linux GUI means porting `windows-drive`/`sdk` yourself. REA
-(`npx rea-agents setup`) is only useful for studying runtime behaviour you
-cannot read in source.
+Proton ships **no Linux desktop client** — only this CLI. Their other
+clients' sources are public at <https://github.com/ProtonDriveApps>
+(`windows-drive` C#/GPLv3, `mac-drive` Swift/GPLv3, `android-drive`
+Kotlin/GPLv3, plus the MIT `sdk` this CLI is built on) — but there is no
+Linux client to build, and no reverse engineering is needed to package the
+official CLI and put an original, permissively-licensed app on top of it.
+For daily use you don't even need the window: see
+[folder sync above](#what-the-app-does).
