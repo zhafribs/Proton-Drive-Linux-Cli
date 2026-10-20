@@ -1,3 +1,14 @@
+## 3.16.6 — 2026-10-21
+
+- **Long names stay in the Name column.** Dragging the sidebar wide makes
+  the list narrow; file names were cut at a fixed character count, so a
+  long name painted straight over the Size and Modified values. Names are
+  now measured against the real column width and end in an ellipsis before
+  the next column starts.
+- **Column headers sit over their values.** Name aligns with the file names
+  (past the icon), and Size/Modified are right-aligned exactly like the
+  numbers and dates below them.
+
 ## 3.16.5 — 2026-10-21
 
 - **The collapsed address bar sits on one line again.** With a long final

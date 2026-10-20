@@ -1004,9 +1004,23 @@ fn header_cell(ui: &mut egui::Ui, label: &str, col: usize, width: f32, app: &mut
     } else {
         ui.visuals().weak_text_color()
     };
+    // Anchor each header on the same x as the values below it: Name starts
+    // where the names start (after the icon), Size/Modified end where their
+    // right-aligned values end.
+    let (anchor, align) = if col == 0 {
+        (
+            rect.left_center() + egui::vec2(28.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+        )
+    } else {
+        (
+            egui::pos2(rect.right() - 8.0, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+        )
+    };
     ui.painter().text(
-        rect.left_center(),
-        egui::Align2::LEFT_CENTER,
+        anchor,
+        align,
         text,
         egui::FontId::proportional(13.0),
         color,
@@ -1123,6 +1137,39 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
         });
 }
 
+/// Shorten `text` with an ellipsis until it fits `max_w` at `font`.
+///
+/// Unlike the character-count elide used for the tree and breadcrumb, file
+/// names must never paint over the Size/Modified columns, so this measures
+/// the real galley width and binary-searches the cut point.
+fn elide_fit(ui: &egui::Ui, text: &str, font: egui::FontId, max_w: f32) -> String {
+    let fits = |s: &str| {
+        ui.painter()
+            .layout_no_wrap(s.to_owned(), font.clone(), egui::Color32::WHITE)
+            .size()
+            .x
+            <= max_w
+    };
+    if fits(text) {
+        return text.to_owned();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let (mut lo, mut hi) = (0usize, chars.len().saturating_sub(1));
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        let mut s: String = chars[..mid].iter().collect();
+        s.push('\u{2026}');
+        if fits(&s) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    let mut s: String = chars[..lo].iter().collect();
+    s.push('\u{2026}');
+    s
+}
+
 fn row(
     app: &mut App,
     ui: &mut egui::Ui,
@@ -1175,11 +1222,15 @@ fn row(
             icon_color.gamma_multiply(0.75),
         );
     }
+    // File names stop before the Size column - a fixed character count
+    // painted over the values once the sidebar was widened.
+    let name_font = egui::FontId::proportional(14.0);
+    let name_text = elide_fit(ui, &e.name, name_font.clone(), (name_w - 36.0).max(24.0));
     ui.painter().text(
         egui::pos2(rect.left() + 28.0, cy),
         egui::Align2::LEFT_CENTER,
-        widgets::elide(&e.name, 80),
-        egui::FontId::proportional(14.0),
+        name_text,
+        name_font,
         if selected { visuals.selection.stroke.color } else { visuals.text_color() },
     );
     if !e.dir {
