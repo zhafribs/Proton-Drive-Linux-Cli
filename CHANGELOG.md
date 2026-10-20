@@ -1,3 +1,12 @@
+## 3.16.2 — 2026-10-20
+
+- **The files toolbar is icon-only now.** Refresh moved to the front of
+  the row (before the navigation arrows) and all three controls are drawn
+  glyphs in the sidebar's line style - a refresh ring and two arrows -
+  with the words kept on hover. With no text button sharing the row, the
+  breadcrumb gets the full remaining width before long paths collapse to
+  "…".
+
 ## 3.16.1 — 2026-10-20
 
 - **Compact address bar for deep folders.** A long path (e.g. My Files >

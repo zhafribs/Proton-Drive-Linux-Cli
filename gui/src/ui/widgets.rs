@@ -360,6 +360,64 @@ pub fn nav_row(ui: &mut egui::Ui, icon: NavIcon, label: &str, selected: bool) ->
     resp.clicked()
 }
 
+/// Toolbar glyphs for the files view (refresh ring + the two arrows),
+/// painted in the same line style as the sidebar nav icons.
+pub enum TopIcon {
+    Refresh,
+    ArrowLeft,
+    ArrowRight,
+}
+
+pub fn top_icon(painter: &egui::Painter, r: egui::Rect, kind: TopIcon, c: egui::Color32) {
+    let stroke = egui::Stroke::new(1.8, c);
+    let p = |x: f32, y: f32| egui::pos2(r.left() + x * r.width(), r.top() + y * r.height());
+    match kind {
+        TopIcon::ArrowLeft => {
+            painter.add(egui::Shape::line(vec![p(0.30, 0.5), p(0.70, 0.5)], stroke));
+            painter.add(egui::Shape::line(
+                vec![p(0.46, 0.33), p(0.29, 0.5), p(0.46, 0.67)],
+                stroke,
+            ));
+        }
+        TopIcon::ArrowRight => {
+            painter.add(egui::Shape::line(vec![p(0.30, 0.5), p(0.70, 0.5)], stroke));
+            painter.add(egui::Shape::line(
+                vec![p(0.54, 0.33), p(0.71, 0.5), p(0.54, 0.67)],
+                stroke,
+            ));
+        }
+        TopIcon::Refresh => {
+            // ~300° ring with a tangential arrowhead where the ring ends,
+            // so it reads as "fetch again" like every sync client's icon.
+            let ctr = p(0.5, 0.5);
+            let rad = 0.21 * r.width().min(r.height());
+            let a0 = (-55.0f32).to_radians();
+            let span = 300.0f32.to_radians();
+            let steps = 26;
+            let pts: Vec<egui::Pos2> = (0..=steps)
+                .map(|i| {
+                    let a = a0 + span * (i as f32 / steps as f32);
+                    ctr + egui::vec2(a.cos(), a.sin()) * rad
+                })
+                .collect();
+            painter.add(egui::Shape::line(pts, stroke));
+            let a1 = a0 + span;
+            let tip = ctr + egui::vec2(a1.cos(), a1.sin()) * rad;
+            let tang = egui::vec2(-a1.sin(), a1.cos()); // along the ring's travel
+            let out = egui::vec2(a1.cos(), a1.sin());
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    tip + tang * 4.5,
+                    tip - tang * 2.0 + out * 4.0,
+                    tip - tang * 2.0 - out * 4.0,
+                ],
+                c,
+                egui::Stroke::NONE,
+            ));
+        }
+    }
+}
+
 /// Elide long paths for narrow rows.
 pub fn elide(s: &str, max: usize) -> String {
     if s.chars().count() <= max {

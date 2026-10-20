@@ -841,26 +841,43 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
     bottom_row(app, ui);
 }
 
+/// A square icon button for the files toolbar: the glyph is painted onto an
+/// empty framed button, so hover/press affordances stay native.
+fn top_icon_button(ui: &mut egui::Ui, kind: widgets::TopIcon, enabled: bool, hover: &str) -> bool {
+    let resp = ui
+        .add_enabled(
+            enabled,
+            egui::Button::new(egui::RichText::new("")).min_size(egui::vec2(30.0, 30.0)),
+        )
+        .on_hover_text(hover);
+    let color = if enabled {
+        ui.visuals().text_color()
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    widgets::top_icon(&ui.painter(), resp.rect, kind, color);
+    resp.clicked()
+}
+
 fn top_row(app: &mut App, ui: &mut egui::Ui) {
     let (has_back, has_fwd, busy) = {
         let c = &app.cloud;
         (!c.hist.is_empty(), !c.fwd.is_empty(), c.busy)
     };
     ui.horizontal(|ui| {
-        if ui
-            .add_enabled(has_back && !busy, egui::Button::new("\u{2190}").min_size(egui::vec2(44.0, 0.0)))
-            .on_hover_text("Go back")
-            .clicked()
-        {
+        // Icon-only toolbar: Refresh first, then back/forward - all drawn
+        // in the nav-icon line style, the words live on hover.
+        if top_icon_button(ui, widgets::TopIcon::Refresh, true, "Refresh") {
+            let rel = app.cloud.rel.clone();
+            load(app, rel, false, true, true);
+        }
+        if top_icon_button(ui, widgets::TopIcon::ArrowLeft, has_back && !busy, "Go back") {
             go_back(app);
         }
-        if ui
-            .add_enabled(has_fwd && !busy, egui::Button::new("\u{2192}").min_size(egui::vec2(44.0, 0.0)))
-            .on_hover_text("Go forward")
-            .clicked()
-        {
+        if top_icon_button(ui, widgets::TopIcon::ArrowRight, has_fwd && !busy, "Go forward") {
             go_fwd(app);
         }
+        ui.add_space(6.0);
 
         // Breadcrumbs: "My Files > a > b", compact - unframed segments,
         // tight chevrons - collapsing the middle when the row would
@@ -874,8 +891,10 @@ fn top_row(app: &mut App, ui: &mut egui::Ui) {
             }
             (segs, c.trash_view)
         };
-        // Room for Refresh + a gap, reserved up front.
-        let crumb_w = (ui.available_width() - 86.0).max(120.0);
+        // The row's full remainder: nothing sits to the right of the crumbs
+        // anymore, so long paths get maximum room before the middle
+        // collapses to "...".
+        let crumb_w = ui.available_width().max(120.0);
         let est = |parts: &[String]| -> f32 {
             parts
                 .iter()
@@ -932,13 +951,6 @@ fn top_row(app: &mut App, ui: &mut egui::Ui) {
             },
         );
 
-        // Refresh: placed after the bounded crumb area, so the address can
-        // never slide underneath it.
-        ui.add_space(6.0);
-        if ui.button("Refresh").clicked() {
-            let rel = app.cloud.rel.clone();
-            load(app, rel, false, true, true);
-        }
     });
 }
 
