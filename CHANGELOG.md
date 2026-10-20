@@ -7,11 +7,14 @@
   gone and the app is now a single native binary. The sync engine and your
   sync folder are untouched, and your settings carry over as-is.
 - The glibc requirement drops to **2.28+** (Debian 10 / Ubuntu 20.04 era
-  or newer) on both architectures - previously 2.34+ on x86_64 and 2.39+
-  on aarch64, floors that came from the Qt wheels.
+  or newer) - previously 2.34+, a floor that came from the Qt wheels.
 - With Qt gone the AppImage contains no GPL/LGPL component at all: it is
   distributed MIT like the rest of this project (full inventory in
   THIRD_PARTY_NOTICES.md).
+- **aarch64 builds are discontinued.** Releases now ship x86_64-only: the
+  ARM64 binary could never be executed by CI (cross-compiled and shipped
+  untested), while x86_64 is built, smoke-tested and run on every release.
+  The 3.13.x aarch64 AppImages remain downloadable on their release pages.
 
 ## 3.13.2 — 2026-10-19
 

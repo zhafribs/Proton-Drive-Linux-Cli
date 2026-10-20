@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# build.sh - Build Proton Drive CLI AppImages (x86_64 + aarch64)
+# build.sh - Build Proton Drive CLI AppImage (x86_64; aarch64 discontinued)
 #
 # Downloads the official Proton Drive CLI binaries, verifies them against the
 # SHA-512 checksums published by Proton, builds this project's Rust GUI
@@ -39,14 +39,13 @@ METAINFO_ID="io.github.zhafrisbs.ProtonDriveCLI.appdata.xml"
 # upstream platform -> AppImage architecture, output suffix
 declare -A APPIMAGE_ARCH=(
     [linux-x64]="x86_64"
-    [linux-arm64]="aarch64"
 )
 
-TARGETS=("linux-x64" "linux-arm64")
+TARGETS=("linux-x64")
 [ $# -gt 0 ] && case "$1" in
     x86_64|amd64) TARGETS=("linux-x64") ;;
-    aarch64|arm64) TARGETS=("linux-arm64") ;;
-    *) echo "unknown target: $1 (use x86_64 or aarch64)" >&2; exit 2 ;;
+    aarch64|arm64) echo "aarch64 builds were discontinued - releases are x86_64-only" >&2; exit 2 ;;
+    *) echo "unknown target: $1 (only x86_64 is built)" >&2; exit 2 ;;
 esac
 
 log() { printf '\033[1;35m==>\033[0m %s\n' "$*"; }
@@ -99,11 +98,6 @@ fetch_tool() {
             "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
         chmod +x "$TOOLS/appimagetool-x86_64.AppImage"
     fi
-    if [ ! -s "$TOOLS/runtime-aarch64" ]; then
-        log "downloading aarch64 AppImage runtime"
-        wget -q -O "$TOOLS/runtime-aarch64" \
-            "https://github.com/AppImage/AppImageKit/releases/download/continuous/runtime-aarch64"
-    fi
 }
 
 fetch_payload() {
@@ -125,14 +119,17 @@ fetch_payload() {
 # match the target and have no zigbuild.
 build_gui() {
     local arch="$1" target bin_dir
-    case "$arch" in
-        x86_64)  target="x86_64-unknown-linux-gnu.2.28" ;;
-        aarch64) target="aarch64-unknown-linux-gnu.2.28" ;;
-    esac
-    bin_dir="$ROOT/gui/target/$target/release"
+    [ "$arch" = "x86_64" ] || die "no GUI target for ${arch} - releases are x86_64-only"
+    target="x86_64-unknown-linux-gnu.2.28"
     if command -v cargo-zigbuild >/dev/null 2>&1; then
         log "building GUI (${target}, zigbuild)"
         ( cd "$ROOT/gui" && cargo zigbuild --release --target "$target" )
+        # cargo-zigbuild strips the glibc suffix before invoking cargo, so the
+        # artifacts usually land in the plain-triple directory; probe both.
+        for bin_dir in "$ROOT/gui/target/$target/release" \
+                       "$ROOT/gui/target/x86_64-unknown-linux-gnu/release"; do
+            [ -x "$bin_dir/proton-drive-gui" ] && break
+        done
     elif [ "$(uname -m)" = "$arch" ]; then
         log "building GUI (${arch}, native build - install cargo-zigbuild for the glibc-pinned one)"
         ( cd "$ROOT/gui" && cargo build --release )
@@ -212,11 +209,10 @@ make_appdir() {
 # Assemble the portable runtime - CPython plus the engine's wheels (jeepney,
 # for the Secret Service session reads) - into the AppDir so the AppImage
 # needs nothing installed on the host. The GUI has not been Python since
-# 3.14.0 (it is a self-contained Rust binary). This only extracts and copies,
-# never runs target-architecture binaries, so an x86_64 machine prepares the
-# aarch64 bundle the same way. Trimmed: Python pieces a sync client never
-# imports (tcl/tk, idle, 2to3, pip). Licence texts are kept - they are the
-# compliance obligation.
+# 3.14.0 (it is a self-contained Rust binary). This only extracts and copies -
+# no target-architecture binary is ever executed. Trimmed: Python pieces a
+# sync client never imports (tcl/tk, idle, 2to3, pip). Licence texts are
+# kept - they are the compliance obligation.
 bundle_python() {
     local arch="$1" appdir="$2"
     local bdir="$ROOT/download/bundle/$arch"
@@ -292,7 +288,6 @@ build_one() {
     rm -f "$out"
 
     local -a tool_args=( "$appdir" "$out" )
-    [ "$arch" = "aarch64" ] && tool_args=( --runtime-file "$TOOLS/runtime-aarch64" "${tool_args[@]}" )
 
     local tool_log="$BUILD/appimagetool-${arch}.log"
     ARCH="$arch" APPIMAGE_EXTRACT_AND_RUN=1 "$TOOLS/appimagetool-x86_64.AppImage" "${tool_args[@]}" \

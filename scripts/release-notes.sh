@@ -30,11 +30,9 @@ GUI_VERSION="$(sed -n 's/^pub const GUI_VERSION: &str = "\(.*\)";$/\1/p' "$ROOT/
 RELEASE_DATE="$(lock_get RELEASE_DATE)"
 PAGE_URL="$(lock_get PAGE_URL)"
 SHA512_X64="$(lock_get SHA512_LINUX_X64)"
-SHA512_ARM64="$(lock_get SHA512_LINUX_ARM64)"
 
 X86="$DIST/ProtonDrive-CLI-${VERSION}-GUI-${GUI_VERSION}-x86_64.AppImage"
-ARM="$DIST/ProtonDrive-CLI-${VERSION}-GUI-${GUI_VERSION}-aarch64.AppImage"
-for artifact in "$X86" "$ARM" "$DIST/SHA256SUMS"; do
+for artifact in "$X86" "$DIST/SHA256SUMS"; do
     [ -f "$artifact" ] || { echo "error: missing $(basename "$artifact") - run ./build.sh first" >&2; exit 1; }
 done
 
@@ -71,9 +69,7 @@ sed \
     -e "s|{{BUILD_DATE}}|$(date -u +%Y-%m-%d)|g" \
     -e "s|{{REPO}}|${REPO}|g" \
     -e "s|{{SHA256_X86_64}}|$(sha256 "$X86")|g" \
-    -e "s|{{SHA256_AARCH64}}|$(sha256 "$ARM")|g" \
     -e "s|{{SHA512_LINUX_X64}}|${SHA512_X64}|g" \
-    -e "s|{{SHA512_LINUX_ARM64}}|${SHA512_ARM64}|g" \
     -e "s|{{GUI_VERSION}}|${GUI_VERSION}|g" \
     -e "s|{{PAGE_URL}}|${PAGE_URL}|g" \
     -e "/{{CHANGELOG}}/r $CHANGELOG_SECTION" \

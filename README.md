@@ -1,4 +1,4 @@
-# Proton Drive — AppImage (x86_64 + aarch64)
+# Proton Drive — AppImage (x86_64)
 
 Unofficial AppImage packaging of the **official Proton Drive CLI** published by
 Proton AG at <https://proton.me/download/drive/cli/index.html>, plus an
@@ -11,12 +11,11 @@ sync engine and the app window, in one double-clickable file.
 
 | Artifact | Arch | Size |
 | --- | --- | --- |
-| `dist/ProtonDrive-CLI-0.9.0-GUI-3.12.4-x86_64.AppImage` | x86_64 (Intel/AMD) | 167 MB |
-| `dist/ProtonDrive-CLI-0.9.0-GUI-3.12.4-aarch64.AppImage` | aarch64 (ARM64) | 153 MB |
+| `dist/ProtonDrive-CLI-0.9.0-GUI-3.14.0-x86_64.AppImage` | x86_64 (Intel/AMD) | 81 MB |
 | `dist/SHA256SUMS` | checksums of the outputs | |
 
 Upstream version: **0.9.0** (released 2026-10-05), `cli-drive@0.9.0+75612299`.
-Desktop app version: **3.12.4** — every release note ships the app's [development log](CHANGELOG.md).
+Desktop app version: **3.14.0** — every release note ships the app's [development log](CHANGELOG.md).
 
 ## Quick start
 
@@ -243,7 +242,7 @@ exit 3 = update available), and `build.sh` reads it and **aborts if the SHA-512
 of the downloaded binary does not match**. A corrupt or incomplete lock fails
 the build with a message telling you to run `check-upstream.sh`.
 
-`build.sh` downloads `appimagetool` and the aarch64 runtime into `tools/` on
+`build.sh` downloads `appimagetool` into `tools/` on
 first run, fetches the upstream binaries, verifies them, then builds and
 validates.
 
@@ -326,7 +325,7 @@ src/licenses/Proton-Drive-SDK-MIT.txt  Proton's MIT notice (also inside every Ap
 src/licenses/PSF-2.0.txt proton-drive-gui-THIRD-PARTY.txt  licences of the bundled CPython + GUI crate graph (inside every AppImage)
 src/protondrive-icon.svg  Proton Drive glyph (simple-icons, CC0), tinted #6D4AFF
 download/         upstream binaries (SHA-512-verified, git-ignored)
-tools/            appimagetool + aarch64 runtime (auto-fetched, git-ignored)
+tools/            appimagetool (auto-fetched, git-ignored)
 build/            generated AppDir and validation logs (git-ignored)
 dist/             final AppImages + SHA256SUMS (git-ignored, released via GitHub Releases)
 ```

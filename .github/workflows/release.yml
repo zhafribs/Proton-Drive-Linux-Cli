@@ -3,7 +3,7 @@ name: Check upstream & release
 # Future-proofing: this workflow keeps the repository tracking Proton's CLI.
 #
 #   schedule        every 6 hours - detects a new upstream release, rewrites
-#                   upstream.lock, builds both AppImages and publishes a
+#                   upstream.lock, builds the AppImage and publishes a
 #                   GitHub release tagged v<cli>-gui<gui> (one release per
 #                   distinct CLI+GUI pair; existing releases stay untouched)
 #   workflow_dispatch  manual run; set force_rebuild to rebuild + re-upload
@@ -66,7 +66,7 @@ jobs:
       - name: Install the Rust toolchain and zig (GUI builds)
         run: |
           rustup toolchain install stable --profile minimal \
-            --target x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
+            --target x86_64-unknown-linux-gnu
           rustup default stable
           ZIG_VERSION=0.15.2
           wget -q "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
@@ -116,7 +116,7 @@ jobs:
           git commit -m "chore: bump Proton Drive CLI to ${{ steps.upstream.outputs.version }} [skip ci]"
           git push
 
-      - name: Build AppImages (x86_64 + aarch64)
+      - name: Build AppImages (x86_64)
         run: ./build.sh
 
       - name: Generate release notes
@@ -135,14 +135,12 @@ jobs:
           TAG="v${VERSION}-gui${GUI}"
           NOTES="$RUNNER_TEMP/release-notes.md"
           ASSETS=(dist/ProtonDrive-CLI-"${VERSION}"-GUI-"${GUI}"-x86_64.AppImage
-                  dist/ProtonDrive-CLI-"${VERSION}"-GUI-"${GUI}"-aarch64.AppImage
                   dist/SHA256SUMS)
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             existing="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
             missing=0
             for name in ProtonDrive-CLI-"${VERSION}"-GUI-"${GUI}"-x86_64.AppImage \
-                        ProtonDrive-CLI-"${VERSION}"-GUI-"${GUI}"-aarch64.AppImage \
                         SHA256SUMS; do
               grep -qxF "$name" <<<"$existing" || missing=1
             done
@@ -156,7 +154,7 @@ jobs:
             fi
           else
             gh release create "$TAG" \
-              --title "Proton Drive CLI ${VERSION} + GUI ${GUI} — AppImage (x86_64 + aarch64)" \
+              --title "Proton Drive CLI ${VERSION} + GUI ${GUI} — AppImage (x86_64)" \
               --notes-file "$NOTES" \
               "${ASSETS[@]}"
             echo "Created release $TAG."

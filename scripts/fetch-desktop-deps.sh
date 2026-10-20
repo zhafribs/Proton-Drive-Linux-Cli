@@ -3,19 +3,19 @@
 # fetch-desktop-deps.sh - download the portable runtime that gets bundled
 # into the AppImage, so a fresh computer needs NOTHING installed: a
 # standalone CPython (the sync engine runs on it) plus jeepney (its Secret
-# Service client), for either architecture. The GUI has not been Python
-# since 3.14.0 - it is a self-contained Rust binary built by build.sh.
+# Service client). The GUI has not been Python since 3.14.0 - it is a
+# self-contained Rust binary built by build.sh.
 #
-#   ./scripts/fetch-desktop-deps.sh x86_64|aarch64
+#   ./scripts/fetch-desktop-deps.sh x86_64
 #
-# This only downloads and checksums - nothing is executed - so an x86_64
-# machine can prepare the aarch64 bundle too. Files land in
-# download/bundle/<arch>/ (kept by the CI cache).
+# This only downloads and checksums - nothing is executed. Files land in
+# download/bundle/<arch>/ (kept by the CI cache). aarch64 was discontinued:
+# releases are x86_64-only.
 #
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-ARCH="${1:?usage: fetch-desktop-deps.sh x86_64|aarch64}"
+ARCH="${1:?usage: fetch-desktop-deps.sh x86_64}"
 OUT="$ROOT/download/bundle/$ARCH"
 mkdir -p "$OUT"
 
@@ -31,12 +31,8 @@ case "$ARCH" in
         PY_TAG="x86_64-unknown-linux-gnu"
         PY_SHA256="5d546fc004fc2435fa142eb8f42ed8de5eb4725963dc22f7e6671014a80eb560"
         ;;
-    aarch64)
-        PY_TAG="aarch64-unknown-linux-gnu"
-        PY_SHA256="34a43010cc05982d8b5debbad7d09f7b1200117ebf018f7acfd656895e408205"
-        ;;
     *)
-        echo "unknown arch: $ARCH (use x86_64 or aarch64)" >&2
+        echo "unknown arch: $ARCH (only x86_64 is built; aarch64 was discontinued)" >&2
         exit 2
         ;;
 esac
