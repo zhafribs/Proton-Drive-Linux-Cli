@@ -1,3 +1,15 @@
+## 3.16.3 — 2026-10-20
+
+- **Folder changes finally show their name.** The engine logs whole-subtree
+  downloads as `DOWNLOAD dir  <path>/ (whole subtree)` and marks trash/mkdir
+  lines with a `remote`/`local` scope word; the row parser passed those
+  tokens through verbatim, so Home showed a bare "Downloaded" with no name
+  and Activity rendered the row as just "/". The parser (and the
+  notifications' name computation) now reduce every change line to the
+  plain path - scope/type word, trailing slash and conflict annotation
+  removed - so rows read "Personel", "old.txt" and the parent line lists
+  the real folder chain.
+
 ## 3.16.2 — 2026-10-20
 
 - **The files toolbar is icon-only now.** Refresh moved to the front of

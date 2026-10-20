@@ -25,13 +25,14 @@ pub fn ts(line: &str) -> Option<DateTime<FixedOffset>> {
 
 /// Basename of the change path inside a body (`CONFLICT a/b.md (kept)` ->
 /// "b.md", capped at 60 chars); "" when the body carries no change verb.
-/// Matches the PyQt notification's `name` computation.
+/// Shares the row parser's cleanup (scope words, trailing slash,
+/// annotations), so folder and conflict notifications show real names.
 pub fn change_name(body: &str) -> String {
     change_re()
         .captures(body)
         .map(|c| {
-            let full = c[2].trim();
-            let base = full.rsplit('/').next().unwrap_or(full);
+            let full = clean_change_body(&strip_trailing_annotation(c[2].trim()));
+            let base = full.rsplit('/').next().unwrap_or(&full);
             base.chars().take(60).collect()
         })
         .unwrap_or_default()
@@ -119,7 +120,7 @@ pub fn parse_changes(lines: &[String]) -> Vec<ChangeRow> {
                 "TRASH" => ChangeKind::Removed,
                 _ => ChangeKind::Conflict,
             };
-            let rest = strip_trailing_annotation(rest);
+            let rest = clean_change_body(&strip_trailing_annotation(rest));
             let name = rest.rsplit('/').next().unwrap_or(&rest).to_string();
             rows.push(ChangeRow { kind, name, rel: rest, ts: ts(ln) });
         }
@@ -136,6 +137,35 @@ fn strip_trailing_annotation(rest: &str) -> String {
     }
 }
 
+/// Reduce an engine change body to the plain path. The engine logs extra
+/// shapes the row UI must not show verbatim:
+/// * type/scope words - `dir  Personel/ (whole subtree)`,
+///   `TRASH remote personel/x`, `TRASH local  x`, `MKDIR  remote x`;
+/// * a trailing `/` on whole-subtree downloads (which used to leave the
+///   name empty and made Activity render just "/").
+/// A conflict's `: remote kept as ...` tail is cut at the exact phrase.
+/// Root files genuinely named `dir x.md` lose their first word - the same
+/// trade-off Qt made - paths never begin with those words plus a space in
+/// practice.
+fn clean_change_body(rest: &str) -> String {
+    let mut s = rest.to_string();
+    if let Some(i) = s.find(": remote kept as ") {
+        s.truncate(i);
+    }
+    loop {
+        let trimmed = s.trim_start();
+        let stripped = ["dir", "file", "remote", "local"]
+            .iter()
+            .find_map(|w| trimmed.strip_prefix(w))
+            .filter(|r| r.starts_with(' ') || r.starts_with('\t'));
+        match stripped {
+            Some(r) => s = r.to_string(),
+            None => break,
+        }
+    }
+    s.trim().trim_end_matches('/').to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,9 +179,10 @@ mod tests {
             "2026-10-19T23:22:12+08:00 host proton-sync[123]: MKDIR personel/newdir".into(),
             "2026-10-19T23:22:15+08:00 host proton-sync[123]: CONFLICT personel/both.md (kept both)".into(),
             "2026-10-19T23:22:16+08:00 host proton-sync[123]: cycle complete, no changes".into(),
+            "2026-10-20T19:38:32+08:00 host proton-sync[123]: DOWNLOAD dir  UUM-Bungalow/ (whole subtree)".into(),
         ];
         let rows = parse_changes(&lines);
-        assert_eq!(rows.len(), 5);
+        assert_eq!(rows.len(), 6);
         // chronological order, like the PyQt app's _changes
         assert_eq!(rows[0].kind, ChangeKind::Uploaded);
         assert_eq!(rows[0].name, "notes.md");
@@ -160,11 +191,39 @@ mod tests {
         assert_eq!(rows[1].dir(), Dir::Down);
         assert_eq!(rows[2].kind, ChangeKind::Removed);
         assert_eq!(rows[2].dir(), Dir::Other);
+        // "TRASH remote ..." scope word stripped, name kept
+        assert_eq!(rows[2].name, "old.txt");
+        assert_eq!(rows[2].rel, "personel/old.txt");
         assert_eq!(rows[3].rel, "personel/newdir");
         assert_eq!(rows[4].kind, ChangeKind::Conflict);
         // trailing "(...)" annotation stripped
         assert_eq!(rows[4].rel, "personel/both.md");
         assert_eq!(rows[4].dir(), Dir::Warn);
+        // whole-subtree download: "dir " token + trailing slash gone, so the
+        // row has a real name (it used to render blank on Home and "/" on
+        // Activity)
+        assert_eq!(rows[5].kind, ChangeKind::Downloaded);
+        assert_eq!(rows[5].name, "UUM-Bungalow");
+        assert_eq!(rows[5].rel, "UUM-Bungalow");
+    }
+
+    #[test]
+    fn change_names_cover_engine_shapes() {
+        // plain file path
+        assert_eq!(change_name("UPLOAD personel/notes.md"), "notes.md");
+        // subtree download: type token, trailing slash, annotation
+        assert_eq!(
+            change_name("DOWNLOAD dir  Personel/ (whole subtree)"),
+            "Personel"
+        );
+        // conflict: engine's colon tail and the "(kept ...)" form
+        assert_eq!(
+            change_name("CONFLICT personel/both.md: remote kept as 'both (conflict 1700)'"),
+            "both.md"
+        );
+        assert_eq!(change_name("CONFLICT a/b.md (kept)"), "b.md");
+        // no verb at all
+        assert_eq!(change_name("cycle complete, no changes"), "");
     }
 
     #[test]
