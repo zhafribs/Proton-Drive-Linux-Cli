@@ -60,15 +60,6 @@ impl UiStatus {
             UiStatus::Unknown => "unknown",
         }
     }
-    pub fn from_key(s: &str) -> UiStatus {
-        match s {
-            "synced" => UiStatus::Synced,
-            "syncing" => UiStatus::Syncing,
-            "paused" => UiStatus::Paused,
-            "error" => UiStatus::Error,
-            _ => UiStatus::Unknown,
-        }
-    }
 }
 
 /// Service active + engine-reported status -> one UI status.

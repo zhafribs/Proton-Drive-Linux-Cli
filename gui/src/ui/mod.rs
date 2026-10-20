@@ -34,8 +34,6 @@ pub enum Back {
     Stats { files: u64, bytes: u64 },
     ShowWindow,
     SaveHint(String),
-    SelHint(String),
-    Toast(String),
     /// Release check: (release, update available, installed CLI version).
     Update(Result<(release::Release, bool, String), String>),
     /// Download + swap finished; Ok is the new AppImage's path.
@@ -536,11 +534,8 @@ impl App {
     pub fn action_restart_service(&mut self) {
         let appimage = self.paths.appimage.clone();
         std::thread::spawn(move || {
-            let r = service::ensure_service_unit(appimage.as_deref(), false);
-            let ok = r != "failed" && service::restart();
-            if ok {
-                // Toast from the worker is fine (channel-backed).
-            }
+            let _ = service::ensure_service_unit(appimage.as_deref(), false);
+            let _ = service::restart();
         });
         self.toast("Syncing restarted.");
     }
@@ -629,8 +624,6 @@ impl App {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
                 Back::SaveHint(h) => self.save_hint = h,
-                Back::SelHint(h) => self.draft.sel_hint = h,
-                Back::Toast(m) => self.toast(m),
                 Back::SelFolders { parent, folders } => {
                     let selective = self.draft.selective;
                     self.draft.on_folders(&parent, folders);

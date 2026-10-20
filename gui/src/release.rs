@@ -10,7 +10,6 @@ use std::time::Duration;
 pub struct Asset {
     pub name: String,
     pub url: String,
-    pub size: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -49,7 +48,6 @@ fn asset_from(v: &Value) -> Option<Asset> {
     Some(Asset {
         name: v.get("name")?.as_str()?.to_string(),
         url: v.get("browser_download_url")?.as_str()?.to_string(),
-        size: v.get("size").and_then(Value::as_u64).unwrap_or(0),
     })
 }
 
@@ -505,7 +503,6 @@ mod tests {
         assert_eq!(r.gui, "3.13.2");
         assert_eq!(r.published, "2026-10-18");
         assert_eq!(r.assets.len(), 2);
-        assert_eq!(r.assets[0].size, 100);
         assert_eq!(
             r.asset_url("SHA256SUMS"),
             Some("https://x/SHA256SUMS")

@@ -83,15 +83,3 @@ pub fn run(cmd: &str, args: &[&str], timeout: Duration) -> Result<Output, String
 pub fn run_ok(cmd: &str, args: &[&str], timeout: Duration) -> bool {
     run(cmd, args, timeout).map(|o| o.ok()).unwrap_or(false)
 }
-
-/// Run on a worker thread; the result is delivered to the UI via `send`.
-pub fn spawn<F>(send: F, cmd: String, args: Vec<String>, timeout: Duration)
-where
-    F: FnOnce(Result<Output, String>) + Send + 'static,
-{
-    std::thread::spawn(move || {
-        let argrefs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        let r = run(&cmd, &argrefs, timeout);
-        send(r);
-    });
-}

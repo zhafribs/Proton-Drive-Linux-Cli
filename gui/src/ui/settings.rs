@@ -19,7 +19,6 @@ pub struct Draft {
     pub exclude: String,
     pub selective: bool,
     pub env_text: String,
-    pub extras: Vec<String>,
 
     // --- selective-sync tree ---
     /// Explicit checkbox state per rendered node; "" is the root row.
@@ -72,7 +71,6 @@ impl Draft {
             exclude: get("PROTON_SYNC_EXCLUDE", ""),
             selective: !selection.is_empty(),
             env_text: extras.join("\n"),
-            extras: extras.to_vec(),
             nodes: HashMap::from([(String::new(), selection.is_empty())]),
             children: HashMap::new(),
             loading: HashSet::new(),
@@ -204,15 +202,7 @@ impl Draft {
         self.loading.clear();
         self.expanded.clear();
         self.initial_selection = derived;
-        if self.loading.insert(String::new()) {
-            let remote = self.remote.clone();
-            // (the caller spawns the actual worker)
-            let _ = remote;
-        }
-    }
-
-    fn root_label(&self) -> String {
-        format!("All files in your cloud ({})", self.remote)
+        self.loading.insert(String::new());
     }
 }
 

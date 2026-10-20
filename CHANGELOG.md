@@ -1,3 +1,18 @@
+## 3.14.0 — 2026-10-20
+
+- **The desktop app is rewritten in Rust.** Same app - dashboard, system
+  tray, Cloud page, selective sync, notifications, logs, settings, the
+  self-installing updates - but it starts faster and the AppImage shrinks
+  from 167 MB to 81 MB, because the bundled Python/Qt desktop stack is
+  gone and the app is now a single native binary. The sync engine and your
+  sync folder are untouched, and your settings carry over as-is.
+- The glibc requirement drops to **2.28+** (Debian 10 / Ubuntu 20.04 era
+  or newer) on both architectures - previously 2.34+ on x86_64 and 2.39+
+  on aarch64, floors that came from the Qt wheels.
+- With Qt gone the AppImage contains no GPL/LGPL component at all: it is
+  distributed MIT like the rest of this project (full inventory in
+  THIRD_PARTY_NOTICES.md).
+
 ## 3.13.2 — 2026-10-19
 
 - **Faster both ways, and cloud changes can no longer queue behind

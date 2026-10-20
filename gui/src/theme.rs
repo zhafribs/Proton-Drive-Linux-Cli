@@ -23,53 +23,6 @@ pub fn status_color(key: &str) -> egui::Color32 {
     }
 }
 
-/// Best-effort "does the desktop prefer dark?" without pulling in GTK/Qt:
-/// COLORFGBG first (the classic terminal hint), then GTK settings, then KDE.
-pub fn system_prefers_dark() -> bool {
-    if let Ok(v) = std::env::var("COLORFGBG") {
-        if let Some((_, bg)) = v.rsplit_once(';') {
-            if let Ok(n) = bg.trim().parse::<u8>() {
-                return n < 8;
-            }
-        }
-    }
-    if let Some(home) = dirs::home_dir() {
-        let gtk = home.join(".config/gtk-3.0/settings.ini");
-        if let Ok(t) = std::fs::read_to_string(&gtk) {
-            for line in t.lines() {
-                let l = line.trim();
-                if l == "gtk-application-prefer-dark-theme=1" {
-                    return true;
-                }
-                if let Some(v) = l.strip_prefix("gtk-theme-name=") {
-                    if v.to_lowercase().contains("dark") {
-                        return true;
-                    }
-                }
-            }
-        }
-        let kde = home.join(".config/kdeglobals");
-        if let Ok(t) = std::fs::read_to_string(&kde) {
-            for line in t.lines() {
-                if let Some(v) = line.trim().strip_prefix("ColorScheme=") {
-                    if v.to_lowercase().contains("dark") {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    false
-}
-
-pub fn resolve_dark(theme: &Theme) -> bool {
-    match theme {
-        Theme::Dark => true,
-        Theme::Light => false,
-        Theme::System => system_prefers_dark(),
-    }
-}
-
 /// Apply the palettes + widget rounding to the context, for both themes (so
 /// an OS theme flip mid-session keeps the accent and rounded corners).
 pub fn apply(ctx: &egui::Context, _theme: &Theme) {

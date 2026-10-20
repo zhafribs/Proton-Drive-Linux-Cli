@@ -136,17 +136,6 @@ fn strip_trailing_annotation(rest: &str) -> String {
     }
 }
 
-/// "12:03" if the timestamp carries one, else the date - the Activity row's
-/// leading time column.
-pub fn short_time(row: &ChangeRow) -> String {
-    match row.ts {
-        Some(dt) => format!("{:02}:{:02}", dt.hour(), dt.minute()),
-        None => String::new(),
-    }
-}
-
-use chrono::Timelike;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,7 +165,6 @@ mod tests {
         // trailing "(...)" annotation stripped
         assert_eq!(rows[4].rel, "personel/both.md");
         assert_eq!(rows[4].dir(), Dir::Warn);
-        assert_eq!(short_time(&rows[0]), "23:22");
     }
 
     #[test]
