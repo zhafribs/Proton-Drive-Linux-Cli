@@ -72,6 +72,7 @@ sed \
     -e "s|{{SHA512_LINUX_X64}}|${SHA512_X64}|g" \
     -e "s|{{X86_FILE}}|$(basename "$X86")|g" \
     -e "s|{{OTHER_ARCH}}||g" \
+    -e "s|{{TAG}}|v${VERSION}-gui${GUI_VERSION}|g" \
     -e "s|{{GUI_VERSION}}|${GUI_VERSION}|g" \
     -e "s|{{PAGE_URL}}|${PAGE_URL}|g" \
     -e "/{{CHANGELOG}}/r $CHANGELOG_SECTION" \
