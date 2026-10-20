@@ -547,8 +547,8 @@ mod tests {
     fn update_comparison_is_qt_semantics() {
         // newer CLI always wins
         assert!(has_update("0.9.0", &rel("0.10.0", "3.14.0")));
-        // same CLI, newer GUI
-        assert!(has_update("0.9.0", &rel("0.9.0", "3.15.0")));
+        // same CLI, newer GUI (3.99.0 stays ahead of GUI_VERSION for any bump)
+        assert!(has_update("0.9.0", &rel("0.9.0", "3.99.0")));
         // exactly what is installed: no update (dev GUI newer than release)
         assert!(!has_update("0.9.0", &rel("0.9.0", "3.13.2")));
         // older release CLI than installed: no update even with a newer GUI tag

@@ -1,3 +1,24 @@
+## 3.15.0 — 2026-10-20
+
+- **The left pane now follows Proton Drive's own sidebar layout** (the one
+  shown in donniedice/protondrive-linux, which wraps the official web app):
+  a **+ New** button with a New folder / Upload files / Upload folder menu,
+  an expandable **My files** folder tree, and **Trash**. The tree is lazy -
+  expanding a folder fetches its real contents on demand with read-only
+  listings, the route down to your current folder stays expanded, and the
+  tree never touches your sync state. The other pages (Home, Activity,
+  Settings, About) moved behind a new account row at the bottom of the
+  pane, showing your avatar and e-mail; click it to switch pages.
+- The selected theme (Light/Dark/System) is now applied at startup - the
+  preference was saved but never used before.
+- The status line under the file list no longer swallows its own actions:
+  Download / New folder / Upload show again at the right edge (a justified
+  label in that row used to take the whole width and push them out of the
+  window).
+- The Activity search rows no longer overflow their card: the "Everything"
+  filter (Files moved tab) and "Copy log" button (Technical log tab) were
+  clipped past the window's right edge.
+
 ## 3.14.0 — 2026-10-20
 
 - **The desktop app is rewritten in Rust.** Same app - dashboard, system

@@ -5,12 +5,17 @@ use crate::journal::{ChangeRow, Dir};
 use crate::theme;
 use eframe::egui;
 
-/// Card container (title optional) - the PyQt `card()` helper.
+/// Card container (title optional) - the PyQt `card()` helper, on the Proton
+/// Drive web look: white surface + hairline border on the lavender page.
 pub fn card(ui: &mut egui::Ui, title: Option<&str>, add: impl FnOnce(&mut egui::Ui)) {
+    let fill = theme::surface(ui.visuals());
     let frame = egui::Frame::group(ui.style())
+        .fill(fill)
         .corner_radius(egui::CornerRadius::same(12))
         .inner_margin(egui::Margin::symmetric(18, 16));
     frame.show(ui, |ui| {
+        // Proton's cards always span the content column.
+        ui.set_min_width(ui.available_width());
         if let Some(t) = title {
             ui.label(egui::RichText::new(t).strong().size(15.0));
             ui.add_space(8.0);
@@ -30,20 +35,20 @@ pub fn primary_button(ui: &mut egui::Ui, text: &str) -> bool {
         egui::Button::new(egui::RichText::new(text).color(egui::Color32::WHITE))
             .fill(theme::ACCENT)
             .stroke(egui::Stroke::NONE)
-            .corner_radius(egui::CornerRadius::same(8)),
+            .corner_radius(theme::pill()),
     )
     .clicked()
 }
 
 pub fn secondary_button(ui: &mut egui::Ui, text: &str) -> bool {
-    ui.add(egui::Button::new(text).corner_radius(egui::CornerRadius::same(8))).clicked()
+    ui.add(egui::Button::new(text).corner_radius(theme::pill())).clicked()
 }
 
 pub fn danger_ghost_button(ui: &mut egui::Ui, text: &str) -> bool {
     ui.add(
         egui::Button::new(egui::RichText::new(text).color(theme::ERROR))
             .stroke(egui::Stroke::new(1.0, theme::ERROR.gamma_multiply(0.5)))
-            .corner_radius(egui::CornerRadius::same(8)),
+            .corner_radius(theme::pill()),
     )
     .clicked()
 }
@@ -146,31 +151,89 @@ pub fn move_row(ui: &mut egui::Ui, row: &ChangeRow, parent: &str, when: &str) {
     ui.add_space(2.0);
 }
 
+/// Line/solid glyphs painted for the sidebar nav (Proton-style icons).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum NavIcon {
+    Folder,
+    Trash,
+}
+
+/// Paint one nav glyph into `r` - hand-drawn from lines and rounded rects so
+/// it matches the stroke weight of Proton's line icons without shipping a
+/// font or an asset.
+pub fn nav_icon(painter: &egui::Painter, r: egui::Rect, kind: NavIcon, c: egui::Color32) {
+    let stroke = egui::Stroke::new(1.6, c);
+    let p = |x: f32, y: f32| egui::pos2(r.left() + x * r.width(), r.top() + y * r.height());
+    match kind {
+        NavIcon::Folder => {
+            // Filled silhouette: tab + body (Proton's solid folder glyph).
+            painter.rect_filled(
+                egui::Rect::from_min_max(p(0.10, 0.22), p(0.48, 0.40)),
+                egui::CornerRadius::same(3),
+                c,
+            );
+            painter.rect_filled(
+                egui::Rect::from_min_max(p(0.10, 0.34), p(0.90, 0.84)),
+                egui::CornerRadius::same(4),
+                c,
+            );
+        }
+        NavIcon::Trash => {
+            // Lid + handle, then the tapered bin with two ribs.
+            painter.add(egui::Shape::line(
+                vec![p(0.10, 0.30), p(0.90, 0.30)],
+                stroke,
+            ));
+            painter.add(egui::Shape::line(
+                vec![p(0.38, 0.14), p(0.62, 0.14)],
+                stroke,
+            ));
+            painter.add(egui::Shape::line(
+                vec![p(0.22, 0.38), p(0.27, 0.86), p(0.73, 0.86), p(0.78, 0.38)],
+                stroke,
+            ));
+            painter.add(egui::Shape::line(vec![p(0.44, 0.48), p(0.46, 0.76)], stroke));
+            painter.add(egui::Shape::line(vec![p(0.56, 0.48), p(0.54, 0.76)], stroke));
+        }
+    }
+}
+
 /// Full-width nav row painted directly (egui 0.37 dropped the widget form of
-/// `SelectableLabel`); selected/hover states match the Qt sidebar.
-pub fn nav_row(ui: &mut egui::Ui, label: &str, selected: bool) -> bool {
+/// `SelectableLabel`): soft-purple active pill + purple icon/text, like the
+/// Proton Drive sidebar; otherwise plain text with a tinted hover.
+pub fn nav_row(ui: &mut egui::Ui, icon: NavIcon, label: &str, selected: bool) -> bool {
     let (rect, resp) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 36.0), egui::Sense::click());
     let fill = if selected {
-        theme::ACCENT.gamma_multiply(0.22)
+        theme::accent_soft(ui.visuals())
     } else if resp.hovered() {
-        ui.visuals().widgets.hovered.bg_fill.gamma_multiply(0.6)
+        ui.visuals().widgets.hovered.bg_fill
     } else {
         egui::Color32::TRANSPARENT
     };
     ui.painter().rect(
         rect,
-        egui::CornerRadius::same(8),
+        egui::CornerRadius::same(9),
         fill,
         egui::Stroke::NONE,
         egui::StrokeKind::Inside,
     );
+    let color = if selected {
+        theme::accent(ui.visuals())
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    let icon_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.left() + 22.0, rect.center().y),
+        egui::vec2(17.0, 17.0),
+    );
+    nav_icon(&ui.painter(), icon_rect, icon, color);
     ui.painter().text(
-        rect.left_center() + egui::vec2(12.0, 0.0),
+        rect.left_center() + egui::vec2(42.0, 0.0),
         egui::Align2::LEFT_CENTER,
         label,
         egui::FontId::proportional(14.5),
-        ui.visuals().text_color(),
+        color,
     );
     resp.clicked()
 }

@@ -44,6 +44,8 @@ pub enum Back {
     UnitEnabled(bool),
     /// Cloud browser: a folder listing landed (key + serial guard staleness).
     CloudEntries { key: String, serial: u64, result: Result<Vec<cli::RemoteEntry>, String> },
+    /// A sidebar tree listing (never touches the visible folder).
+    TreeEntries { key: String, result: Result<Vec<cli::RemoteEntry>, String> },
     /// Cloud browser: a CLI mutation finished (refresh follows).
     CloudMutated { ok: bool, err: String, done: String, notify: Option<(String, String)> },
     /// Cloud browser: a download finished.
@@ -277,6 +279,7 @@ impl App {
             std::time::Instant::now() + Duration::from_secs(5)
         });
         theme::apply(&cc.egui_ctx, &prefs.theme());
+        theme::force(&cc.egui_ctx, &prefs.theme());
         let conf = conf::read(&paths.conf_file);
         let conf_extras = conf::read_extras(&paths.conf_file);
         let draft = settings::Draft::load(&conf, &conf_extras, &prefs, &paths);
@@ -354,6 +357,7 @@ impl App {
             active: false,
             enabled: false,
             page: Page::Home,
+
             identity: None,
             stats: None,
             draft,
@@ -640,6 +644,7 @@ impl App {
                 Back::CloudEntries { key, serial, result } => {
                     cloud::on_entries(self, key, serial, result)
                 }
+                Back::TreeEntries { key, result } => cloud::on_tree_entries(self, key, result),
                 Back::CloudMutated { ok, err, done, notify } => {
                     cloud::on_mutated(self, ok, err, done, notify)
                 }
@@ -829,41 +834,123 @@ impl App {
     // ------------------------------------------------------------- shell
 
     fn sidebar(&mut self, ui: &mut egui::Ui) {
+        // Two-tone wordmark like Proton Drive's own logo: dark name + accent
+        // product tag.
         ui.horizontal(|ui| {
             if let Some(tex) = &self.icon_tex {
                 ui.add(egui::Image::new((tex.id(), egui::vec2(30.0, 30.0))));
             }
-            ui.vertical(|ui| {
-                ui.label(egui::RichText::new("Proton Drive").strong().size(17.0));
-                ui.label(egui::RichText::new("for Linux").size(12.0).weak());
-            });
+            ui.label(egui::RichText::new("Proton Drive").strong().size(16.5));
+            ui.label(
+                egui::RichText::new("CLI").strong()
+                    .size(16.5)
+                    .color(theme::accent(ui.visuals())),
+            );
         });
-        ui.add_space(20.0);
+        ui.add_space(14.0);
 
-        for (page, label) in [
-            (Page::Home, "Home"),
-            (Page::Cloud, "Cloud"),
-            (Page::Activity, "Activity"),
-            (Page::Settings, "Settings"),
-            (Page::About, "About"),
-        ] {
-            if widgets::nav_row(ui, label, self.page == page) {
-                if self.page != page && page == Page::Cloud {
-                    cloud::on_shown(self); // re-list on every visit (browser-style)
-                }
-                self.page = page;
-            }
-        }
+        // Proton's sidebar button: "+ New" opens the create/upload menu.
+        cloud::new_button(self, ui);
+        ui.add_space(10.0);
+
+        // "My files" (expandable folder tree) + "Trash"; long trees scroll
+        // while the footer stays anchored at the bottom.
+        egui::ScrollArea::vertical()
+            .id_salt("nav-scroll")
+            .auto_shrink([false, false])
+            .max_height((ui.available_height() - 124.0).max(140.0))
+            .show(ui, |ui| cloud::nav_ui(self, ui));
 
         ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-            ui.add_space(14.0);
-            ui.horizontal(|ui| {
-                let key = self.status_key();
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-                ui.painter().circle_filled(rect.center(), 5.0, theme::status_color(key));
-                ui.label(egui::RichText::new(self.side_label()).size(13.0));
-            });
-            ui.label(egui::RichText::new("Unofficial community app").size(12.0).weak());
+            ui.add_space(4.0);
+            self.account_row(ui);
+            ui.add_space(8.0);
+            // Status card, like the Proton sidebar's footer block.
+            let fill = theme::surface(ui.visuals());
+            let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+            egui::Frame::new()
+                .fill(fill)
+                .stroke(stroke)
+                .corner_radius(egui::CornerRadius::same(10))
+                .inner_margin(egui::Margin::symmetric(12, 9))
+                .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        let key = self.status_key();
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                        ui.painter().circle_filled(rect.center(), 5.0, theme::status_color(key));
+                        ui.label(egui::RichText::new(self.side_label()).size(13.0));
+                    });
+                    ui.add_space(2.0);
+                    ui.label(egui::RichText::new("Unofficial community app").size(11.5).weak());
+                });
+        });
+    }
+
+    /// The pane's account row (Proton Drive's sidebar footer): avatar +
+    /// identity, opening a menu with the app's other pages.
+    fn account_row(&mut self, ui: &mut egui::Ui) {
+        let email = self.identity.as_ref().and_then(|i| i.email.clone());
+        let label = match (&self.identity, &email) {
+            (None, _) => "Checking your account...",
+            (Some(_), Some(e)) => e.as_str(),
+            (Some(_), None) => "You're not signed in yet",
+        };
+        let (rect, resp) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
+        let fill = if resp.hovered() {
+            ui.visuals().widgets.hovered.bg_fill
+        } else {
+            egui::Color32::TRANSPARENT
+        };
+        ui.painter().rect_filled(rect, egui::CornerRadius::same(8), fill);
+        // Accent initial circle, like Home's account card.
+        let c = egui::pos2(rect.left() + 14.0, rect.center().y);
+        ui.painter().circle_filled(c, 11.0, theme::ACCENT.gamma_multiply(0.25));
+        let ch = email
+            .as_deref()
+            .and_then(|e| e.chars().next())
+            .map(|c| c.to_uppercase().to_string())
+            .unwrap_or_else(|| "?".into());
+        ui.painter().text(
+            c,
+            egui::Align2::CENTER_CENTER,
+            ch,
+            egui::FontId::proportional(12.0),
+            theme::ACCENT,
+        );
+        ui.painter().text(
+            rect.left_center() + egui::vec2(34.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            widgets::elide(label, 22),
+            egui::FontId::proportional(13.0),
+            ui.visuals().text_color(),
+        );
+        ui.painter().text(
+            rect.right_center() + egui::vec2(-12.0, 0.0),
+            egui::Align2::RIGHT_CENTER,
+            "\u{25be}",
+            egui::FontId::proportional(10.0),
+            ui.visuals().weak_text_color(),
+        );
+        let _ = egui::Popup::menu(&resp).show(|ui| {
+            if ui.button("Home").clicked() {
+                ui.close();
+                self.page = Page::Home;
+            }
+            if ui.button("Activity").clicked() {
+                ui.close();
+                self.page = Page::Activity;
+            }
+            if ui.button("Settings").clicked() {
+                ui.close();
+                self.page = Page::Settings;
+            }
+            if ui.button("About").clicked() {
+                ui.close();
+                self.page = Page::About;
+            }
         });
     }
 
@@ -1299,6 +1386,7 @@ impl eframe::App for App {
 
         if self.style_dirty {
             theme::apply(ctx, &self.prefs.theme());
+            theme::force(ctx, &self.prefs.theme());
             self.style_dirty = false;
         }
 
@@ -1306,12 +1394,15 @@ impl eframe::App for App {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // White sidebar against the lavender content page - the Proton Drive
+        // web layout.
         egui::Panel::left("nav")
             .resizable(false)
             .exact_size(216.0)
             .frame(
                 egui::Frame::side_top_panel(ui.style())
-                    .inner_margin(egui::Margin::symmetric(16, 18)),
+                    .inner_margin(egui::Margin::symmetric(16, 18))
+                    .fill(theme::surface(ui.visuals())),
             )
             .show(ui, |ui| self.sidebar(ui));
 

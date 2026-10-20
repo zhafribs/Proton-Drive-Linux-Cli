@@ -7,7 +7,7 @@
 //! nothing ever waits on the network to be visible.
 
 use super::{widgets, App, Back};
-use crate::{cli, exec, notify, portal};
+use crate::{cli, exec, notify, portal, theme};
 use eframe::egui;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -55,6 +55,11 @@ pub struct CloudState {
     pub anchor: Option<String>, // shift-range anchor
     pub serial: u64,            // listing request serial (drops stale results)
     pub picker: Option<Picker>,
+    /// sidebar tree: expanded nodes and in-flight on-demand listings
+    pub tree_open: HashSet<String>,
+    pub tree_loading: HashSet<String>,
+    /// the user has explicitly collapsed/expanded the root section
+    pub tree_root_touched: bool,
 }
 
 pub fn remote_root(conf: &std::collections::BTreeMap<String, String>) -> String {
@@ -214,6 +219,24 @@ pub fn on_entries(
                 };
             }
         }
+    }
+}
+
+/// A sidebar tree listing arrived: warm the caches only — never touch the
+/// visible folder, its status, or its serial.
+pub fn on_tree_entries(
+    app: &mut App,
+    key: String,
+    result: Result<Vec<cli::RemoteEntry>, String>,
+) {
+    app.cloud.tree_loading.remove(&key);
+    if let Ok(entries) = result {
+        app.cloud.session.insert(key.clone(), entries.clone());
+        app.cloud.disk.insert(
+            key,
+            DiskEntry { ts: epoch_now(), entries: entries.clone() },
+        );
+        save_disk_cache(&app.paths.cloud_cache_file, &app.cloud.disk);
     }
 }
 
@@ -849,7 +872,7 @@ fn top_row(app: &mut App, ui: &mut egui::Ui) {
             }
             (segs, c.trash_view)
         };
-        let avail = (ui.available_width() - 190.0).max(160.0);
+        let avail = (ui.available_width() - 110.0).max(160.0);
         let est = |parts: &[String]| -> f32 {
             parts.iter().map(|s| widgets::elide(s, 60).len() as f32 * 7.0 + 24.0).sum()
         };
@@ -867,7 +890,7 @@ fn top_row(app: &mut App, ui: &mut egui::Ui) {
                     ui.label(egui::RichText::new("\u{203a}").weak().size(13.0));
                 }
                 if seg == "..." {
-                    ui.add_enabled(false, egui::Button::new("..."));
+                    ui.add_enabled(false, egui::Button::new("...").frame_when_inactive(false));
                     continue;
                 }
                 let parts: Vec<&str> = segs[1..=i]
@@ -878,11 +901,22 @@ fn top_row(app: &mut App, ui: &mut egui::Ui) {
                 let prefix = parts.join("/");
                 let current = i == segs.len() - 1;
                 let label = widgets::elide(seg, 34);
-                let resp = ui
-                    .add(egui::Button::selectable(current, label))
-                    .on_hover_text(format!("/{prefix}"));
-                if resp.clicked() && !current {
-                    load(app, prefix, true, true, true);
+                if current {
+                    // Proton's breadcrumb: the open folder reads as bold navy,
+                    // ancestors are quiet and gain a soft pill on hover.
+                    ui.label(egui::RichText::new(&label).strong().size(13.5))
+                        .on_hover_text(format!("/{prefix}"));
+                } else {
+                    let resp = ui
+                        .add(
+                            egui::Button::new(egui::RichText::new(&label).size(13.5))
+                                .frame(true)
+                                .frame_when_inactive(false),
+                        )
+                        .on_hover_text(format!("/{prefix}"));
+                    if resp.clicked() {
+                        load(app, prefix, true, true, true);
+                    }
                 }
             }
         });
@@ -891,15 +925,6 @@ fn top_row(app: &mut App, ui: &mut egui::Ui) {
             if ui.button("Refresh").clicked() {
                 let rel = app.cloud.rel.clone();
                 load(app, rel, false, true, true);
-            }
-            let mut on = trash_view;
-            if ui
-                .add_enabled(!busy, egui::Button::selectable(on, "Trash"))
-                .on_hover_text("Recently deleted items")
-                .clicked()
-            {
-                on = !on;
-                trash_toggle(app, on);
             }
             ui.add_space(8.0);
         });
@@ -916,12 +941,17 @@ fn header_cell(ui: &mut egui::Ui, label: &str, col: usize, width: f32, app: &mut
     let (rect, resp) =
         ui.allocate_exact_size(egui::vec2(width, 20.0), egui::Sense::click());
     let text = format!("{label}{arrow}");
+    let color = if active {
+        ui.visuals().strong_text_color()
+    } else {
+        ui.visuals().weak_text_color()
+    };
     ui.painter().text(
         rect.left_center(),
         egui::Align2::LEFT_CENTER,
         text,
         egui::FontId::proportional(13.0),
-        ui.visuals().strong_text_color(),
+        color,
     );
     if resp.hovered() {
         ui.painter().hline(
@@ -942,77 +972,91 @@ fn header_cell(ui: &mut egui::Ui, label: &str, col: usize, width: f32, app: &mut
 }
 
 fn table(app: &mut App, ui: &mut egui::Ui) {
-    let col_size_w = 96.0f32;
-    let col_mtime_w = 132.0f32;
-    let full_w = ui.available_width();
-    let name_w = (full_w - col_size_w - col_mtime_w).max(140.0);
-
-    ui.horizontal(|ui| {
-        header_cell(ui, "Name", 0, name_w, app);
-        header_cell(ui, "Size", 1, col_size_w, app);
-        header_cell(ui, "Modified", 2, col_mtime_w, app);
-    });
-
-    let (trash_view, busy, sort_col, sort_desc) = {
-        let c = &app.cloud;
-        (c.trash_view, c.busy, c.sort_col, c.sort_desc)
-    };
-    let rows = sorted(&app.cloud.entries, sort_col, sort_desc);
-
-    let mut open_rel: Option<String> = None;
-    let mut menu_item: Option<&'static str> = None;
-
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
+    // The list sits in a white card with a quiet header, like Proton Drive's
+    // file list; the action/status row below gets its space reserved so the
+    // card can never push it out of the panel.
+    let fill = theme::surface(ui.visuals());
+    egui::Frame::group(ui.style())
+        .fill(fill)
+        .corner_radius(egui::CornerRadius::same(12))
+        .inner_margin(egui::Margin::symmetric(14, 10))
         .show(ui, |ui| {
-            for e in &rows {
-                row(app, ui, e, name_w, col_size_w, &mut open_rel, &mut menu_item);
-            }
-            // Empty area: click clears the selection, right-click offers the
-            // folder-level menu (Qt's empty-item context menu).
-            let h = (ui.available_height()).max(24.0);
-            let (rect, resp) = ui.allocate_exact_size(
-                egui::vec2(ui.available_width(), h),
-                egui::Sense::click(),
-            );
-            if resp.clicked() && !app.cloud.sel.is_empty() {
-                app.cloud.sel.clear();
-            }
-            resp.context_menu(|ui| {
-                if trash_view {
-                    return;
-                }
-                if ui.button("New folder...").clicked() {
-                    ui.close();
-                    menu_item = Some("newfolder");
-                }
-                if ui.button("Upload files...").clicked() {
-                    ui.close();
-                    menu_item = Some("uploadfiles");
-                }
-                if ui.button("Upload folder...").clicked() {
-                    ui.close();
-                    menu_item = Some("uploadfolder");
-                }
-                ui.separator();
-                if ui.button("Refresh").clicked() {
-                    ui.close();
-                    menu_item = Some("refresh");
-                }
+            let col_size_w = 96.0f32;
+            let col_mtime_w = 132.0f32;
+            let full_w = ui.available_width();
+            let name_w = (full_w - col_size_w - col_mtime_w).max(140.0);
+
+            ui.horizontal(|ui| {
+                header_cell(ui, "Name", 0, name_w, app);
+                header_cell(ui, "Size", 1, col_size_w, app);
+                header_cell(ui, "Modified", 2, col_mtime_w, app);
             });
-            let _ = rect;
+            ui.separator();
+
+            let (trash_view, busy, sort_col, sort_desc) = {
+                let c = &app.cloud;
+                (c.trash_view, c.busy, c.sort_col, c.sort_desc)
+            };
+            let rows = sorted(&app.cloud.entries, sort_col, sort_desc);
+            // Frame margin (10) + gap (6) + the action row (~36).
+            let max_h = (ui.available_height() - 52.0).max(120.0);
+
+            let mut open_rel: Option<String> = None;
+            let mut menu_item: Option<&'static str> = None;
+
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .max_height(max_h)
+                .show(ui, |ui| {
+                    for e in &rows {
+                        row(app, ui, e, name_w, col_size_w, &mut open_rel, &mut menu_item);
+                    }
+                    // Empty area: click clears the selection, right-click offers the
+                    // folder-level menu (Qt's empty-item context menu).
+                    let h = (ui.available_height()).max(24.0);
+                    let (rect, resp) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), h),
+                        egui::Sense::click(),
+                    );
+                    if resp.clicked() && !app.cloud.sel.is_empty() {
+                        app.cloud.sel.clear();
+                    }
+                    resp.context_menu(|ui| {
+                        if trash_view {
+                            return;
+                        }
+                        if ui.button("New folder...").clicked() {
+                            ui.close();
+                            menu_item = Some("newfolder");
+                        }
+                        if ui.button("Upload files...").clicked() {
+                            ui.close();
+                            menu_item = Some("uploadfiles");
+                        }
+                        if ui.button("Upload folder...").clicked() {
+                            ui.close();
+                            menu_item = Some("uploadfolder");
+                        }
+                        ui.separator();
+                        if ui.button("Refresh").clicked() {
+                            ui.close();
+                            menu_item = Some("refresh");
+                        }
+                    });
+                    let _ = rect;
+                });
+
+            if let Some(rel) = open_rel {
+                open_item(app, &rel);
+            }
+            apply_menu_item(app, menu_item);
+
+            // Delete key = move to trash (Qt event filter).
+            let del = ui.input(|i| i.key_pressed(egui::Key::Delete));
+            if del && !trash_view && !busy && !app.cloud.sel.is_empty() {
+                app.dialog = Some(super::Dialog::ConfirmTrash { n: app.cloud.sel.len() });
+            }
         });
-
-    if let Some(rel) = open_rel {
-        open_item(app, &rel);
-    }
-    apply_menu_item(app, menu_item);
-
-    // Delete key = move to trash (Qt event filter).
-    let del = ui.input(|i| i.key_pressed(egui::Key::Delete));
-    if del && !trash_view && !busy && !app.cloud.sel.is_empty() {
-        app.dialog = Some(super::Dialog::ConfirmTrash { n: app.cloud.sel.len() });
-    }
 }
 
 fn row(
@@ -1024,7 +1068,7 @@ fn row(
     open_rel: &mut Option<String>,
     menu_item: &mut Option<&'static str>,
 ) {
-    let height = 24.0;
+    let height = 28.0;
     let (rect, resp) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), height),
         egui::Sense::click_and_drag(),
@@ -1300,41 +1344,306 @@ fn bottom_row(app: &mut App, ui: &mut egui::Ui) {
     let dl_enabled = !sel.is_empty() && !docs_only && !trash_view && !busy;
 
     ui.horizontal(|ui| {
-        ui.with_layout(
-            egui::Layout::left_to_right(egui::Align::Center).with_main_justify(true),
-            |ui| {
-                let resp = ui.add(
-                    egui::Label::new(egui::RichText::new(status).size(12.5).weak())
-                        .truncate(),
-                );
-                if !status_tip.is_empty() {
-                    resp.clone().on_hover_text(&status_tip);
-                }
-            },
-        );
-        if ui
-            .add_enabled(dl_enabled, egui::Button::new("\u{2193} Download"))
-            .clicked()
-        {
-            pick_download(app);
+        // Status on the left, never justified: a justified truncate-label
+        // takes the whole row and clips the actions (the label's galley is
+        // laid to the full available width in a justified layout). Eliding
+        // also keeps a long done-message from crowding the buttons.
+        let short = widgets::elide(&status, 44);
+        let resp = ui
+            .add(egui::Label::new(egui::RichText::new(short).size(12.5).weak()).truncate());
+        if resp.hovered() {
+            let full = if status_tip.is_empty() { status } else { status_tip };
+            resp.clone().on_hover_text(full);
         }
-        if ui
-            .add_enabled(!trash_view && !busy, egui::Button::new("New folder"))
-            .clicked()
-        {
-            app.input_buf.clear();
-            app.dialog = Some(super::Dialog::Input {
-                title: "New folder".to_string(),
-                label: "Folder name:".to_string(),
-                intent: super::InputIntent::CloudNewFolder,
-            });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // right_to_left: the first item sits at the row's right edge.
+            if ui
+                .add_enabled(!trash_view && !busy, egui::Button::new("\u{2191} Upload"))
+                .on_hover_text("Upload files or a folder")
+                .clicked()
+            {
+                pick_upload_files(app);
+            }
+            if ui
+                .add_enabled(!trash_view && !busy, egui::Button::new("New folder"))
+                .clicked()
+            {
+                app.input_buf.clear();
+                app.dialog = Some(super::Dialog::Input {
+                    title: "New folder".to_string(),
+                    label: "Folder name:".to_string(),
+                    intent: super::InputIntent::CloudNewFolder,
+                });
+            }
+            if ui
+                .add_enabled(dl_enabled, egui::Button::new("\u{2193} Download"))
+                .clicked()
+            {
+                pick_download(app);
+            }
+        });
+    });
+}
+
+// ------------------------------------------------------------- sidebar tree
+//
+// The left pane follows Proton Drive's own sidebar (DonnieDice's layout):
+// "+ New", an expandable "My files" tree, and "Trash"; the app's other pages
+// live behind the account row at the bottom. The tree fills lazily from the
+// session/disk/seed caches and, on demand, with the same read-only listing
+// the browser uses; a tree fetch never touches the visible folder.
+
+/// The folders under `rel`, from warm caches only (rendering stays cheap and
+/// side-effect free).
+fn children(app: &App, rel: &str) -> Option<Vec<cli::RemoteEntry>> {
+    app.cloud
+        .session
+        .get(rel)
+        .cloned()
+        .or_else(|| app.cloud.disk.get(rel).map(|d| d.entries.clone()))
+        .or_else(|| seed_entries(&app.paths.snapshot_file, rel))
+}
+
+/// Kick off a background listing for `rel` if we don't have it yet.
+fn ensure_children(app: &mut App, rel: &str) {
+    if app.cloud.tree_loading.contains(rel) || children(app, rel).is_some() {
+        return;
+    }
+    app.cloud.tree_loading.insert(rel.to_string());
+    let root = remote_root(&app.conf);
+    let key = rel.to_string();
+    let tx = app.tx.clone();
+    std::thread::spawn(move || {
+        let result = cli::fetch_remote_entries(&root, &key);
+        let _ = tx.send(Back::TreeEntries { key, result });
+    });
+}
+
+fn toggle_tree(app: &mut App, rel: &str) {
+    if rel.is_empty() {
+        app.cloud.tree_root_touched = true; // remember an explicit root toggle
+    }
+    if app.cloud.tree_open.contains(rel) {
+        app.cloud.tree_open.remove(rel);
+    } else {
+        app.cloud.tree_open.insert(rel.to_string());
+        ensure_children(app, rel);
+    }
+}
+
+/// Is `node` a folder on the path down to `rel`? (auto-expand the open route)
+fn under_path(node: &str, rel: &str) -> bool {
+    if node.is_empty() {
+        return !rel.is_empty();
+    }
+    rel.strip_prefix(node).is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// The pane's "+ New" pill (Proton's sidebar button): a menu for creating
+/// and uploading into the files view.
+pub fn new_button(app: &mut App, ui: &mut egui::Ui) {
+    let resp = ui.add_sized(
+        egui::vec2(ui.available_width(), 32.0),
+        egui::Button::new(egui::RichText::new("+ New").strong()),
+    );
+    let _ = egui::Popup::menu(&resp).show(|ui| {
+        if ui.button("New folder...").clicked() {
+            ui.close();
+            ensure_files_view(app);
+            apply_menu_item(app, Some("newfolder"));
         }
-        if ui
-            .add_enabled(!trash_view && !busy, egui::Button::new("\u{2191} Upload"))
-            .on_hover_text("Upload files or a folder")
-            .clicked()
-        {
-            pick_upload_files(app);
+        if ui.button("Upload files...").clicked() {
+            ui.close();
+            ensure_files_view(app);
+            apply_menu_item(app, Some("uploadfiles"));
+        }
+        if ui.button("Upload folder...").clicked() {
+            ui.close();
+            ensure_files_view(app);
+            apply_menu_item(app, Some("uploadfolder"));
         }
     });
+}
+
+/// The pane's actions may be used while another page (or the trash) is
+/// showing: land in the files view first, like the empty-area menu does.
+fn ensure_files_view(app: &mut App) {
+    app.page = super::Page::Cloud;
+    let was_trash = app.cloud.trash_view;
+    app.cloud.trash_view = false;
+    if !app.cloud.opened {
+        on_shown(app);
+    } else if was_trash {
+        let rel = app.cloud.rel.clone();
+        load(app, rel, false, true, true);
+    }
+}
+
+/// Browser-style navigation from the pane: history push + fresh listing.
+fn go(app: &mut App, rel: String) {
+    app.page = super::Page::Cloud;
+    app.cloud.opened = true;
+    load(app, rel, true, true, true);
+}
+
+fn go_trash(app: &mut App) {
+    app.page = super::Page::Cloud;
+    app.cloud.opened = true;
+    trash_toggle(app, true);
+}
+
+/// The pane's nav list: "My files" with its lazy tree, then "Trash" (the
+/// "+ New" pill is drawn by the caller above it).
+pub fn nav_ui(app: &mut App, ui: &mut egui::Ui) {
+    if !app.cloud.disk_loaded {
+        app.cloud.disk_loaded = true;
+        app.cloud.disk = load_disk_cache(&app.paths.cloud_cache_file);
+    }
+    let in_files = app.page == super::Page::Cloud && !app.cloud.trash_view;
+    // Proton's sidebar shows "My files" open by default once its folders are
+    // known; an explicit toggle wins, and the open route always expands.
+    let root_open = app.cloud.tree_open.contains("")
+        || (!app.cloud.tree_root_touched && children(app, "").is_some())
+        || (in_files && !app.cloud.rel.is_empty());
+    my_files_row(app, ui, root_open);
+    if root_open {
+        tree_rows(app, ui, "", 0);
+    }
+    ui.add_space(8.0);
+    let trash_active = app.page == super::Page::Cloud && app.cloud.trash_view;
+    if widgets::nav_row(ui, widgets::NavIcon::Trash, "Trash", trash_active) && !app.cloud.busy {
+        go_trash(app);
+    }
+}
+
+/// "My files": click the row to go to the root, click the right-hand caret
+/// to open the folder tree — DonnieDice/Proton's section row.
+fn my_files_row(app: &mut App, ui: &mut egui::Ui, root_open: bool) {
+    let active = app.page == super::Page::Cloud && !app.cloud.trash_view;
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), 36.0),
+        egui::Sense::click(),
+    );
+    let fill = if active {
+        theme::accent_soft(ui.visuals())
+    } else if resp.hovered() {
+        ui.visuals().widgets.hovered.bg_fill
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    if fill != egui::Color32::TRANSPARENT {
+        ui.painter().rect_filled(rect, egui::CornerRadius::same(9), fill);
+    }
+    let color = if active {
+        theme::accent(ui.visuals())
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    let icon_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.left() + 22.0, rect.center().y),
+        egui::vec2(17.0, 17.0),
+    );
+    widgets::nav_icon(&ui.painter(), icon_rect, widgets::NavIcon::Folder, color);
+    ui.painter().text(
+        rect.left_center() + egui::vec2(42.0, 0.0),
+        egui::Align2::LEFT_CENTER,
+        "My files",
+        egui::FontId::proportional(14.5),
+        color,
+    );
+    let open = root_open;
+    let caret = if open { "\u{25be}" } else { "\u{25b8}" };
+    ui.painter().text(
+        rect.right_center() + egui::vec2(-16.0, 0.0),
+        egui::Align2::RIGHT_CENTER,
+        caret,
+        egui::FontId::proportional(11.0),
+        color,
+    );
+    if resp.clicked() {
+        if let Some(pos) = resp.interact_pointer_pos() {
+            if pos.x >= rect.right() - 26.0 {
+                toggle_tree(app, "");
+            } else {
+                go(app, String::new());
+            }
+        }
+    }
+}
+
+/// One level of the folder tree: indented rows with a left caret; the open
+/// folder wears the accent pill (Proton highlights where you are).
+fn tree_rows(app: &mut App, ui: &mut egui::Ui, parent: &str, depth: usize) {
+    let Some(kids) = children(app, parent) else {
+        if app.cloud.tree_loading.contains(parent) {
+            let indent = 16.0 + depth as f32 * 14.0;
+            ui.add_space(indent);
+            ui.label(egui::RichText::new("Loading...").size(12.0).weak());
+        }
+        return;
+    };
+    let mut dirs: Vec<cli::RemoteEntry> = kids.into_iter().filter(|e| e.dir).collect();
+    dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    let in_files = app.page == super::Page::Cloud && !app.cloud.trash_view;
+    for e in &dirs {
+        let r = e.rel.trim_end_matches('/').to_string();
+        let forced = in_files && under_path(&r, &app.cloud.rel);
+        let open = app.cloud.tree_open.contains(&r) || forced;
+        let active = in_files && app.cloud.rel == r;
+        let indent = 16.0 + depth as f32 * 14.0;
+        let (rect, resp) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), 26.0),
+            egui::Sense::click(),
+        );
+        let fill = if active {
+            theme::accent_soft(ui.visuals())
+        } else if resp.hovered() {
+            ui.visuals().widgets.hovered.bg_fill
+        } else {
+            egui::Color32::TRANSPARENT
+        };
+        if fill != egui::Color32::TRANSPARENT {
+            ui.painter().rect_filled(rect, egui::CornerRadius::same(7), fill);
+        }
+        let color = if active {
+            theme::accent(ui.visuals())
+        } else {
+            ui.visuals().weak_text_color()
+        };
+        let caret = if open { "\u{25be}" } else { "\u{25b8}" };
+        ui.painter().text(
+            rect.left_center() + egui::vec2(indent, 0.0),
+            egui::Align2::LEFT_CENTER,
+            caret,
+            egui::FontId::proportional(10.0),
+            color,
+        );
+        let icon_rect = egui::Rect::from_center_size(
+            egui::pos2(rect.left() + indent + 24.0, rect.center().y),
+            egui::vec2(14.0, 14.0),
+        );
+        widgets::nav_icon(&ui.painter(), icon_rect, widgets::NavIcon::Folder, color);
+        ui.painter().text(
+            rect.left_center() + egui::vec2(indent + 36.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            widgets::elide(&e.name, 26),
+            egui::FontId::proportional(13.5),
+            color,
+        );
+        if resp.clicked() {
+            if let Some(pos) = resp.interact_pointer_pos() {
+                if pos.x < rect.left() + indent + 16.0 {
+                    toggle_tree(app, &r);
+                } else {
+                    go(app, r.clone());
+                }
+            }
+        }
+        if open {
+            if forced && children(app, &r).is_none() {
+                ensure_children(app, &r); // the auto-open route fetches its data once
+            }
+            tree_rows(app, ui, &r, depth + 1);
+        }
+    }
 }
