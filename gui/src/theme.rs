@@ -84,6 +84,8 @@ pub fn status_color(key: &str) -> egui::Color32 {
         "synced" => SUCCESS,
         "syncing" => ACCENT,
         "paused" => WARNING,
+        // A lost session is recoverable - warn, do not alarm.
+        "needs_login" => WARNING,
         "error" => ERROR,
         _ => MUTED,
     }

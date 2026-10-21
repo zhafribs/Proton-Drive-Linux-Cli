@@ -1,3 +1,26 @@
+## 3.16.11 — 2026-10-21
+
+- **Sync no longer loses the sign-in.** The official Proton Drive CLI keeps
+  its session in the OS keyring and rewrites that item whenever it refreshes
+  the access token - which happens the moment a call comes back 401. The
+  app ran a whole scan of `proton-drive` processes in parallel, so when the
+  token expired every one of them hit the 401 at the same second and every
+  one of them rewrote the same keyring item. gnome-keyring's `login`
+  collection is an alias collection: it refuses the duplicate ("asked to
+  register item .../login/N, but it's already registered"), and the item
+  that got dropped was the session itself. From then on every call came
+  back 401 "You need to login first" and the sync was dead until the user
+  signed in again - usually a day or two after the last sign-in.
+  The engine now probes the session with a single call, alone, before it
+  lets its workers run, so a token refresh is absorbed once instead of
+  twelve times; the GUI and a sign-in take the same app-wide lock
+  (`~/.local/state/proton-sync/cli.lock`), so neither can rewrite the
+  session while a scan is running.
+- **A lost session says so.** The engine reports it as a distinct state
+  instead of a generic sync error, and the Home screen shows "Your session
+  expired" with a **Sign in again** button - no more reading "You need to
+  login first" in the Activity log and guessing.
+
 ## 3.16.10 — 2026-10-21
 
 - **Interface size setting.** The app draws its own text at a fixed point

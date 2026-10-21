@@ -110,6 +110,7 @@ State: ${XDG_STATE_HOME:-~/.local/state}/proton-sync/state.json (+ sync.lock)
 """
 
 import argparse
+import contextlib
 import ctypes
 import datetime
 import fcntl
@@ -210,6 +211,8 @@ SKIP_NAME = re.compile(
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "proton-sync"
 STATE_FILE = STATE_DIR / "state.json"
 LOCK_FILE = STATE_DIR / "sync.lock"
+# Guards every call into the official CLI, app-wide (the GUI takes it too).
+CLI_LOCK_FILE = STATE_DIR / "cli.lock"
 HEALTH_FILE = STATE_DIR / "health.json"
 # dropping this file requests an immediate cycle (the GUI's "Sync now" button)
 WAKE_FILE = STATE_DIR / "wake"
@@ -235,14 +238,97 @@ class CliError(RuntimeError):
 
 # -------------------------------------------------------------------- CLI glue
 
-def cli(args, as_json=False, timeout=None):
+# The CLI lock is re-entrant per thread (a nested call must not deadlock on
+# its own flock) but exclusive across threads and processes.
+_CLI_MTX = threading.Lock()
+_CLI_DEPTH = threading.local()
+_CLI_FH = None
+
+
+@contextlib.contextmanager
+def cli_lock():
+    """Serialise every call into the official CLI, app-wide.
+
+    The official CLI keeps its session in the OS keyring and rewrites that
+    item whenever it refreshes the access token. gnome-keyring's `login`
+    collection is an *alias* collection: an item is keyed by its attributes,
+    and registering a second one with the same attributes is refused
+    ("asked to register item .../login/N, but it's already registered").
+    Two CLI processes rotating the session at the same time therefore lose
+    it outright - the new token is never persisted and the old item is
+    dropped - and every later call comes back 401 "You need to login first".
+
+    The GUI and this engine both drive that CLI, so the lock has to be
+    shared between them, not per-process. One upstream process at a time.
+    """
+    global _CLI_FH
+    depth = getattr(_CLI_DEPTH, "n", 0)
+    if depth == 0:
+        # Wait for the other thread of this process first.
+        _CLI_MTX.acquire()
+        try:
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            fh = open(CLI_LOCK_FILE, "w")
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX)
+            except BaseException:
+                fh.close()
+                raise
+            _CLI_FH = fh
+        except BaseException:
+            _CLI_MTX.release()
+            raise
+    _CLI_DEPTH.n = depth + 1
+    try:
+        yield
+    finally:
+        _CLI_DEPTH.n -= 1
+        if _CLI_DEPTH.n == 0:
+            fh = _CLI_FH
+            _CLI_FH = None
+            try:
+                fcntl.flock(fh, fcntl.LOCK_UN)
+            finally:
+                fh.close()
+            _CLI_MTX.release()
+
+
+def session_lost(msg):
+    """True when a CLI failure means "the stored session is gone".
+
+    The upstream CLI (and this engine's own keyring reader) report this in
+    several different ways depending on which code path hit it, so all of
+    them are recognised here.
+    """
+    m = (msg or "").lower()
+    return ("you need to login first" in m
+            or "session not found in the keyring" in m
+            or "no cli session" in m
+            or "unauthorized" in m
+            or "401" in m
+            or "session expired" in m
+            or "not logged in" in m
+            or "login required" in m)
+
+
+def cli(args, as_json=False, timeout=None, locked=True):
+    """Run the official CLI.
+
+    `locked=False` is only for the workers of a parallel scan: the scan holds
+    the session lock for the whole batch (see scan_remote), and its probe has
+    already made sure no worker will rewrite the keyring session.
+    """
     if not BIN:
         raise CliError("proton-drive not found (set PROTON_DRIVE_BIN or put it on PATH)")
     cmd = [BIN] + list(args)
     if as_json:
         cmd.append("--json")
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout or TRANSFER_TIMEOUT)
+        if locked:
+            with cli_lock():
+                p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout or TRANSFER_TIMEOUT)
+        else:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout or TRANSFER_TIMEOUT)
     except subprocess.TimeoutExpired as e:
         raise CliError(f"timeout after {e.timeout}s: {' '.join(args[:3])}...") from e
     if p.returncode != 0:
@@ -333,7 +419,10 @@ def _list_folder(rpath):
     last = None
     for attempt in range(SCAN_RETRIES):
         try:
-            return rpath, cli(["fs", "list", rpath, "--json"], as_json=True, timeout=META_TIMEOUT), None
+            # locked=False: the scan holds the session lock for the whole
+            # batch and probed the session before starting it.
+            return rpath, cli(["fs", "list", rpath, "--json"], as_json=True,
+                              timeout=META_TIMEOUT, locked=False), None
         except CliError as e:
             last = e
             if attempt + 1 < SCAN_RETRIES:
@@ -375,10 +464,37 @@ def _children_nodes(rel, rpath, entries):
     return out
 
 
+def probe_session():
+    """One API call, alone under the session lock, before a parallel scan.
+
+    The official CLI rewrites its keyring session whenever it refreshes the
+    access token, and the refresh is triggered by a 401 from the API. In a
+    parallel scan every worker hits that 401 at the same time and every one
+    of them rewrites the same keyring item - gnome-keyring's `login`
+    collection is an alias collection, so the duplicate is refused ("asked
+    to register item .../login/N, but it's already registered") and what
+    gets dropped is the session itself. One probe call, alone under the
+    lock, absorbs the refresh: the workers then all find a valid token and
+    none of them writes.
+    """
+    try:
+        cli(["fs", "info", REMOTE_ROOT], as_json=True, timeout=META_TIMEOUT)
+    except CliError as e:
+        if session_lost(str(e)):
+            # the session is gone - do not let 200 workers discover that one
+            # by one, the cycle reports it and the GUI asks for a sign-in.
+            raise
+        log.debug("session probe failed: %s", e)
+
+
 def scan_remote(start_rel=None):
     """Walk from START_REL (default REMOTE_ROOT) in parallel -> {relpath: node}
     for that subtree only ('' = root). relpaths stay absolute from REMOTE_ROOT
-    so a subtree result merges straight into the cached full snapshot."""
+    so a subtree result merges straight into the cached full snapshot.
+
+    The whole batch runs under the session lock: the GUI (and a sign-in) must
+    not rewrite the keyring session while these `proton-drive` processes are
+    running."""
     tree = {}
     start_rpath = remote_path(start_rel) if start_rel else REMOTE_ROOT
     rel_of = {start_rpath: (start_rel or "")}
@@ -386,20 +502,22 @@ def scan_remote(start_rel=None):
     # each BFS round lists ALL pending folders in parallel; next_dirs accumulates
     # the child folders of the whole round (reset once per round, not per folder!)
     pending = [start_rpath]
-    with ThreadPoolExecutor(max_workers=SCAN_WORKERS) as pool:
-        while pending:
-            next_dirs = []
-            for rpath, entries, err in pool.map(_list_folder, pending):
-                if err:
-                    raise CliError(f"cannot list {rpath}: {err}")
-                visited.add(rpath)
-                rel = rel_of[rpath]
-                for child_rel, child_rpath, node in _children_nodes(rel, rpath, entries):
-                    tree[child_rel] = node
-                    if node["type"] == "dir" and child_rpath not in visited:
-                        rel_of[child_rpath] = child_rel
-                        next_dirs.append(child_rpath)
-            pending = next_dirs   # next BFS round lists all of these in parallel
+    with cli_lock():
+        probe_session()
+        with ThreadPoolExecutor(max_workers=SCAN_WORKERS) as pool:
+            while pending:
+                next_dirs = []
+                for rpath, entries, err in pool.map(_list_folder, pending):
+                    if err:
+                        raise CliError(f"cannot list {rpath}: {err}")
+                    visited.add(rpath)
+                    rel = rel_of[rpath]
+                    for child_rel, child_rpath, node in _children_nodes(rel, rpath, entries):
+                        tree[child_rel] = node
+                        if node["type"] == "dir" and child_rpath not in visited:
+                            rel_of[child_rpath] = child_rel
+                            next_dirs.append(child_rpath)
+                pending = next_dirs   # next BFS round lists all of these in parallel
     return tree
 
 
@@ -1021,8 +1139,9 @@ def remote_fingerprint():
     renames and same-byte-size edits do not (the safety walk catches those).
     """
     try:
-        p = subprocess.run([BIN, "fs", "size", REMOTE_ROOT],
-                           capture_output=True, text=True, timeout=META_TIMEOUT)
+        with cli_lock():
+            p = subprocess.run([BIN, "fs", "size", REMOTE_ROOT],
+                               capture_output=True, text=True, timeout=META_TIMEOUT)
     except (subprocess.TimeoutExpired, OSError):
         return None
     if p.returncode != 0:
@@ -1707,7 +1826,15 @@ def loop_forever():
             run_once(force_full=force, push_pending=push_pending)
         except CliError as e:
             log.error("cycle failed: %s (next try in %ds)", e, INTERVAL)
-            write_health(status="error", error=str(e)[:300], interval=INTERVAL)
+            if session_lost(str(e)):
+                # The stored session is gone (or was never written). Only a
+                # fresh sign-in fixes this - say so plainly instead of
+                # repeating "You need to login first" every cycle.
+                log.error("session lost - sign in again to resume syncing")
+                write_health(status="needs_login", error=str(e)[:300],
+                             interval=INTERVAL)
+            else:
+                write_health(status="error", error=str(e)[:300], interval=INTERVAL)
         except Exception as e:  # noqa: BLE001 - keep the loop alive, report it
             log.exception("cycle crashed (next try in %ds)", INTERVAL)
             write_health(status="error", error=str(e)[:300], interval=INTERVAL)

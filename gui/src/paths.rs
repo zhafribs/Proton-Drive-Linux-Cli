@@ -5,6 +5,7 @@
 //! caches and installed service.
 
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 pub const REPO_URL: &str = "https://github.com/zhafribs/Proton-Drive-Linux-Cli";
 pub const RELEASE_API: &str =
@@ -31,6 +32,15 @@ pub struct Paths {
     pub prefs_file: PathBuf,
     /// AppImage self-path when running from one (updates + service unit).
     pub appimage: Option<PathBuf>,
+}
+
+/// The app-wide lock file that serialises every call into the official
+/// CLI. The GUI and the background sync engine both drive that CLI, and
+/// two of them refreshing the keyring session at the same time can lose
+/// the session outright - see `clilock` for the details.
+pub fn cli_lock_file() -> &'static PathBuf {
+    static LOCK: OnceLock<PathBuf> = OnceLock::new();
+    LOCK.get_or_init(|| resolve().state_dir.join("cli.lock"))
 }
 
 pub fn resolve() -> Paths {

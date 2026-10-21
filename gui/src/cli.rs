@@ -5,7 +5,7 @@
 
 use crate::exec;
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// Same search order the PyQt app used: bundled-in-AppImage, repo checkout,
@@ -46,13 +46,34 @@ fn which(name: &str) -> Option<String> {
     })
 }
 
+/// The shared lock file that serialises calls into the official CLI.
+fn lock_path() -> PathBuf {
+    crate::paths::cli_lock_file().clone()
+}
+
+/// Run the official CLI with the app-wide session lock held.
+///
+/// Every call into the CLI can rewrite the keyring session, and the
+/// background sync engine is calling the same binary at the same time. Two
+/// processes refreshing that session at once lose it outright - see
+/// `clilock` for the full story.
+fn run_cli(cli: &Path, args: &[&str], timeout: Duration) -> Result<exec::Output, String> {
+    let _lock = crate::clilock::CliLock::acquire(&lock_path(), crate::clilock::WAIT);
+    exec::run(&cli.to_string_lossy(), args, timeout)
+}
+
+/// Run a CLI command that never touches the keyring session.
+///
+/// `--version` does not call the API, so it cannot rewrite the session -
+/// and it must not queue behind a running sync, or the app would show an
+/// empty version banner for as long as the engine's scan takes.
+fn run_cli_unlocked(cli: &Path, args: &[&str], timeout: Duration) -> Result<exec::Output, String> {
+    exec::run(&cli.to_string_lossy(), args, timeout)
+}
+
 /// First line of `proton-drive --version` ("" on failure).
 pub fn cli_version(cli: &PathBuf) -> String {
-    let out = exec::run(
-        &cli.to_string_lossy(),
-        &["--version"],
-        Duration::from_secs(60),
-    );
+    let out = run_cli_unlocked(cli, &["--version"], Duration::from_secs(60));
     match out {
         Ok(o) => o
             .stdout
@@ -91,8 +112,8 @@ pub fn fetch_identity(cli: &PathBuf) -> Identity {
     let mut out = Identity { version: "?".into(), ..Default::default() };
     let v = cli_version(cli);
     out.version = if v.is_empty() { "?".into() } else { v };
-    match exec::run(
-        &cli.to_string_lossy(),
+    match run_cli(
+        cli,
         &["fs", "list", "/my-files", "--json"],
         Duration::from_secs(180),
     ) {
@@ -111,11 +132,7 @@ pub fn fetch_identity(cli: &PathBuf) -> Identity {
 }
 
 pub fn logout(cli: &PathBuf) {
-    let _ = exec::run(
-        &cli.to_string_lossy(),
-        &["auth", "logout"],
-        Duration::from_secs(120),
-    );
+    let _ = run_cli(cli, &["auth", "logout"], Duration::from_secs(120));
 }
 
 /// Proton's trash markers as the PyQt app filtered them: `.Trash-<id>`.
@@ -133,8 +150,8 @@ pub fn fetch_remote_folders(remote_root: &str, rel_path: &str) -> Vec<(String, S
     } else {
         format!("{remote_root}/{rel_path}")
     };
-    let out = exec::run(
-        &cli.to_string_lossy(),
+    let out = run_cli(
+        &cli,
         &["fs", "list", &rpath, "--json"],
         Duration::from_secs(120),
     );
@@ -285,8 +302,8 @@ pub fn fetch_remote_entries(remote_root: &str, rel: &str) -> Result<Vec<RemoteEn
         return Err("proton-drive CLI not found".into())
     };
     let rpath = rpath(remote_root, rel);
-    let o = exec::run(
-        &cli.to_string_lossy(),
+    let o = run_cli(
+        &cli,
         &["fs", "list", &rpath, "--json"],
         Duration::from_secs(120),
     )?;
@@ -301,8 +318,8 @@ pub fn fetch_trash_entries() -> Result<Vec<RemoteEntry>, String> {
     let Some(cli) = resolve_cli() else {
         return Err("proton-drive CLI not found".into())
     };
-    let o = exec::run(
-        &cli.to_string_lossy(),
+    let o = run_cli(
+        &cli,
         &["fs", "list", "/trash", "--json"],
         Duration::from_secs(120),
     )?;
@@ -335,7 +352,12 @@ pub fn find_terminal() -> Option<(String, Vec<String>)> {
 /// `<cli> auth login; echo; echo "You can close this window now."`
 pub fn login_script(cli: &PathBuf) -> String {
     let q = shell_quote(&cli.to_string_lossy());
-    format!("{q} auth login; echo; echo \"You can close this window now.\"")
+    // `auth login` writes the keyring session, so it takes the same
+    // app-wide lock as every other CLI call - otherwise a sign-in that
+    // overlaps the sync engine's cycle can clobber the session it is
+    // writing. flock(1) is util-linux and is always present.
+    let lock = shell_quote(&lock_path().to_string_lossy());
+    format!("flock -w 300 {lock} {q} auth login; echo; echo \"You can close this window now.\"")
 }
 
 fn shell_quote(s: &str) -> String {
@@ -350,7 +372,9 @@ mod tests {
     fn login_script_quotes_path_with_spaces() {
         let p = PathBuf::from("/opt/My Apps/proton-drive");
         let s = login_script(&p);
-        assert!(s.starts_with("'/opt/My Apps/proton-drive' auth login"));
+        // flock wraps the CLI so a sign-in cannot race the sync engine.
+        assert!(s.contains("'/opt/My Apps/proton-drive' auth login"));
+        assert!(s.contains("flock -w 300"));
         assert!(s.ends_with("You can close this window now.\""));
     }
 

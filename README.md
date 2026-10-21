@@ -14,19 +14,19 @@ setup, no Qt — the app and its sync runtime travel inside the AppImage.
 > Unofficial. Not affiliated with, endorsed by, sponsored or supported by
 > Proton AG. "Proton Drive" is a trademark of Proton AG.
 
-**Get it:** [`ProtonDrive-CLI-0.9.0-GUI-3.16.10-x86_64.AppImage`](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/latest)
+**Get it:** [`ProtonDrive-CLI-0.9.0-GUI-3.16.11-x86_64.AppImage`](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/latest)
 (≈80 MB · x86_64 · [all releases](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases))
 
 | Inside the file | Version |
 | --- | --- |
 | Proton Drive CLI — official, unmodified, SHA-512-verified at build | **0.9.0** (2026-10-05) |
-| Desktop app + folder-sync engine (this repo) | **3.16.10** |
+| Desktop app + folder-sync engine (this repo) | **3.16.11** |
 
 ## Start here
 
 1. Download the AppImage and make it executable once:
    ```bash
-   chmod +x ProtonDrive-CLI-0.9.0-GUI-3.16.10-x86_64.AppImage
+   chmod +x ProtonDrive-CLI-0.9.0-GUI-3.16.11-x86_64.AppImage
    ```
 2. Double-click it. Click **Sign in** — Proton's official login opens in a
    terminal (that's how their CLI does 2FA); the app picks the session up.
@@ -42,9 +42,9 @@ Fedora 32 era or newer). If it won't start you're missing FUSE — Arch
 The upstream CLI is untouched — arguments pass straight through:
 
 ```bash
-./ProtonDrive-CLI-0.9.0-GUI-3.16.10-x86_64.AppImage --help
-./ProtonDrive-CLI-0.9.0-GUI-3.16.10-x86_64.AppImage auth login   # the app's sign-in
-./ProtonDrive-CLI-0.9.0-GUI-3.16.10-x86_64.AppImage filesystem list /
+./ProtonDrive-CLI-0.9.0-GUI-3.16.11-x86_64.AppImage --help
+./ProtonDrive-CLI-0.9.0-GUI-3.16.11-x86_64.AppImage auth login   # the app's sign-in
+./ProtonDrive-CLI-0.9.0-GUI-3.16.11-x86_64.AppImage filesystem list /
 ```
 
 `auth login`, `filesystem …`, `sharing …`, `photo timeline`, `takeout run …` —
@@ -96,6 +96,12 @@ window (940×780 default, no page ever scrolls sideways, size remembered).*
 * Conflicts keep **both** versions (`name (conflict <timestamp>)`), and
   uploads are new revisions — the old version stays in Proton's history.
 * Proton Docs/Sheets can't be downloaded by the CLI; they are skipped.
+* **Your sign-in is protected.** The official CLI keeps the session in the
+  OS keyring and rewrites it whenever it refreshes the access token. The
+  app lets only one such refresh happen at a time — the GUI, a sign-in and
+  the background scan share one lock — so a scheduled sync can never
+  quietly drop the session and leave you with "You need to login first". If
+  it ever does, the Home screen says so and offers **Sign in again**.
 
 Tunables: `PROTON_SYNC_LOCAL/REMOTE/INTERVAL/FULL_EVERY/DELETES/WORKERS/
 SUBFOLDERS/EXCLUDE/INOTIFY/…` — settings live in

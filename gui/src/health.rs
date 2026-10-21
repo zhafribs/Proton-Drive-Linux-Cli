@@ -40,12 +40,14 @@ impl Health {
     }
 }
 
-/// The five states the Home orb cycles through.
+/// The states the Home orb cycles through.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum UiStatus {
     Synced,
     Syncing,
     Paused,
+    /// The stored session is gone - only a fresh sign-in brings syncing back.
+    NeedsLogin,
     Error,
     Unknown,
 }
@@ -56,6 +58,7 @@ impl UiStatus {
             UiStatus::Synced => "synced",
             UiStatus::Syncing => "syncing",
             UiStatus::Paused => "paused",
+            UiStatus::NeedsLogin => "needs_login",
             UiStatus::Error => "error",
             UiStatus::Unknown => "unknown",
         }
@@ -70,6 +73,7 @@ pub fn map_status(active: bool, hstatus: &str) -> UiStatus {
         match hstatus {
             "ok" => UiStatus::Synced,
             "syncing" => UiStatus::Syncing,
+            "needs_login" => UiStatus::NeedsLogin,
             "error" => UiStatus::Error,
             _ => UiStatus::Unknown,
         }
@@ -82,6 +86,7 @@ pub fn status_text(status: UiStatus) -> (&'static str, &'static str) {
         UiStatus::Synced => ("You're up to date", ""),
         UiStatus::Syncing => ("Syncing your files...", "Just a moment..."),
         UiStatus::Paused => ("Sync is paused", "Nothing is syncing. Your files are safe."),
+        UiStatus::NeedsLogin => ("Your session expired", "Sign in again to resume syncing."),
         UiStatus::Error => ("Couldn't sync", "{error}"),
         UiStatus::Unknown => ("Checking your files...", ""),
     }
@@ -154,5 +159,18 @@ mod tests {
         assert!(h.next_poll_dt().is_some());
         assert!(h.ts_dt().is_some());
         assert_eq!(map_status(true, &h.status), UiStatus::Synced);
+    }
+
+    /// A lost keyring session is its own state: the engine is running fine,
+    /// but nothing can be synced until the user signs in again.
+    #[test]
+    fn needs_login_is_its_own_status() {
+        assert_eq!(map_status(true, "needs_login"), UiStatus::NeedsLogin);
+        // a stopped service still reads as paused, not as a lost session
+        assert_eq!(map_status(false, "needs_login"), UiStatus::Paused);
+        let (title, sub) = status_text(UiStatus::NeedsLogin);
+        assert_eq!(title, "Your session expired");
+        assert!(sub.contains("Sign in again"));
+        assert_eq!(UiStatus::NeedsLogin.key(), "needs_login");
     }
 }

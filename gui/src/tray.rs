@@ -15,6 +15,8 @@ fn dot_color(status_key: &str) -> [u8; 3] {
         "synced" => [0x16, 0xa3, 0x4a],
         "syncing" => [0x6d, 0x4a, 0xff],
         "paused" => [0xd9, 0x77, 0x06],
+        // A lost session is recoverable - warn, do not alarm.
+        "needs_login" => [0xd9, 0x77, 0x06],
         "error" => [0xdc, 0x26, 0x26],
         _ => [0x9c, 0xa3, 0xaf],
     }

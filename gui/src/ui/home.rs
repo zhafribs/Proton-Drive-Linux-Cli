@@ -10,17 +10,27 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
         let (title, _) = health::status_text(status);
         let key = status.key();
         let logged_in = app.logged_in();
+        // The engine reports a lost keyring session; that is not "not signed
+        // in" but "signed in and now locked out" - it needs its own wording
+        // and its own way out.
+        let needs_login = status == health::UiStatus::NeedsLogin;
 
         // --- hero ---------------------------------------------------------
         ui.horizontal(|ui| {
             widgets::status_orb(ui, key);
             ui.add_space(26.0);
             ui.vertical(|ui| {
-                let t = if logged_in { title } else { "Welcome to Proton Drive" };
+                let t = if logged_in || needs_login {
+                    title
+                } else {
+                    "Welcome to Proton Drive"
+                };
                 ui.label(egui::RichText::new(t).strong().size(27.0));
                 ui.add_space(4.0);
 
-                let sub = if !logged_in {
+                let sub = if needs_login {
+                    health::hero_sub(status, &app.health)
+                } else if !logged_in {
                     "Sign in to start - your files will appear here.".to_string()
                 } else if let Some((text, at)) = &app.sub_override {
                     if app.now() < *at {
@@ -35,11 +45,17 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                 ui.add_space(10.0);
 
                 ui.horizontal(|ui| {
-                    if widgets::primary_button(ui, "  Open my folder") {
-                        app.action_open_folder();
-                    }
-                    if widgets::secondary_button(ui, "  Sync now") {
-                        app.action_sync_now();
+                    if needs_login {
+                        if widgets::primary_button(ui, "  Sign in again") {
+                            app.action_login();
+                        }
+                    } else {
+                        if widgets::primary_button(ui, "  Open my folder") {
+                            app.action_open_folder();
+                        }
+                        if widgets::secondary_button(ui, "  Sync now") {
+                            app.action_sync_now();
+                        }
                     }
                     let pause_label = if app.active { "Pause" } else { "Resume" };
                     if widgets::secondary_button(ui, pause_label) {
