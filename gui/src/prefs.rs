@@ -32,6 +32,44 @@ impl Theme {
     }
 }
 
+/// Interface scale: how big the whole UI (widgets *and* type) is drawn.
+///
+/// egui draws text at fixed point sizes with its own bundled font, so a
+/// 15" laptop panel shows the same 14 pt labels as a 27" desktop - there is
+/// no OS/browser text-size setting to follow. This is the user's knob for
+/// that: it scales the UI as a whole, like a browser zoom.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum UiScale {
+    Compact,
+    Default,
+    Large,
+}
+
+impl UiScale {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            UiScale::Compact => "compact",
+            UiScale::Default => "default",
+            UiScale::Large => "large",
+        }
+    }
+    pub fn from_str(s: &str) -> UiScale {
+        match s {
+            "compact" => UiScale::Compact,
+            "large" => UiScale::Large,
+            _ => UiScale::Default,
+        }
+    }
+    /// egui zoom factor: 0.85 / 1.0 / 1.1.
+    pub fn factor(&self) -> f32 {
+        match self {
+            UiScale::Compact => 0.85,
+            UiScale::Default => 1.0,
+            UiScale::Large => 1.1,
+        }
+    }
+}
+
 pub struct Prefs {
     pub file: PathBuf,
     pub values: BTreeMap<String, String>,
@@ -79,6 +117,9 @@ impl Prefs {
 
     pub fn theme(&self) -> Theme {
         Theme::from_str(self.values.get("theme").map(String::as_str).unwrap_or("system"))
+    }
+    pub fn ui_scale(&self) -> UiScale {
+        UiScale::from_str(self.values.get("ui_scale").map(String::as_str).unwrap_or("default"))
     }
     pub fn start_in_tray(&self) -> bool {
         self.bool_of("start_in_tray", false)
@@ -174,6 +215,24 @@ mod tests {
         std::fs::write(&p, "[General]\nwindow_size=1000x700\n").unwrap();
         let pr = Prefs::load(&p);
         assert_eq!((pr.window_w, pr.window_h), (1000, 780));
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn interface_scale_prefs_roundtrip() {
+        let p = std::env::temp_dir().join(format!("pdprefs3-{}.conf", std::process::id()));
+        std::fs::write(&p, "[General]\ntheme=dark\n").unwrap();
+        // no key yet -> the default size
+        let pr = Prefs::load(&p);
+        assert_eq!(pr.ui_scale(), UiScale::Default);
+        assert_eq!(pr.ui_scale().factor(), 1.0);
+        // a saved choice survives a reload, unknown values fall back
+        let mut pr = pr;
+        pr.set("ui_scale", "compact");
+        assert_eq!(Prefs::load(&p).ui_scale(), UiScale::Compact);
+        assert!(Prefs::load(&p).ui_scale().factor() < 1.0);
+        pr.set("ui_scale", "gigantic");
+        assert_eq!(Prefs::load(&p).ui_scale(), UiScale::Default);
         std::fs::remove_file(&p).ok();
     }
 }

@@ -39,6 +39,7 @@ pub struct Draft {
     pub autostart: bool,
     pub appstart: bool,
     pub theme_idx: usize,
+    pub ui_scale_idx: usize,
     pub updates_auto: bool,
     pub note_errors: bool,
     pub note_conflicts: bool,
@@ -87,6 +88,11 @@ impl Draft {
                 crate::prefs::Theme::System => 0,
                 crate::prefs::Theme::Light => 1,
                 crate::prefs::Theme::Dark => 2,
+            },
+            ui_scale_idx: match prefs.ui_scale() {
+                crate::prefs::UiScale::Compact => 0,
+                crate::prefs::UiScale::Default => 1,
+                crate::prefs::UiScale::Large => 2,
             },
             updates_auto: prefs.updates_auto(),
             note_errors: prefs.notify_errors(),
@@ -601,6 +607,35 @@ fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
         });
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label("Interface size");
+            const SCALES: [&str; 3] = ["Compact", "Default", "Large"];
+            egui::ComboBox::from_id_salt("ui_scale")
+                .selected_text(SCALES[app.draft.ui_scale_idx.min(2)])
+                .show_ui(ui, |ui| {
+                    for (i, s) in SCALES.iter().enumerate() {
+                        if ui.selectable_value(&mut app.draft.ui_scale_idx, i, *s).changed() {
+                            let scale = match i {
+                                0 => crate::prefs::UiScale::Compact,
+                                2 => crate::prefs::UiScale::Large,
+                                _ => crate::prefs::UiScale::Default,
+                            };
+                            app.prefs.set("ui_scale", scale.as_str());
+                            // egui applies the new zoom at the start of the
+                            // next pass, so the whole UI resizes in one go.
+                            ui.ctx().set_zoom_factor(scale.factor());
+                        }
+                    }
+                });
+        });
+        ui.label(
+            egui::RichText::new(
+                "Scales text and widgets together, like a browser zoom - handy on small screens.",
+            )
+            .size(12.0)
+            .weak(),
+        );
     });
 }
 

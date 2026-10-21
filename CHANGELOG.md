@@ -1,3 +1,13 @@
+## 3.16.10 — 2026-10-21
+
+- **Interface size setting.** The app draws its own text at a fixed point
+  size and does not follow the desktop's font settings the way a browser
+  does, so on a small 15" laptop panel the type could look oversized next
+  to Firefox. Settings → Appearance → *Interface size* now offers Compact
+  (85%), Default (100%) and Large (110%); it scales text and widgets
+  together like a browser zoom, applies immediately and is saved per
+  machine.
+
 ## 3.16.9 — 2026-10-21
 
 - **The Home status ring is concentric again.** The orb's inner glass

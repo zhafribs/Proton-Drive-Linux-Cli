@@ -284,6 +284,9 @@ impl App {
         });
         theme::apply(&cc.egui_ctx, &prefs.theme());
         theme::force(&cc.egui_ctx, &prefs.theme());
+        // egui draws text at fixed point sizes with its own font - the
+        // interface scale pref is the only way to shrink/grow it.
+        cc.egui_ctx.set_zoom_factor(prefs.ui_scale().factor());
         let conf = conf::read(&paths.conf_file);
         let conf_extras = conf::read_extras(&paths.conf_file);
         let draft = settings::Draft::load(&conf, &conf_extras, &prefs, &paths);
@@ -1363,6 +1366,13 @@ impl eframe::App for App {
             theme::apply(ctx, &self.prefs.theme());
             theme::force(ctx, &self.prefs.theme());
             self.style_dirty = false;
+        }
+
+        // Keep the interface scale in sync with the pref (Settings applies
+        // it immediately too; this catches an edited config file).
+        let want_zoom = self.prefs.ui_scale().factor();
+        if (ctx.zoom_factor() - want_zoom).abs() > 0.001 {
+            ctx.set_zoom_factor(want_zoom);
         }
 
         ctx.request_repaint_after(Duration::from_millis(900));

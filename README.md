@@ -14,19 +14,19 @@ setup, no Qt — the app and its sync runtime travel inside the AppImage.
 > Unofficial. Not affiliated with, endorsed by, sponsored or supported by
 > Proton AG. "Proton Drive" is a trademark of Proton AG.
 
-**Get it:** [`ProtonDrive-CLI-0.9.0-GUI-3.16.9-x86_64.AppImage`](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/latest)
+**Get it:** [`ProtonDrive-CLI-0.9.0-GUI-3.16.10-x86_64.AppImage`](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/latest)
 (≈80 MB · x86_64 · [all releases](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases))
 
 | Inside the file | Version |
 | --- | --- |
 | Proton Drive CLI — official, unmodified, SHA-512-verified at build | **0.9.0** (2026-10-05) |
-| Desktop app + folder-sync engine (this repo) | **3.16.9** |
+| Desktop app + folder-sync engine (this repo) | **3.16.10** |
 
 ## Start here
 
 1. Download the AppImage and make it executable once:
    ```bash
-   chmod +x ProtonDrive-CLI-0.9.0-GUI-3.16.9-x86_64.AppImage
+   chmod +x ProtonDrive-CLI-0.9.0-GUI-3.16.10-x86_64.AppImage
    ```
 2. Double-click it. Click **Sign in** — Proton's official login opens in a
    terminal (that's how their CLI does 2FA); the app picks the session up.
@@ -42,9 +42,9 @@ Fedora 32 era or newer). If it won't start you're missing FUSE — Arch
 The upstream CLI is untouched — arguments pass straight through:
 
 ```bash
-./ProtonDrive-CLI-0.9.0-GUI-3.16.9-x86_64.AppImage --help
-./ProtonDrive-CLI-0.9.0-GUI-3.16.9-x86_64.AppImage auth login   # the app's sign-in
-./ProtonDrive-CLI-0.9.0-GUI-3.16.9-x86_64.AppImage filesystem list /
+./ProtonDrive-CLI-0.9.0-GUI-3.16.10-x86_64.AppImage --help
+./ProtonDrive-CLI-0.9.0-GUI-3.16.10-x86_64.AppImage auth login   # the app's sign-in
+./ProtonDrive-CLI-0.9.0-GUI-3.16.10-x86_64.AppImage filesystem list /
 ```
 
 `auth login`, `filesystem …`, `sharing …`, `photo timeline`, `takeout run …` —
@@ -79,7 +79,8 @@ window (940×780 default, no page ever scrolls sideways, size remembered).*
   conflicts) with search and filters, plus a raw log tab.
 * **Settings** — selective sync (tick which cloud folders mirror), never-sync
   patterns (`*.tmp`), instant upload, cloud checks as fast as every 30 s,
-  notifications with a test button, light/dark/system theme, tray and
+  notifications with a test button, light/dark/system theme, an interface
+  size (compact/default/large), tray and
   start-at-login behaviour, one-click menu install, and **Updates** that
   check GitHub releases and *Download and restart* (the download is verified
   against the published SHA-256 before it replaces the file).
@@ -112,6 +113,10 @@ SUBFOLDERS/EXCLUDE/INOTIFY/…` — settings live in
   login; **Open Proton Drive when I log in** starts the app itself.
 * **Also remove files I delete** — the both-ways-to-trash rule above.
 * **tray icon** — status at a glance, notifications, right-click to quit.
+* **Interface size** — Compact / Default / Large. The app draws its own text
+  at a fixed size (it does not follow the desktop's font settings the way a
+  browser does), so on a small 15" laptop panel the type can look bigger than
+  the browser's; *Compact* scales the whole UI down like a browser zoom.
 
 ## Optional: menu entry
 
