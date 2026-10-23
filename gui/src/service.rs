@@ -130,6 +130,7 @@ pub fn ensure_service_unit(appimage: Option<&Path>, smoke: bool) -> String {
          [Service]\n\
          Type=simple\n\
          Environment={}\n\
+         Environment=MALLOC_ARENA_MAX=2\n\
          EnvironmentFile={}\n\
          ExecStart={} __sync-engine\n\
          Restart=on-failure\n\

@@ -80,21 +80,24 @@ Environment knobs
   PROTON_DRIVE_BIN       path to the official CLI (default: proton-drive on PATH)
   PROTON_SYNC_LOCAL      local folder           (default ~/ProtonDrive)
   PROTON_SYNC_REMOTE     remote folder          (default /my-files)
-  PROTON_SYNC_INTERVAL   remote poll seconds    (default 60)
+  PROTON_SYNC_INTERVAL   remote poll seconds    (default 300; push events
+                         still arrive in ~1s, this is the safety poll)
   PROTON_SYNC_DELETES    0 = never delete (default 1 = deletions go to trash)
   PROTON_SYNC_PUSH       0 = disable the real-time cloud event listener
   PROTON_SYNC_PUSH_POLL  idle poll cap for the event stream (default 2.5)
-  PROTON_SYNC_WORKERS    parallel scan calls    (default 12)
+  PROTON_SYNC_WORKERS    parallel scan calls    (default 6; automatically
+                         capped lower when RAM is tight - it is the engine's
+                         main memory knob, ~100 MB per live CLI process)
   PROTON_SYNC_RETRIES    scan attempts per folder (default 3)
   PROTON_SYNC_SUBFOLDERS comma-separated subfolders to mirror (default all)
   PROTON_SYNC_EXCLUDE    comma-separated globs to skip (e.g. "*.tmp,.cache")
   PROTON_SYNC_INOTIFY    0 = disable the inotify fast path
-  PROTON_SYNC_FULL_EVERY safety full-walk seconds (default 600) - between the
+  PROTON_SYNC_FULL_EVERY safety full-walk seconds (default 1800) - between the
                         cheap fingerprint peeks, a complete remote walk runs at
                         least this often to catch changes a size peek cannot
                         see (renames, same-byte-size edits)
   PROTON_SYNC_PEEK_AGE  max seconds a fingerprint peek may skip walking
-                        (default 600, 0 = trust the peek until FULL_EVERY) -
+                        (default 900, 0 = trust the peek until FULL_EVERY) -
                         Proton's aggregate size signal lags minutes behind a
                         deletion, so the peek alone would hide cloud-side
                         deletes for far too long
@@ -115,6 +118,7 @@ import ctypes
 import datetime
 import fcntl
 import fnmatch
+import gc
 import json
 import logging
 import os
@@ -166,8 +170,8 @@ def cfg(key: str, default: str = "") -> str:
 BIN = os.environ.get("PROTON_DRIVE_BIN") or shutil.which("proton-drive")
 LOCAL_ROOT = Path(cfg("PROTON_SYNC_LOCAL", str(Path.home() / "ProtonDrive"))).expanduser()
 REMOTE_ROOT = cfg("PROTON_SYNC_REMOTE", "/my-files").rstrip("/") or "/my-files"
-INTERVAL = int(cfg("PROTON_SYNC_INTERVAL", "60"))
-FULL_EVERY = max(60, int(cfg("PROTON_SYNC_FULL_EVERY", "600")))
+INTERVAL = int(cfg("PROTON_SYNC_INTERVAL", "300"))
+FULL_EVERY = max(60, int(cfg("PROTON_SYNC_FULL_EVERY", "1800")))
 # Proton's `fs size` aggregate (the cheap change signal) lags minutes behind a
 # deletion - measured 80s+ still stale while `fs list` was fresh at t+5s. Bound
 # how long a peek may skip walking, or cloud-side deletes would hide for far
@@ -175,8 +179,8 @@ FULL_EVERY = max(60, int(cfg("PROTON_SYNC_FULL_EVERY", "600")))
 # With the push listener active this is only a safety net (events carry
 # deletions in ~1s), so the default is generous; without push it bounds the
 # worst-case delete lag (the size signal itself still lags ~80s for deletes).
-PEEK_AGE = max(0, min(int(cfg("PROTON_SYNC_PEEK_AGE", "600")), FULL_EVERY))
-SCAN_WORKERS = int(cfg("PROTON_SYNC_WORKERS", "12"))
+PEEK_AGE = max(0, min(int(cfg("PROTON_SYNC_PEEK_AGE", "900")), FULL_EVERY))
+SCAN_WORKERS = int(cfg("PROTON_SYNC_WORKERS", "6"))
 SCAN_RETRIES = int(cfg("PROTON_SYNC_RETRIES", "3"))
 TRANSFER_TIMEOUT = int(cfg("PROTON_SYNC_TIMEOUT", "3600"))
 META_TIMEOUT = int(cfg("PROTON_SYNC_META_TIMEOUT", "120"))
@@ -487,6 +491,40 @@ def probe_session():
         log.debug("session probe failed: %s", e)
 
 
+def _mem_available_mb():
+    """MemAvailable from /proc/meminfo (Linux), or None when unknown."""
+    try:
+        with open("/proc/meminfo", encoding="ascii") as fh:
+            for line in fh:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) // 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+# Each live `proton-drive` scan process costs ~100 MB RSS (the CLI/SDK
+# runtime), so N workers can spike RAM by N*100 MB. That - not the Python
+# tree dicts - is the engine's real memory knob.
+CLI_PROCESS_MB = 100
+MEM_RESERVE_MB = 256
+
+
+def effective_workers():
+    """Worker count for a scan, capped by what RAM can actually hold.
+
+    PROTON_SYNC_WORKERS stays the ceiling: on a roomy machine nothing changes,
+    while a small/low-RAM box automatically uses fewer parallel CLI processes
+    instead of swapping or getting OOM-killed mid-scan.
+    """
+    limit = max(1, SCAN_WORKERS)
+    avail = _mem_available_mb()
+    if avail is None:
+        return limit
+    budget = max(0, avail - max(MEM_RESERVE_MB, avail // 5))
+    return max(1, min(limit, budget // CLI_PROCESS_MB))
+
+
 def scan_remote(start_rel=None):
     """Walk from START_REL (default REMOTE_ROOT) in parallel -> {relpath: node}
     for that subtree only ('' = root). relpaths stay absolute from REMOTE_ROOT
@@ -504,7 +542,11 @@ def scan_remote(start_rel=None):
     pending = [start_rpath]
     with cli_lock():
         probe_session()
-        with ThreadPoolExecutor(max_workers=SCAN_WORKERS) as pool:
+        workers = effective_workers()
+        if workers < SCAN_WORKERS:
+            log.info("scan: using %d parallel CLI call(s) (RAM-capped from %d)",
+                     workers, SCAN_WORKERS)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
             while pending:
                 next_dirs = []
                 for rpath, entries, err in pool.map(_list_folder, pending):
@@ -1839,6 +1881,10 @@ def loop_forever():
             log.exception("cycle crashed (next try in %ds)", INTERVAL)
             write_health(status="error", error=str(e)[:300], interval=INTERVAL)
         push_pending = None   # events are hints; peek/PEEK_AGE are the backstop
+        # Release the per-cycle trees (remote/local/state, often thousands of
+        # small dicts) before idling: CPython otherwise keeps those arenas
+        # resident until its next generational collection.
+        gc.collect()
         wake.clear()
 
         # sleep until the interval expires, a local change, or a push event

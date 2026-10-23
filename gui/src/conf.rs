@@ -38,7 +38,7 @@ pub fn defaults() -> BTreeMap<&'static str, String> {
     m.insert("PROTON_SYNC_INTERVAL", "300".into());
     m.insert("PROTON_SYNC_DELETES", "1".into());
     m.insert("PROTON_SYNC_INOTIFY", "1".into());
-    m.insert("PROTON_SYNC_WORKERS", "12".into());
+    m.insert("PROTON_SYNC_WORKERS", "6".into());
     m.insert("PROTON_SYNC_RETRIES", "3".into());
     m.insert("PROTON_SYNC_SUBFOLDERS", String::new());
     m.insert("PROTON_SYNC_EXCLUDE", String::new());

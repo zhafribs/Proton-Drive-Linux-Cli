@@ -27,7 +27,7 @@ use eframe::egui;
 use std::path::{Path, PathBuf};
 
 /// The GUI's own version (the release tag is `v<CLI>-gui<GUI>`).
-pub const GUI_VERSION: &str = "3.16.11";
+pub const GUI_VERSION: &str = "3.16.12";
 
 /// The systemd user unit path (shared with `service.rs`).
 pub fn service_unit_path() -> PathBuf {

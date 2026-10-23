@@ -1,3 +1,21 @@
+## 3.16.12 — 2026-10-23
+
+- **Much lower memory while scanning.** The engine runs the official CLI once
+  per folder, and each live `proton-drive` process costs roughly 100 MB - so
+  the worker count, not the Python bookkeeping, was the real RAM knob. The
+  parallel-scan ceiling now defaults to 6 instead of 12, and it is capped
+  again at runtime from `MemAvailable`: a low-RAM machine quietly uses fewer
+  parallel CLI processes instead of swapping or getting OOM-killed mid-scan,
+  while a roomy machine keeps the configured ceiling.
+- **Less idle work.** The safety poll defaults to every 5 minutes (was 1),
+  the full-walk ceiling to 30 minutes (was 10) and the peek age to 15 minutes
+  (was 10). Real-time push detection is unchanged (~1 s), so the app stays
+  responsive while polling the server far less.
+- **Tidier process memory.** The service unit sets `MALLOC_ARENA_MAX=2`
+  (glibc otherwise creates one allocation arena per thread, which keeps
+  freed memory resident), and the engine runs a collection after every cycle
+  so the per-cycle tree dictionaries are released before it idles.
+
 ## 3.16.11 — 2026-10-21
 
 - **Sync no longer loses the sign-in.** The official Proton Drive CLI keeps

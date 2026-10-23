@@ -67,7 +67,7 @@ impl Draft {
             interval_idx: conf::interval_index(secs),
             inotify: get("PROTON_SYNC_INOTIFY", "1") == "1",
             deletes: get("PROTON_SYNC_DELETES", "1") == "1",
-            workers: get("PROTON_SYNC_WORKERS", "12").parse().unwrap_or(12).clamp(1, 16),
+            workers: get("PROTON_SYNC_WORKERS", "6").parse().unwrap_or(6).clamp(1, 16),
             retries: get("PROTON_SYNC_RETRIES", "3").parse().unwrap_or(3).clamp(1, 10),
             exclude: get("PROTON_SYNC_EXCLUDE", ""),
             selective: !selection.is_empty(),
@@ -703,7 +703,11 @@ fn fine_tuning_card(app: &mut App, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Fine-tuning"), |ui| {
         ui.horizontal(|ui| {
             ui.label("Parallel connections");
-            ui.add(egui::DragValue::new(&mut app.draft.workers).range(1..=16));
+            ui.add(egui::DragValue::new(&mut app.draft.workers).range(1..=16))
+                .on_hover_text(
+                    "Ceiling for parallel CLI calls. The engine uses fewer \
+                     automatically when memory is tight.",
+                );
             ui.add_space(24.0);
             ui.label("Retries per folder");
             ui.add(egui::DragValue::new(&mut app.draft.retries).range(1..=10));
