@@ -482,6 +482,16 @@ fn how_often_card(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
         });
+        if app.draft.interval_idx == 0 {
+            ui.label(
+                egui::RichText::new(
+                    "No scheduled checks. Cloud changes and local edits still sync right \
+                     away; Sync now runs a full check.",
+                )
+                .size(12.0)
+                .weak(),
+            );
+        }
         ui.add_space(4.0);
         let mut deletes = app.draft.deletes;
         if widgets::toggle(

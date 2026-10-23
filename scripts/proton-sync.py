@@ -86,7 +86,9 @@ Environment knobs
   PROTON_SYNC_LOCAL      local folder           (default ~/ProtonDrive)
   PROTON_SYNC_REMOTE     remote folder          (default /my-files)
   PROTON_SYNC_INTERVAL   remote poll seconds    (default 300; push events
-                         still arrive in ~1s, this is the safety poll)
+                         still arrive in ~1s, this is the safety poll).
+                         0 = no scheduled checks: push events and local edits
+                         still sync immediately, Sync now forces a full walk
   PROTON_SYNC_DELETES    0 = never delete (default 1 = deletions go to trash)
   PROTON_SYNC_PUSH       0 = disable the real-time cloud event listener
   PROTON_SYNC_PUSH_POLL  idle poll cap for the event stream (default 2.5)
@@ -176,7 +178,7 @@ def cfg(key: str, default: str = "") -> str:
 BIN = os.environ.get("PROTON_DRIVE_BIN") or shutil.which("proton-drive")
 LOCAL_ROOT = Path(cfg("PROTON_SYNC_LOCAL", str(Path.home() / "ProtonDrive"))).expanduser()
 REMOTE_ROOT = cfg("PROTON_SYNC_REMOTE", "/my-files").rstrip("/") or "/my-files"
-INTERVAL = int(cfg("PROTON_SYNC_INTERVAL", "300"))
+INTERVAL = max(0, int(cfg("PROTON_SYNC_INTERVAL", "300")))
 FULL_EVERY = max(60, int(cfg("PROTON_SYNC_FULL_EVERY", "1800")))
 # Proton's `fs size` aggregate (the cheap change signal) lags minutes behind a
 # deletion - measured 80s+ still stale while `fs list` was fresh at t+5s. Bound
@@ -1928,14 +1930,16 @@ class InotifyWatcher(threading.Thread):
 def loop_forever():
     global FORCE_NEXT, PUSH, _UNLOCK_LAST
     wake = threading.Event()
+    poll_desc = ("no scheduled polling (manual)" if INTERVAL <= 0
+                 else f"every {INTERVAL}s")
     if INOTIFY_ENABLED:
         try:
             InotifyWatcher(LOCAL_ROOT, wake).start()
             log.info("inotify fast path active (local changes sync within ~%ds)", DEBOUNCE_QUIET + MIN_CYCLE_GAP)
         except OSError as e:
-            log.info("inotify unavailable (%s) - falling back to %ds polling only", e, INTERVAL)
+            log.info("inotify unavailable (%s) - %s", e, poll_desc)
     else:
-        log.info("inotify disabled - polling every %ds", INTERVAL)
+        log.info("inotify disabled - %s", poll_desc)
 
     if PUSH_ENABLED:
         try:
@@ -1944,9 +1948,9 @@ def loop_forever():
             log.info("push listener active (cloud changes detected in ~1s)")
         except Exception as e:  # noqa: BLE001 - degraded mode must keep running
             PUSH = None
-            log.info("push unavailable (%s) - falling back to %ds interval polling", e, INTERVAL)
+            log.info("push unavailable (%s) - %s", e, poll_desc)
     else:
-        log.info("push disabled (PROTON_SYNC_PUSH=0) - %ds interval polling", INTERVAL)
+        log.info("push disabled (PROTON_SYNC_PUSH=0) - %s", poll_desc)
 
     def drain_push():
         return PUSH.drain() if PUSH is not None else set()
@@ -1969,7 +1973,7 @@ def loop_forever():
                 # the item before telling the user to sign in again.
                 state = secret_service_state()
                 if state == "locked":
-                    retry_in = min(INTERVAL, 30)
+                    retry_in = 30
                     unlocked = False
                     if KEYRING_UNLOCK and time.time() - _UNLOCK_LAST >= KEYRING_COOLDOWN:
                         _UNLOCK_LAST = time.time()
@@ -1999,7 +2003,7 @@ def loop_forever():
                         write_health(status="needs_login", error=str(e)[:300],
                                      interval=INTERVAL)
                     else:
-                        retry_in = min(INTERVAL, 30)
+                        retry_in = 30
                         log.error("session is in the keyring but the CLI rejected it - "
                                   "retrying (%d/5)", session_fails)
                         write_health(
@@ -2008,7 +2012,7 @@ def loop_forever():
                                   "retrying automatically.",
                             interval=INTERVAL)
                 elif state == "unavailable":
-                    retry_in = min(INTERVAL, 60)
+                    retry_in = 60
                     log.error("cannot read the system keyring - retrying")
                     write_health(
                         status="error",
@@ -2030,10 +2034,17 @@ def loop_forever():
         gc.collect()
         wake.clear()
 
-        # sleep until the retry/interval expires, a local change, or a push event
-        deadline = time.time() + retry_in
-        write_health(next_poll=datetime.datetime.fromtimestamp(deadline)
-                     .astimezone().isoformat(timespec="seconds"), interval=INTERVAL)
+        # sleep until the retry/interval expires, a local change, or a push event.
+        # 0 = no scheduled checks: wait without a deadline (push events, local
+        # edits and the wake file still break out); no next-check countdown.
+        if retry_in > 0:
+            deadline = time.time() + retry_in
+            write_health(next_poll=datetime.datetime.fromtimestamp(deadline)
+                         .astimezone().isoformat(timespec="seconds"),
+                         interval=INTERVAL)
+        else:
+            deadline = float("inf")
+            write_health(next_poll=None, interval=0)
         while time.time() < deadline:
             more = drain_push()
             if more:
@@ -2084,8 +2095,9 @@ def main():
     if not BIN:
         log.error("official CLI not found - set PROTON_DRIVE_BIN or put proton-drive on PATH")
         return 2
-    log.info("CLI: %s | local=%s remote=%s deletes=%s interval=%ds",
-             BIN, LOCAL_ROOT, REMOTE_ROOT, "on" if PROPAGATE_DELETES else "off", INTERVAL)
+    log.info("CLI: %s | local=%s remote=%s deletes=%s interval=%s",
+             BIN, LOCAL_ROOT, REMOTE_ROOT, "on" if PROPAGATE_DELETES else "off",
+             "manual" if INTERVAL <= 0 else f"{INTERVAL}s")
 
     fh = lock()
     try:

@@ -21,7 +21,10 @@ pub const CONF_KEYS: [&str; 9] = [
 ];
 
 /// Friendly "check every ..." choices -> seconds (same order as the combo).
-pub const INTERVAL_CHOICES: [(&str, u64); 6] = [
+/// 0 is the manual mode: no timer-driven checks (push and local changes still
+/// wake the engine; Home -> Sync now forces a full walk).
+pub const INTERVAL_CHOICES: [(&str, u64); 7] = [
+    ("Off", 0),
     ("Instant (30 seconds)", 30),
     ("Every minute", 60),
     ("Every 5 minutes", 300),
@@ -155,9 +158,10 @@ mod tests {
 
     #[test]
     fn interval_index_picks_nearest() {
-        assert_eq!(interval_index(30), 0);
-        assert_eq!(interval_index(70), 1); // nearer 60 than 30
-        assert_eq!(interval_index(600), 2);
-        assert_eq!(interval_index(100_000), 5); // clamps to the last choice
+        assert_eq!(interval_index(0), 0); // manual mode
+        assert_eq!(interval_index(30), 1);
+        assert_eq!(interval_index(70), 2); // nearer 60 than 30
+        assert_eq!(interval_index(600), 3); // 300 and 900 tie: first wins
+        assert_eq!(interval_index(100_000), 6); // clamps to the last choice
     }
 }

@@ -1,3 +1,12 @@
+## 3.16.15 — 2026-10-23
+
+- **Scheduled checks can be turned off.** Settings → *How often* now has an
+  **Off** choice (`PROTON_SYNC_INTERVAL=0`). The timer-driven cycles stop,
+  and with them the periodic safety walk; cloud push and local edits still
+  sync immediately, and the Home **Sync now** button still runs a full check.
+  The status line simply shows the last check with no countdown. One cycle
+  still runs when the service starts, so the snapshot and status are ready.
+
 ## 3.16.14 — 2026-10-23
 
 - **The window leaves the welcome screen once the keyring unlocks.** The

@@ -95,15 +95,20 @@ pub fn status_text(status: UiStatus) -> (&'static str, &'static str) {
 /// "Last checked just now · Next check in 42s" - any half available is fine.
 pub fn synced_line(h: &Health) -> String {
     let last = rel_time(h.ts_dt());
-    // Prefer the engine's own next_poll timestamp; fall back to the interval.
-    // A stale/past next_poll clamps to 0 rather than panicking.
-    let nxt = h
-        .next_poll_dt()
-        .map(|dt| {
-            let secs = (dt - chrono::Utc::now().fixed_offset()).num_seconds();
-            secs.max(0) as u64
-        })
-        .or(h.interval);
+    // interval 0 means no scheduled checks, so there is no countdown to show -
+    // just the last check, exactly like a normal cycle with no next time.
+    let nxt = if h.interval == Some(0) {
+        None
+    } else {
+        // Prefer the engine's own next_poll timestamp; fall back to the
+        // interval. A stale/past next_poll clamps to 0 rather than panicking.
+        h.next_poll_dt()
+            .map(|dt| {
+                let secs = (dt - chrono::Utc::now().fixed_offset()).num_seconds();
+                secs.max(0) as u64
+            })
+            .or(h.interval)
+    };
     match (last.is_empty(), nxt) {
         (false, Some(n)) => format!("Last checked {last} · Next check in {n}s"),
         (false, None) => format!("Last checked {last}"),
@@ -159,6 +164,21 @@ mod tests {
         assert!(h.next_poll_dt().is_some());
         assert!(h.ts_dt().is_some());
         assert_eq!(map_status(true, &h.status), UiStatus::Synced);
+    }
+
+    /// Interval 0 is "Off": no scheduled check, so no countdown - but the
+    /// last-check time still shows normally.
+    #[test]
+    fn manual_interval_has_no_countdown() {
+        let h: Health = serde_json::from_str(
+            r#"{"status":"ok","ts":"2026-10-20T00:30:02+08:00","interval":0}"#,
+        )
+        .unwrap();
+        let line = synced_line(&h);
+        assert!(line.starts_with("Last checked"));
+        assert!(!line.contains("Next check"));
+        let empty: Health = serde_json::from_str(r#"{"interval":0}"#).unwrap();
+        assert_eq!(synced_line(&empty), "Waiting for the first check");
     }
 
     /// A lost keyring session is its own state: the engine is running fine,
