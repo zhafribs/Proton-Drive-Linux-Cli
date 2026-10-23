@@ -83,6 +83,7 @@ pub enum Dialog {
     /// Text input (Cloud: rename / new folder); the buffer lives on App.
     Input { title: String, label: String, intent: InputIntent },
     ConfirmTrash { n: usize },
+    ConfirmClearCache,
     /// The "Move to..." cloud folder picker.
     CloudMove,
 }
@@ -105,6 +106,7 @@ enum DlgAct {
     CloudRename { old: String, name: String },
     NewFolder(String),
     TrashConfirm,
+    ClearCache,
     MoveSel(String), // picker row clicked
     MovePick(String), // picker confirmed: move selection here
 }
@@ -1188,6 +1190,28 @@ impl App {
                         });
                     });
             }
+            Dialog::ConfirmClearCache => {
+                egui::Window::new("Clear snapshot cache")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .open(&mut open)
+                    .show(ctx, |ui| {
+                        ui.label(
+                            "Remove the cached remote metadata? Local files, sync state and \
+                             settings stay untouched. The next start will take a full scan.",
+                        );
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() || escape {
+                                act = Some(DlgAct::Close);
+                            }
+                            if widgets::primary_button(ui, "Clear cache") {
+                                act = Some(DlgAct::ClearCache);
+                            }
+                        });
+                    });
+            }
             Dialog::CloudMove => {
                 let root = cloud::remote_root(&self.conf);
                 egui::Window::new("Move to")
@@ -1319,6 +1343,13 @@ impl App {
             DlgAct::TrashConfirm => {
                 self.dialog = None;
                 cloud::action_trash(self);
+            }
+            DlgAct::ClearCache => {
+                self.dialog = None;
+                match service::clear_snapshot_cache(&self.paths) {
+                    Ok(()) => self.toast("Snapshot cache cleared. The next start will scan fully."),
+                    Err(e) => self.toast(format!("Could not clear the snapshot cache: {e}")),
+                }
             }
             DlgAct::MoveSel(rel) => {
                 if let Some(p) = self.cloud.picker.as_mut() {

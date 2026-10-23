@@ -16,6 +16,9 @@ pub struct Draft {
     pub deletes: bool,
     pub workers: i32,
     pub retries: i32,
+    pub fast_start: bool,
+    pub auto_workers: bool,
+    pub transfers: i32,
     pub exclude: String,
     pub selective: bool,
     pub env_text: String,
@@ -67,8 +70,11 @@ impl Draft {
             interval_idx: conf::interval_index(secs),
             inotify: get("PROTON_SYNC_INOTIFY", "1") == "1",
             deletes: get("PROTON_SYNC_DELETES", "1") == "1",
-            workers: get("PROTON_SYNC_WORKERS", "6").parse().unwrap_or(6).clamp(1, 16),
+            workers: get("PROTON_SYNC_WORKERS", "12").parse().unwrap_or(12).clamp(1, 16),
             retries: get("PROTON_SYNC_RETRIES", "3").parse().unwrap_or(3).clamp(1, 10),
+            fast_start: get("PROTON_SYNC_FAST_START", "1") == "1",
+            auto_workers: get("PROTON_SYNC_AUTO_WORKERS", "1") == "1",
+            transfers: parse_transfers(&get("PROTON_SYNC_TRANSFERS", "4")),
             exclude: get("PROTON_SYNC_EXCLUDE", ""),
             selective: !selection.is_empty(),
             env_text: extras.join("\n"),
@@ -227,6 +233,8 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
             ui.add_space(14.0);
             how_often_card(app, ui);
             ui.add_space(14.0);
+            performance_card(app, ui);
+            ui.add_space(14.0);
             notifications_card(app, ui);
             ui.add_space(14.0);
             background_card(app, ui);
@@ -345,6 +353,7 @@ pub fn do_save(app: &mut App) {
     values.insert("PROTON_SYNC_INOTIFY".into(), flag(d.inotify));
     values.insert("PROTON_SYNC_WORKERS".into(), d.workers.to_string());
     values.insert("PROTON_SYNC_RETRIES".into(), d.retries.to_string());
+    values.extend(performance_values(d.fast_start, d.auto_workers, d.transfers));
     values.insert("PROTON_SYNC_SUBFOLDERS".into(), selection.join(","));
     values.insert("PROTON_SYNC_EXCLUDE".into(), d.exclude.clone());
     let extras: Vec<String> = d
@@ -390,6 +399,26 @@ pub fn do_save(app: &mut App) {
         };
         let _ = tx.send(super::Back::SaveHint(hint));
     });
+}
+
+/// 1..=10 with a safe default; the engine enforces the same range.
+pub fn parse_transfers(raw: &str) -> i32 {
+    raw.trim().parse::<i32>().unwrap_or(4).clamp(1, 10)
+}
+
+pub fn performance_values(
+    fast_start: bool,
+    auto_workers: bool,
+    transfers: i32,
+) -> BTreeMap<String, String> {
+    let mut values = BTreeMap::new();
+    values.insert("PROTON_SYNC_FAST_START".into(), flag(fast_start));
+    values.insert("PROTON_SYNC_AUTO_WORKERS".into(), flag(auto_workers));
+    values.insert(
+        "PROTON_SYNC_TRANSFERS".into(),
+        transfers.clamp(1, 10).to_string(),
+    );
+    values
 }
 
 fn flag(b: bool) -> String {
@@ -502,6 +531,63 @@ fn how_often_card(app: &mut App, ui: &mut egui::Ui) {
         ) {
             app.draft.deletes = deletes;
         }
+    });
+}
+
+fn performance_card(app: &mut App, ui: &mut egui::Ui) {
+    widgets::card(ui, Some("Performance"), |ui| {
+        let mut fast = app.draft.fast_start;
+        if ui
+            .checkbox(&mut fast, "Start from the last metadata snapshot")
+            .on_hover_text(
+                "The last remote tree is shown immediately while a background audit \
+                 catches up. Deletes and edits to existing files wait until that audit \
+                 finishes.",
+            )
+            .changed()
+        {
+            app.draft.fast_start = fast;
+        }
+        let mut auto = app.draft.auto_workers;
+        if ui
+            .checkbox(&mut auto, "Adapt parallel scans to available memory")
+            .on_hover_text("Keeps the worker count within a safe RAM budget, up to 16.")
+            .changed()
+        {
+            app.draft.auto_workers = auto;
+        }
+        ui.horizontal(|ui| {
+            ui.label("Scan workers");
+            ui.add_enabled(
+                !app.draft.auto_workers,
+                egui::DragValue::new(&mut app.draft.workers).range(1..=16),
+            )
+            .on_hover_text("Raw ceiling used when adaptive scans are off.");
+            ui.add_space(24.0);
+            ui.label("Transfer concurrency");
+            ui.add(egui::DragValue::new(&mut app.draft.transfers).range(1..=10))
+                .on_hover_text("Independent parent folders transferred at the same time.");
+        });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button("Run full check now").clicked() {
+                match service::request_full_check(&app.paths) {
+                    Ok(()) => app.toast("Full check requested. Deletes stay held until it finishes."),
+                    Err(e) => app.toast(format!("Could not request a full check: {e}")),
+                }
+            }
+            if ui.button("Clear snapshot cache").clicked() {
+                app.dialog = Some(Dialog::ConfirmClearCache);
+            }
+        });
+        ui.label(
+            egui::RichText::new(
+                "The full check audits every remote folder without blocking local edits. \
+                 Clearing the snapshot only removes the cached remote metadata.",
+            )
+            .size(12.0)
+            .weak(),
+        );
     });
 }
 
@@ -848,4 +934,26 @@ fn sel_row(app: &mut App, ui: &mut egui::Ui, rel: &str, label: &str) {
         }
         ui.label(label);
     });
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_transfer_concurrency() {
+        assert_eq!(parse_transfers("4"), 4);
+        assert_eq!(parse_transfers("10"), 10);
+        assert_eq!(parse_transfers("99"), 10);
+        assert_eq!(parse_transfers("wat"), 4);
+    }
+
+    #[test]
+    fn performance_values_are_conf_keys() {
+        let values = performance_values(true, true, 4);
+        assert_eq!(values.get("PROTON_SYNC_FAST_START").map(String::as_str), Some("1"));
+        assert_eq!(values.get("PROTON_SYNC_AUTO_WORKERS").map(String::as_str), Some("1"));
+        assert_eq!(values.get("PROTON_SYNC_TRANSFERS").map(String::as_str), Some("4"));
+    }
 }

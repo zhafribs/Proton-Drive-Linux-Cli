@@ -168,6 +168,22 @@ pub fn unit_has_environment_file() -> bool {
         .unwrap_or(false)
 }
 
+/// Ask the running engine to start a fresh background audit. The file is a
+/// signal only; the engine removes it once it has started the audit.
+pub fn request_full_check(paths: &crate::paths::Paths) -> std::io::Result<()> {
+    std::fs::create_dir_all(&paths.state_dir)?;
+    std::fs::write(paths.state_dir.join("audit-request"), b"")
+}
+
+/// Drop only the cached remote snapshot. State, local files and settings stay.
+pub fn clear_snapshot_cache(paths: &crate::paths::Paths) -> std::io::Result<()> {
+    match std::fs::remove_file(&paths.snapshot_file) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 /// `journalctl --user -u proton-sync` -n <n> (same shape the PyQt app used).
 pub fn journal_lines(n: usize) -> Vec<String> {
     let exe = match which("journalctl") {
@@ -238,6 +254,31 @@ mod tests {
         // Quoting applies to paths with spaces (this repo lives in one).
         assert_eq!(quote_for_unit("plain"), "plain");
         assert_eq!(quote_for_unit("a b"), "\"a b\"");
+    }
+
+    #[test]
+    fn request_full_check_and_clear_cache_touch_only_expected_files() {
+        let mut paths = crate::paths::resolve();
+        let dir = std::env::temp_dir().join(format!(
+            "pdservice-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        paths.state_dir = dir.clone();
+        paths.snapshot_file = dir.join("remote-snapshot.json");
+        std::fs::write(&paths.snapshot_file, b"cache").unwrap();
+
+        request_full_check(&paths).unwrap();
+        assert!(dir.join("audit-request").is_file());
+        clear_snapshot_cache(&paths).unwrap();
+        assert!(!paths.snapshot_file.exists());
+        assert!(dir.join("audit-request").is_file());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

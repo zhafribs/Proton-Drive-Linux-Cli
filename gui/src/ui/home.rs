@@ -42,6 +42,15 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                     health::hero_sub(status, &app.health)
                 };
                 ui.label(egui::RichText::new(sub).size(14.0).weak());
+                if app.health.audit_pending == Some(true) {
+                    ui.label(
+                        egui::RichText::new(
+                            "Deletes and edits to existing files are held until the background check finishes.",
+                        )
+                        .size(12.0)
+                        .weak(),
+                    );
+                }
                 ui.add_space(10.0);
 
                 ui.horizontal(|ui| {

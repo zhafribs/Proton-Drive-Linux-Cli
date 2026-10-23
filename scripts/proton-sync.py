@@ -237,6 +237,7 @@ CLI_LOCK_FILE = STATE_DIR / "cli.lock"
 HEALTH_FILE = STATE_DIR / "health.json"
 # dropping this file requests an immediate cycle (the GUI's "Sync now" button)
 WAKE_FILE = STATE_DIR / "wake"
+AUDIT_REQUEST_FILE = STATE_DIR / "audit-request"
 SNAPSHOT_FILE = STATE_DIR / "remote-snapshot.json"
 FORCE_NEXT = False          # manual wake (GUI Sync now / wake file) -> full walk
 PUSH = None                 # PushListener instance (set by loop_forever when live)
@@ -244,6 +245,7 @@ FAST_VIEW = None            # cached remote tree used while the audit runs
 AUDIT_PENDING = False
 AUDIT_STATE = None
 FAST_STARTED = False        # first fast cycle has completed
+LAST_AUDIT = 0.0            # monotonic-ish wall time of the last completed audit
 
 # minimum spacing between cycles + how long events must be quiet first
 # (Phase 1.5 tuning: 10s->4s / 4s->2s, a local save reaches the cloud ~4s
@@ -1969,7 +1971,7 @@ def audit_tick():
 
 
 def finish_audit_if_ready():
-    global FAST_VIEW, AUDIT_PENDING, AUDIT_STATE
+    global FAST_VIEW, AUDIT_PENDING, AUDIT_STATE, LAST_AUDIT
     if AUDIT_STATE is None or not AUDIT_STATE.complete:
         return False
     try:
@@ -1987,11 +1989,51 @@ def finish_audit_if_ready():
         save_snapshot(FAST_VIEW, fp)
     AUDIT_PENDING = False
     AUDIT_STATE = None
+    LAST_AUDIT = time.time()
     write_health(status="ok", mode="fast", audit_pending=False,
                  audit_done=finished.done, audit_total=finished.total,
                  audit_seconds=round(max(0.0, time.monotonic() - finished.started), 1),
-                 phase="idle", cycle_reason="audit", error="")
+                 audit_phase="idle", phase="idle", cycle_reason="audit", error="")
     log.info("audit complete: %d folders", finished.done)
+    return True
+
+
+def maybe_start_periodic_audit():
+    """Start a periodic audit while fast start is active and polling is on."""
+    if (not FAST_START or FAST_VIEW is None or AUDIT_PENDING or INTERVAL <= 0
+            or AUDIT_EVERY <= 0 or not LAST_AUDIT):
+        return False
+    if time.time() - LAST_AUDIT < AUDIT_EVERY:
+        return False
+    return begin_audit()
+
+
+def begin_audit():
+    """Start (or restart) a background audit from the current cached view."""
+    global AUDIT_PENDING, AUDIT_STATE
+    if not FAST_START or FAST_VIEW is None:
+        return False
+    AUDIT_PENDING = True
+    AUDIT_STATE = AuditState(REMOTE_ROOT)
+    write_health(audit_pending=True, audit_phase="queued", audit_done=0,
+                 audit_total=0, cycle_reason="manual", error="")
+    return True
+
+
+def handle_audit_request():
+    """Consume the GUI's request file; it is only a request, never state."""
+    global FORCE_NEXT
+    if not AUDIT_REQUEST_FILE.exists():
+        return False
+    try:
+        AUDIT_REQUEST_FILE.unlink()
+    except OSError:
+        pass
+    if begin_audit():
+        log.info("full check requested - background audit restarted")
+    else:
+        FORCE_NEXT = True
+        log.info("full check requested - running a full walk")
     return True
 
 
@@ -2370,6 +2412,8 @@ def loop_forever():
     push_pending = None
     session_fails = 0
     while True:
+        handle_audit_request()
+        maybe_start_periodic_audit()
         started = time.time()
         force = FORCE_NEXT
         FORCE_NEXT = False
@@ -2484,6 +2528,8 @@ def loop_forever():
                 FORCE_NEXT = True
                 _UNLOCK_LAST = 0.0   # a manual retry may prompt for the keyring again
                 push_pending = None     # manual wake runs a full walk anyway
+                triggered = True
+            if AUDIT_REQUEST_FILE.exists():
                 triggered = True
             if triggered:
                 # debounce: local writes need settling time; push events are

@@ -1,6 +1,7 @@
 import contextlib
 import importlib.util
 import pathlib
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -99,6 +100,24 @@ class AuditFinishTests(unittest.TestCase):
             self.assertFalse(proton_sync.AUDIT_PENDING)
             self.assertIsNone(proton_sync.AUDIT_STATE)
             save.assert_called_once()
+
+
+class AuditRequestTests(unittest.TestCase):
+    def test_request_file_starts_audit_and_is_consumed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            request = pathlib.Path(tmp) / "audit-request"
+            request.write_text("", encoding="utf-8")
+            with patch.object(proton_sync, "AUDIT_REQUEST_FILE", request), patch.object(
+                proton_sync, "FAST_START", True
+            ), patch.object(proton_sync, "FAST_VIEW", {"a": {"type": "file"}}), patch.object(
+                proton_sync, "AUDIT_PENDING", False
+            ), patch.object(proton_sync, "AUDIT_STATE", None), patch.object(
+                proton_sync, "write_health"
+            ):
+                self.assertTrue(proton_sync.handle_audit_request())
+                self.assertFalse(request.exists())
+                self.assertTrue(proton_sync.AUDIT_PENDING)
+                self.assertIsInstance(proton_sync.AUDIT_STATE, proton_sync.AuditState)
 
 
 class TouchedScopeTests(unittest.TestCase):

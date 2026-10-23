@@ -108,6 +108,19 @@ pub fn status_text(status: UiStatus) -> (&'static str, &'static str) {
 
 /// "Last checked just now · Next check in 42s" - any half available is fine.
 pub fn synced_line(h: &Health) -> String {
+    if h.audit_pending == Some(true) {
+        return match h.audit_total.filter(|n| *n > 0) {
+            Some(total) => format!(
+                "Ready from cache \u{b7} checking {} / {} folders",
+                h.audit_done.unwrap_or(0),
+                total
+            ),
+            None => "Ready from cache \u{b7} background check running".to_string(),
+        };
+    }
+    if let Some(age) = h.cache_age {
+        return format!("Cached view \u{b7} {age}s old");
+    }
     let last = rel_time(h.ts_dt());
     // interval 0 means no scheduled checks, so there is no countdown to show -
     // just the last check, exactly like a normal cycle with no next time.
@@ -219,6 +232,19 @@ mod tests {
         assert_eq!(h.phase.as_deref(), Some("audit"));
         assert_eq!(h.cycle_reason.as_deref(), Some("startup"));
         assert_eq!(h.effective_workers, Some(12));
+    }
+
+    #[test]
+    fn fast_start_audit_line_shows_progress() {
+        let h: Health = serde_json::from_str(
+            r#"{"status":"ok","audit_pending":true,"audit_done":420,"audit_total":1230}"#,
+        )
+        .unwrap();
+        let line = synced_line(&h);
+        assert!(line.contains("checking 420 / 1230"), "{line}");
+        let queued: Health =
+            serde_json::from_str(r#"{"status":"ok","audit_pending":true}"#).unwrap();
+        assert!(synced_line(&queued).contains("background check running"));
     }
 
     /// A lost keyring session is its own state: the engine is running fine,
