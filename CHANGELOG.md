@@ -1,3 +1,25 @@
+## 3.16.13 — 2026-10-23
+
+- **No more false "session expired" after boot or resume.** The official CLI
+  says "You need to login first" both when the session item is really gone
+  *and* when the OS keyring that holds it is still locked - which is normal
+  on a machine that boots straight into the desktop (auto-login) or wakes
+  from suspend. The engine now asks the Secret Service first: if the item is
+  present but in a locked collection, it triggers the desktop's own keyring
+  unlock prompt and retries in 30 seconds instead of telling you to sign in
+  again. A fresh Proton login is only requested when the item is actually
+  missing, or when Proton keeps rejecting a session that is still stored
+  (5 consecutive attempts), which is the genuine server-side revocation.
+- **Why it looked like a multi-PC problem.** Using the app on two machines is
+  fine - each keeps its own keyring item and Proton allows several active
+  sessions. The morning failure on the second machine was its keyring being
+  locked at boot, so the stored session could not be read. The log showed an
+  unchanged session item and a later sync without a new sign-in, which is
+  exactly that case.
+- The auto-unlock prompt can be turned off with
+  `PROTON_SYNC_KEYRING_UNLOCK=0`; the status message then tells you to unlock
+  the keyring, without claiming the session expired.
+
 ## 3.16.12 — 2026-10-23
 
 - **Much lower memory while scanning.** The engine runs the official CLI once

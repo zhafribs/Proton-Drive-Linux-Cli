@@ -45,6 +45,11 @@ Tokens are handled in memory only and the refresh token is never touched.
 
 Safety defaults
 ---------------
+* a locked OS keyring is not a lost session: the CLI says "You need to login
+  first" when it cannot read the keyring (boot, resume, auto-login). The
+  engine asks the Secret Service whether the item still exists, triggers the
+  desktop's unlock prompt (secret-tool) when the collection is locked, and
+  retries - only a genuinely missing item asks for a Proton sign-in
 * deletions sync both ways by default - but ONLY ever to trash, never
   permanently: local deletions go to Proton's trash, remote deletions to the
   desktop trash (both recoverable; opt out with PROTON_SYNC_DELETES=0)
@@ -85,6 +90,7 @@ Environment knobs
   PROTON_SYNC_DELETES    0 = never delete (default 1 = deletions go to trash)
   PROTON_SYNC_PUSH       0 = disable the real-time cloud event listener
   PROTON_SYNC_PUSH_POLL  idle poll cap for the event stream (default 2.5)
+  PROTON_SYNC_KEYRING_UNLOCK  0 = never auto-prompt to unlock the OS keyring
   PROTON_SYNC_WORKERS    parallel scan calls    (default 6; automatically
                          capped lower when RAM is tight - it is the engine's
                          main memory knob, ~100 MB per live CLI process)
@@ -1320,6 +1326,92 @@ def read_cli_session():
                 pass
 
 
+# ---------------------------------------------------- keyring lock recovery
+#
+# A locked OS keyring is reported by the official CLI as "You need to login
+# first" - indistinguishable from a genuinely missing session. That is what
+# happens on a machine that boots with the keyring still locked (common with
+# auto-login, and after a suspend): the session is right there in the
+# keyring, but the CLI cannot read it. The app used to tell the user to sign
+# in again, which did not help; a keyring unlock did.
+#
+# Before declaring the session lost, ask the Secret Service whether the item
+# still exists and whether its collection is locked. If it is locked, trigger
+# the desktop's own unlock prompt (secret-tool -> libsecret) and retry - no
+# Proton password needed.
+
+KEYRING_UNLOCK = cfg("PROTON_SYNC_KEYRING_UNLOCK", "1") == "1"
+KEYRING_COOLDOWN = 600          # don't re-prompt sooner than this (seconds)
+_UNLOCK_LAST = 0.0
+
+
+def secret_service_state():
+    """'ok' | 'locked' | 'missing' | 'unavailable' for the CLI session item.
+
+    SearchItems matches the CLI's own attributes and returns two arrays:
+    readable items, then items whose collection is locked. That distinction
+    is the whole point - a locked session must NOT look "missing".
+    Non-interactive: never reads the secret, so it cannot pop a prompt.
+    """
+    try:
+        from jeepney import DBusAddress, new_method_call
+        from jeepney.io.blocking import open_dbus_connection
+    except ImportError:
+        return "unavailable"
+    conn = None
+    try:
+        def call(a, member, signature, body):
+            reply = conn.send_and_get_reply(new_method_call(a, member, signature, body))
+            if reply.header.message_type.name == "error":
+                raise RuntimeError(f"{member}: {reply.body}")
+            return reply.body
+
+        conn = open_dbus_connection()
+        service = DBusAddress("/org/freedesktop/secrets",
+                              bus_name="org.freedesktop.secrets",
+                              interface="org.freedesktop.Secret.Service")
+        unlocked, locked = call(service, "SearchItems", "a{ss}", (
+            {"service": "ch.proton.drive/drive-sdk-cli",
+             "account": "auth-session"},))
+        if unlocked:
+            return "ok"
+        if locked:
+            return "locked"
+        return "missing"
+    except Exception as e:  # noqa: BLE001 - a probe must never break the loop
+        log.debug("keyring state check failed: %s", e)
+        return "unavailable"
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def unlock_keyring():
+    """Ask the desktop to unlock the keyring; True once the item is readable.
+
+    `secret-tool lookup` is libsecret's own client, so it goes through the
+    same unlock prompt the desktop uses (gnome-keyring / KWallet). Its stdout
+    is the secret - captured, never logged.
+    """
+    tool = shutil.which("secret-tool")
+    if not tool:
+        log.info("keyring: secret-tool not installed - unlock it manually")
+        return False
+    try:
+        subprocess.run(
+            [tool, "lookup", "service", "ch.proton.drive/drive-sdk-cli",
+             "account", "auth-session"],
+            capture_output=True, text=True, timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log.info("keyring: unlock request failed (%s)", e)
+        return False
+    return secret_service_state() == "ok"
+
+
 def push_cursor_read(volume_id):
     try:
         data = json.loads(PUSH_EVENTS_FILE.read_text(encoding="utf-8"))
@@ -1834,7 +1926,7 @@ class InotifyWatcher(threading.Thread):
 # ------------------------------------------------------------------------ main
 
 def loop_forever():
-    global FORCE_NEXT, PUSH
+    global FORCE_NEXT, PUSH, _UNLOCK_LAST
     wake = threading.Event()
     if INOTIFY_ENABLED:
         try:
@@ -1860,25 +1952,76 @@ def loop_forever():
         return PUSH.drain() if PUSH is not None else set()
 
     push_pending = None
+    session_fails = 0
     while True:
         started = time.time()
         force = FORCE_NEXT
         FORCE_NEXT = False
+        retry_in = INTERVAL
         try:
             run_once(force_full=force, push_pending=push_pending)
+            session_fails = 0
         except CliError as e:
-            log.error("cycle failed: %s (next try in %ds)", e, INTERVAL)
+            log.error("cycle failed: %s", e)
             if session_lost(str(e)):
-                # The stored session is gone (or was never written). Only a
-                # fresh sign-in fixes this - say so plainly instead of
-                # repeating "You need to login first" every cycle.
-                log.error("session lost - sign in again to resume syncing")
-                write_health(status="needs_login", error=str(e)[:300],
-                             interval=INTERVAL)
+                # "You need to login first" is also what the CLI says when the
+                # keyring is merely LOCKED (boot, resume, auto-login). Check
+                # the item before telling the user to sign in again.
+                state = secret_service_state()
+                if state == "locked":
+                    retry_in = min(INTERVAL, 30)
+                    unlocked = False
+                    if KEYRING_UNLOCK and time.time() - _UNLOCK_LAST >= KEYRING_COOLDOWN:
+                        _UNLOCK_LAST = time.time()
+                        log.warning("session is stored but the keyring is locked - "
+                                    "asking the desktop to unlock it")
+                        unlocked = unlock_keyring()
+                    if unlocked:
+                        session_fails = 0
+                        log.info("keyring unlocked - syncing resumes")
+                        write_health(status="syncing", error="", interval=INTERVAL)
+                    else:
+                        log.error("keyring is locked - unlock it to resume "
+                                  "(no Proton sign-in needed)")
+                        write_health(
+                            status="error",
+                            error="Your system keyring is locked. Unlock it to resume "
+                                  "syncing - you do not need to sign in again.",
+                            interval=INTERVAL)
+                elif state == "ok":
+                    # The item is there and unlocked: usually a transient CLI
+                    # failure. If Proton keeps rejecting it, it really is a
+                    # server-side session revocation and re-login is needed.
+                    session_fails += 1
+                    if session_fails >= 5:
+                        log.error("session exists but Proton keeps rejecting it - "
+                                  "sign in again to resume syncing")
+                        write_health(status="needs_login", error=str(e)[:300],
+                                     interval=INTERVAL)
+                    else:
+                        retry_in = min(INTERVAL, 30)
+                        log.error("session is in the keyring but the CLI rejected it - "
+                                  "retrying (%d/5)", session_fails)
+                        write_health(
+                            status="error",
+                            error="The stored session could not be read this time - "
+                                  "retrying automatically.",
+                            interval=INTERVAL)
+                elif state == "unavailable":
+                    retry_in = min(INTERVAL, 60)
+                    log.error("cannot read the system keyring - retrying")
+                    write_health(
+                        status="error",
+                        error="Cannot reach the system keyring - retrying automatically.",
+                        interval=INTERVAL)
+                else:  # "missing": the item really is gone
+                    log.error("session lost - sign in again to resume syncing")
+                    write_health(status="needs_login", error=str(e)[:300],
+                                 interval=INTERVAL)
             else:
                 write_health(status="error", error=str(e)[:300], interval=INTERVAL)
         except Exception as e:  # noqa: BLE001 - keep the loop alive, report it
-            log.exception("cycle crashed (next try in %ds)", INTERVAL)
+            log.exception("cycle crashed")
             write_health(status="error", error=str(e)[:300], interval=INTERVAL)
         push_pending = None   # events are hints; peek/PEEK_AGE are the backstop
         # Release the per-cycle trees (remote/local/state, often thousands of
@@ -1887,8 +2030,8 @@ def loop_forever():
         gc.collect()
         wake.clear()
 
-        # sleep until the interval expires, a local change, or a push event
-        deadline = time.time() + INTERVAL
+        # sleep until the retry/interval expires, a local change, or a push event
+        deadline = time.time() + retry_in
         write_health(next_poll=datetime.datetime.fromtimestamp(deadline)
                      .astimezone().isoformat(timespec="seconds"), interval=INTERVAL)
         while time.time() < deadline:
@@ -1901,6 +2044,7 @@ def loop_forever():
                 WAKE_FILE.unlink(missing_ok=True)
                 log.info("manual sync requested (wake)")
                 FORCE_NEXT = True
+                _UNLOCK_LAST = 0.0   # a manual retry may prompt for the keyring again
                 push_pending = None     # manual wake runs a full walk anyway
                 triggered = True
             if triggered:

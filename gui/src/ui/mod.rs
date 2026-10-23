@@ -135,6 +135,9 @@ pub struct App {
     pub page: Page,
 
     pub identity: Option<cli::Identity>,
+    /// Re-probe sign-in after the engine reports a keyring problem: a locked
+    /// keyring makes the CLI look "not signed in" until it is unlocked.
+    pub identity_retry: Option<std::time::Instant>,
     pub stats: Option<(u64, u64)>,
 
     pub draft: settings::Draft,
@@ -366,6 +369,7 @@ impl App {
             page: Page::Home,
 
             identity: None,
+            identity_retry: None,
             stats: None,
             draft,
             changes: Vec::new(),
@@ -753,6 +757,18 @@ impl App {
             );
         }
         self.prev_hstatus = health.status.clone();
+        // A locked keyring makes `fs list` fail with "You need to login first",
+        // so the startup identity probe wrongly lands on "not signed in" even
+        // though the session is safe in the keyring. Once the engine reports
+        // the keyring problem (and asks the desktop to unlock it), re-probe so
+        // the window does not stay on the welcome screen.
+        let keyring_issue = health
+            .error
+            .as_deref()
+            .is_some_and(|e| e.to_ascii_lowercase().contains("keyring"));
+        if keyring_issue && !self.logged_in() && self.identity_retry.is_none() {
+            self.identity_retry = Some(std::time::Instant::now() + Duration::from_secs(30));
+        }
         self.health = health;
         self.active = active;
         self.enabled = enabled;
@@ -1321,6 +1337,19 @@ impl eframe::App for App {
     /// the window is closed to the background.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain(ctx);
+
+        // Re-probe sign-in after a keyring-lock report (see on_poll).
+        if let Some(t) = self.identity_retry {
+            if Instant::now() >= t {
+                self.identity_retry = None;
+                let tx = self.tx.clone();
+                std::thread::spawn(move || {
+                    if let Some(c) = cli::resolve_cli() {
+                        let _ = tx.send(Back::Identity(cli::fetch_identity(&c)));
+                    }
+                });
+            }
+        }
 
         // Cloud: ensure the initial listing even if the page was reached
         // without a nav click (e.g. it becomes the startup page one day).
