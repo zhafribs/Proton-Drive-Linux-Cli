@@ -2,6 +2,7 @@ import importlib.util
 import pathlib
 import time
 import unittest
+from unittest.mock import patch
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("proton_sync", ROOT / "scripts/proton-sync.py")
@@ -114,6 +115,65 @@ class HealthPhaseTests(unittest.TestCase):
         self.assertEqual(payload["phase"], "scan-remote")
         self.assertGreaterEqual(payload["phase_seconds"], 0.4)
         self.assertEqual(payload["cycle_reason"], "startup")
+
+
+class FastViewTests(unittest.TestCase):
+    def setUp(self):
+        self._saved = (
+            proton_sync.FAST_VIEW,
+            proton_sync.AUDIT_PENDING,
+            proton_sync.AUDIT_STATE,
+            proton_sync.FAST_STARTED,
+        )
+        proton_sync.FAST_VIEW = None
+        proton_sync.AUDIT_PENDING = False
+        proton_sync.AUDIT_STATE = None
+        proton_sync.FAST_STARTED = False
+
+    def tearDown(self):
+        (
+            proton_sync.FAST_VIEW,
+            proton_sync.AUDIT_PENDING,
+            proton_sync.AUDIT_STATE,
+            proton_sync.FAST_STARTED,
+        ) = self._saved
+
+    @patch.object(proton_sync, "write_health")
+    @patch.object(proton_sync, "load_state")
+    @patch.object(proton_sync, "load_snapshot")
+    def test_starts_from_valid_snapshot(self, load_snapshot, load_state, write_health):
+        tree = {"a.txt": {"uid": "u1", "type": "file", "size": 1, "mtime": ""}}
+        load_snapshot.return_value = {
+            "sig": "sig",
+            "fp": [1, 1],
+            "ts": time.time() - 10,
+            "tree": tree,
+        }
+        load_state.return_value = {"a.txt": {"r_mtime": "2026-01-01T00:00:00Z"}}
+        self.assertTrue(proton_sync.start_fast_view())
+        self.assertEqual(proton_sync.FAST_VIEW, tree)
+        self.assertTrue(proton_sync.AUDIT_PENDING)
+        write_health.assert_called_once()
+
+    @patch.object(proton_sync, "write_health")
+    @patch.object(proton_sync, "load_state", return_value={})
+    @patch.object(proton_sync, "load_snapshot")
+    def test_rejects_snapshot_without_state(self, load_snapshot, _load_state, _write_health):
+        load_snapshot.return_value = {
+            "sig": "sig",
+            "fp": [1, 1],
+            "ts": time.time(),
+            "tree": {"a.txt": {"uid": "u1", "type": "file", "size": 1, "mtime": ""}},
+        }
+        self.assertFalse(proton_sync.start_fast_view())
+        self.assertIsNone(proton_sync.FAST_VIEW)
+        self.assertFalse(proton_sync.AUDIT_PENDING)
+
+    def test_fast_cycle_uses_cached_view(self):
+        proton_sync.FAST_VIEW = {"a.txt": {"uid": "u1", "type": "file", "size": 1, "mtime": ""}}
+        remote, reason = proton_sync.fast_cycle_remote(None)
+        self.assertIn("a.txt", remote)
+        self.assertEqual(reason, "fast")
 
 
 if __name__ == "__main__":

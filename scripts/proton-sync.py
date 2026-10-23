@@ -203,6 +203,11 @@ PUSH_ENABLED = cfg("PROTON_SYNC_PUSH", "1") == "1"
 PUSH_POLL_MAX = max(0.5, float(cfg("PROTON_SYNC_PUSH_POLL", "2.5")))
 PUSH_QUIET = 0.5        # coalescing window for push events (they are atomic
                         # server-side commits - no local write settling needed)
+FAST_START = cfg("PROTON_SYNC_FAST_START", "1") == "1"
+AUTO_WORKERS = cfg("PROTON_SYNC_AUTO_WORKERS", "1") == "1"
+TRANSFERS = max(1, min(10, int(cfg("PROTON_SYNC_TRANSFERS", "4"))))
+AUDIT_EVERY = max(0, int(cfg("PROTON_SYNC_AUDIT_EVERY", "1800")))
+AUDIT_CHUNK_FOLDERS = max(1, int(cfg("PROTON_SYNC_AUDIT_CHUNK", "40")))
 # selective sync: only these remote subfolders are mirrored ("" = everything)
 SUBFOLDERS = [s.strip("/") for s in cfg("PROTON_SYNC_SUBFOLDERS", "").split(",") if s.strip()]
 # comma-separated globs matched against rel path and file name (e.g. "*.tmp,.cache")
@@ -231,6 +236,10 @@ WAKE_FILE = STATE_DIR / "wake"
 SNAPSHOT_FILE = STATE_DIR / "remote-snapshot.json"
 FORCE_NEXT = False          # manual wake (GUI Sync now / wake file) -> full walk
 PUSH = None                 # PushListener instance (set by loop_forever when live)
+FAST_VIEW = None            # cached remote tree used while the audit runs
+AUDIT_PENDING = False
+AUDIT_STATE = None
+FAST_STARTED = False        # first fast cycle has completed
 
 # minimum spacing between cycles + how long events must be quiet first
 # (Phase 1.5 tuning: 10s->4s / 4s->2s, a local save reaches the cloud ~4s
@@ -1751,9 +1760,58 @@ def apply_scope(remote, rel):
     return "updated"
 
 
+# ------------------------------------------------------------------ fast start
+
+def start_fast_view():
+    """Load the last snapshot for an immediate first cycle."""
+    global FAST_VIEW, AUDIT_PENDING, AUDIT_STATE, FAST_STARTED
+    if not FAST_START:
+        return False
+    snap = load_snapshot()
+    state = load_state()
+    usable, reason = snapshot_usable(snap, state)
+    if not usable:
+        log.info("fast start unavailable: %s", reason)
+        return False
+    FAST_VIEW = snapshot_tree(snap)
+    AUDIT_PENDING = True
+    AUDIT_STATE = None
+    FAST_STARTED = False
+    age = max(0, int(time.time() - float(snap.get("ts") or 0)))
+    write_health(status="ok", mode="fast", cache_age=age, audit_pending=True,
+                 audit_phase="queued", audit_done=0, audit_total=0,
+                 cycle_reason="startup", error="")
+    log.info("fast start from cache (%ds old, %d entries); audit pending",
+             age, len(FAST_VIEW))
+    return True
+
+
+def fast_cycle_remote(push_pending):
+    """Return the cached remote view plus any push-scoped refreshes."""
+    remote = dict(FAST_VIEW or {})
+    reason = "fast"
+    if push_pending and PUSH is not None:
+        try:
+            rels, unknown = resolve_push_scopes(push_pending, remote,
+                                                PUSH.volume_id, PUSH.root_uid)
+            if unknown:
+                log.debug("fast: %d push event(s) unresolvable in cache", unknown)
+            applied = 0
+            for rel in rels:
+                if rel:
+                    apply_scope(remote, rel)
+                    applied += 1
+            if applied:
+                reason = "push"
+        except CliError as e:
+            log.info("fast: push scope refresh failed (%s) - cached view kept", str(e)[:140])
+    return remote, reason
+
+
 # ------------------------------------------------------------------ one cycle
 
 def run_once(dry_run=False, force_full=False, push_pending=None):
+    global FAST_VIEW, FAST_STARTED
     LOCAL_ROOT.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     cycle_reason = "manual" if force_full else ("push" if push_pending else ("dry-run" if dry_run else "poll"))
@@ -1762,12 +1820,21 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
                      started=datetime.datetime.now().astimezone().isoformat(timespec="seconds"))
     log.info("scan: remote %s + local %s", REMOTE_ROOT, LOCAL_ROOT)
 
+    # fast path: use the cached tree while the background audit catches up
+    fast_remote = None
+    mode = "full"
+    if FAST_VIEW is not None and not (dry_run or force_full):
+        fast_remote, fast_reason = fast_cycle_remote(push_pending)
+        mode = "fast"
+        cycle_reason = "startup" if not FAST_STARTED else (
+            "push" if fast_reason == "push" else "local"
+        )
+
     # smart cadence: push events decide first (targeted re-list of one folder),
     # otherwise a ~2.5s fingerprint peek decides if a full walk is needed
-    mode = "full"
     snap = fp = None
     scoped = None
-    if not (dry_run or force_full):
+    if fast_remote is None and not (dry_run or force_full):
         snap = load_snapshot()
         push_handled = False
         if snap is not None and push_pending and PUSH is not None:
@@ -1809,7 +1876,10 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
             else:
                 mode = "keep"
 
-    if mode == "keep":
+    if fast_remote is not None:
+        remote = fast_remote
+        log.debug("fast: reusing cached view (%d entries)", len(remote))
+    elif mode == "keep":
         remote = snapshot_tree(snap)
         log.debug("peek: cloud unchanged - reusing snapshot (%d entries)", len(remote))
     elif mode == "scope":
@@ -1860,6 +1930,11 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
     plan_started = time.monotonic()
     actions, holds = plan_cycle(remote, local, state)
     write_health(**health_phase("plan", plan_started, cycle_reason=cycle_reason))
+    if AUDIT_PENDING:
+        actions, held = hold_actions_for_audit(actions, remote, state)
+        holds += held
+        write_health(audit_pending=True, holds=holds,
+                     audit_phase="queued", cycle_reason=cycle_reason)
     log.info("plan: %d action(s), %d hold(s)%s", len(actions), holds, "  [DRY RUN]" if dry_run else "")
     for kind, rel, _ in actions:
         log.info("  %-13s %s", kind.upper(), rel)
@@ -1870,9 +1945,12 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
     if not actions:
         save_state(refresh_state(remote, local, state, set(), set()))
         log.info("cycle done: in sync")
+        if fast_remote is not None:
+            FAST_VIEW = dict(remote)
+            FAST_STARTED = True
         write_health(status="ok", cycle_seconds=round(time.time() - t0, 1),
                      actions=0, holds=holds, failed=0, uploaded=0, downloaded=0, conflicts=0,
-                     error="", mode=mode,
+                     error="", mode=mode, audit_pending=AUDIT_PENDING,
                      remote_entries=len(remote), local_entries=len(local),
                      state_records=len(state), interval=INTERVAL, cycle_reason=cycle_reason)
         return True
@@ -1934,6 +2012,9 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
     saved = refresh_state(remote2, local2, state, failed, {a[1] for a in actions},
                           planned_local=local, downloaded=downloaded)
     save_state(saved)
+    if fast_remote is not None:
+        FAST_VIEW = dict(remote2)
+        FAST_STARTED = True
     uploaded_n = sum(1 for kind, rel, _ in actions if kind == "up" and rel not in failed)
     conflicts_n = sum(1 for kind, rel, _ in actions if kind == "conflict" and rel not in failed)
     log.info("cycle done: %d failed, state=%d records", len(failed), len(saved))
@@ -1942,7 +2023,7 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
                  uploaded=uploaded_n, downloaded=len(downloaded), conflicts=conflicts_n,
                  remote_entries=len(remote), local_entries=len(local),
                  state_records=len(saved), interval=INTERVAL, error="", mode=mode,
-                 cycle_reason=cycle_reason)
+                 audit_pending=AUDIT_PENDING, cycle_reason=cycle_reason)
     return not failed
 
 
@@ -2039,6 +2120,8 @@ def loop_forever():
 
     def drain_push():
         return PUSH.drain() if PUSH is not None else set()
+
+    start_fast_view()
 
     push_pending = None
     session_fails = 0
