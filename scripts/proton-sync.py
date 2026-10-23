@@ -141,7 +141,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 log = logging.getLogger("proton-sync")
@@ -188,7 +188,7 @@ FULL_EVERY = max(60, int(cfg("PROTON_SYNC_FULL_EVERY", "1800")))
 # deletions in ~1s), so the default is generous; without push it bounds the
 # worst-case delete lag (the size signal itself still lags ~80s for deletes).
 PEEK_AGE = max(0, min(int(cfg("PROTON_SYNC_PEEK_AGE", "900")), FULL_EVERY))
-SCAN_WORKERS = int(cfg("PROTON_SYNC_WORKERS", "6"))
+SCAN_WORKERS = max(1, min(16, int(cfg("PROTON_SYNC_WORKERS", "12"))))
 SCAN_RETRIES = int(cfg("PROTON_SYNC_RETRIES", "3"))
 TRANSFER_TIMEOUT = int(cfg("PROTON_SYNC_TIMEOUT", "3600"))
 META_TIMEOUT = int(cfg("PROTON_SYNC_META_TIMEOUT", "120"))
@@ -206,6 +206,10 @@ PUSH_QUIET = 0.5        # coalescing window for push events (they are atomic
 FAST_START = cfg("PROTON_SYNC_FAST_START", "1") == "1"
 AUTO_WORKERS = cfg("PROTON_SYNC_AUTO_WORKERS", "1") == "1"
 TRANSFERS = max(1, min(10, int(cfg("PROTON_SYNC_TRANSFERS", "4"))))
+WORKER_LIMIT = SCAN_WORKERS
+CLEAN_CHUNKS = 0
+TRANSFER_LIMIT = TRANSFERS
+TRANSFER_CLEAN = 0
 AUDIT_EVERY = max(0, int(cfg("PROTON_SYNC_AUDIT_EVERY", "1800")))
 AUDIT_CHUNK_FOLDERS = max(1, int(cfg("PROTON_SYNC_AUDIT_CHUNK", "40")))
 # selective sync: only these remote subfolders are mirrored ("" = everything)
@@ -370,9 +374,9 @@ def cli(args, as_json=False, timeout=None, locked=True):
     return p.stdout
 
 
-def cli_transfer(args):
+def cli_transfer(args, locked=True):
     """Run a transfer command and echo its summary lines into the log."""
-    out = cli(args)
+    out = cli(args, locked=locked)
     for line in out.splitlines():
         s = line.strip()
         if s:
@@ -544,7 +548,7 @@ def effective_workers():
     while a small/low-RAM box automatically uses fewer parallel CLI processes
     instead of swapping or getting OOM-killed mid-scan.
     """
-    limit = max(1, SCAN_WORKERS)
+    limit = max(1, WORKER_LIMIT if AUTO_WORKERS else SCAN_WORKERS)
     avail = _mem_available_mb()
     if avail is None:
         return limit
@@ -560,6 +564,7 @@ def scan_remote(start_rel=None, progress=None):
     The whole batch runs under the session lock: the GUI (and a sign-in) must
     not rewrite the keyring session while these `proton-drive` processes are
     running."""
+    global WORKER_LIMIT, CLEAN_CHUNKS
     tree = {}
     start_rpath = remote_path(start_rel) if start_rel else REMOTE_ROOT
     rel_of = {start_rpath: (start_rel or "")}
@@ -576,8 +581,13 @@ def scan_remote(start_rel=None, progress=None):
         with ThreadPoolExecutor(max_workers=workers) as pool:
             while pending:
                 next_dirs = []
+                saw_rate = False
                 for rpath, entries, err in pool.map(_list_folder, pending):
                     if err:
+                        if is_rate_limit(err):
+                            saw_rate = True
+                            WORKER_LIMIT = adjust_worker_limit(WORKER_LIMIT, True, 0)
+                            CLEAN_CHUNKS = 0
                         raise CliError(f"cannot list {rpath}: {err}")
                     visited.add(rpath)
                     rel = rel_of[rpath]
@@ -587,6 +597,11 @@ def scan_remote(start_rel=None, progress=None):
                             rel_of[child_rpath] = child_rel
                             next_dirs.append(child_rpath)
                 pending = next_dirs   # next BFS round lists all of these in parallel
+                if not saw_rate:
+                    CLEAN_CHUNKS += 1
+                    if CLEAN_CHUNKS >= 3:
+                        WORKER_LIMIT = adjust_worker_limit(WORKER_LIMIT, False, 3)
+                        CLEAN_CHUNKS = 0
                 if progress is not None:
                     try:
                         progress(len(visited), len(visited) + len(pending))
@@ -671,16 +686,17 @@ def remote_parent(rel):
     return remote_path(rel.rsplit("/", 1)[0])
 
 
-def ensure_remote_dir(rel, tree, created):
+def ensure_remote_dir(rel, tree, created, locked=True):
     """Create REL (+ missing ancestors) on the remote side if TREE lacks it."""
     if not rel or rel in tree:
         return
     parent = rel.rsplit("/", 1)[0] if "/" in rel else ""
     if parent:
-        ensure_remote_dir(parent, tree, created)
+        ensure_remote_dir(parent, tree, created, locked=locked)
     name = rel.rsplit("/", 1)[-1]        # works for top-level ("b") and nested ("a/b")
     try:
-        cli(["fs", "create-folder", remote_parent(rel), escape(name)], timeout=META_TIMEOUT)
+        cli(["fs", "create-folder", remote_parent(rel), escape(name)],
+            timeout=META_TIMEOUT, locked=locked)
     except CliError as e:
         # defense in depth: if the scan under-reported, the folder may already
         # exist - that is fine, adopt it instead of failing the whole batch
@@ -849,6 +865,74 @@ def group_transfer_batches(actions):
     return list(batches.values())
 
 
+def run_transfer_batches(batches, upload_fn, download_fn, max_workers):
+    """Run independent parent batches under one session lock.
+
+    Each batch remains one CLI call per parent. Returns (failed, completed).
+    """
+    global TRANSFER_LIMIT, TRANSFER_CLEAN
+    if not batches:
+        return set(), set()
+    total = sum(len(b.get("uploads", [])) + len(b.get("downloads", [])) for b in batches)
+    failed, completed = set(), set()
+    done = 0
+    saw_rate = False
+    workers = max(1, min(10, int(max_workers), TRANSFER_LIMIT, len(batches)))
+
+    def mark(rels, ok, error=None):
+        nonlocal done
+        if ok:
+            completed.update(rels)
+        else:
+            failed.update(rels)
+            if error is not None:
+                log.error("FAILED transfer batch (%d path(s)): %s", len(rels), error)
+        done += len(rels)
+        write_health(transfer_active=True, transfer_done=done,
+                     transfer_total=total, transfer_bytes=0)
+
+    try:
+        with cli_lock():
+            probe_session()
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {}
+                for batch in batches:
+                    rels = batch.get("uploads") or batch.get("downloads") or []
+                    fn = upload_fn if batch.get("uploads") else download_fn
+                    futures[pool.submit(fn, batch["parent"], rels, False)] = rels
+                for future in as_completed(futures):
+                    rels = futures[future]
+                    try:
+                        future.result()
+                        mark(rels, True)
+                    except CliError as e:
+                        if is_rate_limit(str(e)):
+                            saw_rate = True
+                        mark(rels, False, e)
+                    except Exception as e:  # noqa: BLE001 - one batch must not wedge the group
+                        mark(rels, False, e)
+    except Exception as e:  # noqa: BLE001 - lock/probe failure fails the group safely
+        all_rels = {rel for b in batches
+                    for rel in (b.get("uploads", []) + b.get("downloads", []))}
+        failed.update(all_rels)
+        log.error("FAILED transfer group (%d path(s)): %s", len(all_rels), e)
+        write_health(transfer_active=False, transfer_done=done,
+                     transfer_total=total, transfer_bytes=0)
+        return failed, completed
+
+    if saw_rate:
+        TRANSFER_LIMIT = adjust_worker_limit(TRANSFER_LIMIT, True, 0)
+        TRANSFER_CLEAN = 0
+    else:
+        TRANSFER_CLEAN += 1
+        if TRANSFER_CLEAN >= 3:
+            TRANSFER_LIMIT = adjust_worker_limit(TRANSFER_LIMIT, False, 3)
+            TRANSFER_CLEAN = 0
+    write_health(transfer_active=False, transfer_done=done,
+                 transfer_total=total, transfer_bytes=0)
+    return failed, completed
+
+
 def adaptive_worker_limit(configured, available_mb):
     """Cap scan workers by the configured limit and available RAM."""
     limit = max(1, int(configured))
@@ -856,6 +940,23 @@ def adaptive_worker_limit(configured, available_mb):
         return limit
     budget = max(0, available_mb - max(MEM_RESERVE_MB, available_mb // 5))
     return max(1, min(limit, budget // CLI_PROCESS_MB))
+
+
+def adjust_worker_limit(current, saw_rate_limit, clean_chunks):
+    """Back off on throttling, then creep back up after three clean chunks."""
+    if saw_rate_limit:
+        return max(1, int(current) - 2)
+    if clean_chunks >= 3:
+        return min(16, int(current) + 1)
+    return int(current)
+
+
+def is_rate_limit(message):
+    m = (message or "").lower()
+    return any(token in m for token in (
+        "429", "rate limit", "rate-limit", "too many requests",
+        "quota exceeded", "throttl",
+    ))
 
 
 def local_changed(l, s):
@@ -985,19 +1086,20 @@ def download_folder(rel):
     log.info("DOWNLOAD dir  %s/ (whole subtree)", rel)
 
 
-def download_files(parent, rels):
+def download_files(parent, rels, locked=True):
     target = LOCAL_ROOT / parent if parent else LOCAL_ROOT
     target.mkdir(parents=True, exist_ok=True)
     cli_transfer(["fs", "download", *[remote_path(r) for r in rels], str(target),
-                  "-f", "remove", "-d", "merge"])
+                  "-f", "remove", "-d", "merge"], locked=locked)
     for r in rels:
         log.info("DOWNLOAD %s", r)
 
 
-def upload_batch(parent, rels, tree, created):
-    ensure_remote_dir(parent, tree, created)
+def upload_batch(parent, rels, tree, created, locked=True):
+    ensure_remote_dir(parent, tree, created, locked=locked)
     cli_transfer(["fs", "upload", "-f", "create-new-revision", "-d", "merge",
-                  *[str(LOCAL_ROOT / r) for r in rels], remote_parent(rels[0])])
+                  *[str(LOCAL_ROOT / r) for r in rels], remote_parent(rels[0])],
+                 locked=locked)
     for r in rels:
         log.info("UPLOAD %s", r)
 
@@ -1127,18 +1229,17 @@ def execute(actions, remote, local):
             guarded(rel, ensure_remote_dir, rel, tree, created)
             did_upload = True
 
-    # 2) uploads, grouped by parent folder
-    by_parent = {}
-    for kind, rel, payload in actions:
-        if kind == "up" and payload["type"] == "file":
-            by_parent.setdefault(rel.rsplit("/", 1)[0] if "/" in rel else "", []).append(rel)
-    for parent, rels in sorted(by_parent.items()):
-        try:
-            upload_batch(parent, rels, tree, created)
+    # 2) uploads, grouped by parent folder and run across independent parents
+    upload_actions = [a for a in actions if a[0] == "up"]
+    upload_batches = group_transfer_batches(upload_actions)
+    if upload_batches:
+        def do_upload(parent, rels, locked):
+            upload_batch(parent, rels, tree, created, locked=locked)
+        upload_failed, upload_done = run_transfer_batches(
+            upload_batches, do_upload, do_upload, TRANSFERS)
+        failed.update(upload_failed)
+        if upload_done:
             did_upload = True
-        except CliError as e:
-            log.error("FAILED upload batch (%d path(s), parent %r): %s", len(rels), parent, e)
-            failed.update(rels)
 
     # 3) whole missing folders -> one CLI call per subtree (fast first mirror)
     covered = set()
@@ -1154,20 +1255,18 @@ def execute(actions, remote, local):
                 downloaded.update(subtree)
 
     # 4) per-file downloads into existing folders, grouped by remote parent
-    by_parent = {}
-    for kind, rel, payload in actions:
-        if kind == "dl" and rel not in covered and payload["type"] == "file":
-            by_parent.setdefault(rel.rsplit("/", 1)[0] if "/" in rel else "", []).append(rel)
-    for parent, rels in sorted(by_parent.items()):
-        todo = [r for r in rels if r not in covered]
-        if not todo:
-            continue
-        try:
-            download_files(parent, todo)
-            downloaded.update(todo)
-        except CliError as e:
-            log.error("FAILED download batch (%d path(s), parent %r): %s", len(todo), parent, e)
-            failed.update(todo)
+    download_actions = [
+        a for a in actions
+        if a[0] == "dl" and a[1] not in covered and a[2]["type"] == "file"
+    ]
+    download_batches = group_transfer_batches(download_actions)
+    if download_batches:
+        def do_download(parent, rels, locked):
+            download_files(parent, rels, locked=locked)
+        download_failed, download_done = run_transfer_batches(
+            download_batches, do_download, do_download, TRANSFERS)
+        failed.update(download_failed)
+        downloaded.update(download_done)
 
     # 5) conflicts: keep both versions
     for kind, rel, payload in actions:
@@ -1833,6 +1932,7 @@ def merge_touched_scopes(state):
 
 def audit_tick():
     """List one chunk; return True when the audit is complete."""
+    global WORKER_LIMIT, CLEAN_CHUNKS
     if not FAST_START or not AUDIT_PENDING or AUDIT_STATE is None:
         return True
     if AUDIT_STATE.complete:
@@ -1850,10 +1950,17 @@ def audit_tick():
             max_folders = min(AUDIT_CHUNK_FOLDERS, max(1, effective_workers() * 2))
             scan_remote_chunk(AUDIT_STATE, list_one, max_folders)
         AUDIT_STATE.error = None
+        CLEAN_CHUNKS += 1
+        if CLEAN_CHUNKS >= 3:
+            WORKER_LIMIT = adjust_worker_limit(WORKER_LIMIT, False, 3)
+            CLEAN_CHUNKS = 0
         write_health(**AUDIT_STATE.health(), audit_pending=True, cycle_reason="audit")
     except Exception as exc:  # noqa: BLE001 - keep cached view and hold deletes
         AUDIT_STATE.error = str(exc)
         AUDIT_STATE.probed = False
+        if is_rate_limit(str(exc)):
+            WORKER_LIMIT = adjust_worker_limit(WORKER_LIMIT, True, 0)
+            CLEAN_CHUNKS = 0
         write_health(audit_pending=True, audit_phase="error",
                      error=str(exc)[:300], cycle_reason="audit")
         log.warning("audit chunk failed: %s", str(exc)[:200])
@@ -2085,8 +2192,10 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
         write_health(status="ok", cycle_seconds=round(time.time() - t0, 1),
                      actions=0, holds=holds, failed=0, uploaded=0, downloaded=0, conflicts=0,
                      error="", mode=mode, audit_pending=AUDIT_PENDING,
+                     transfer_active=False,
                      remote_entries=len(remote), local_entries=len(local),
-                     state_records=len(state), interval=INTERVAL, cycle_reason=cycle_reason)
+                     state_records=len(state), interval=INTERVAL,
+                     effective_workers=effective_workers(), cycle_reason=cycle_reason)
         return True
 
     execute_started = time.monotonic()
@@ -2157,7 +2266,8 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
                  uploaded=uploaded_n, downloaded=len(downloaded), conflicts=conflicts_n,
                  remote_entries=len(remote), local_entries=len(local),
                  state_records=len(saved), interval=INTERVAL, error="", mode=mode,
-                 audit_pending=AUDIT_PENDING, cycle_reason=cycle_reason)
+                 audit_pending=AUDIT_PENDING, transfer_active=False,
+                 effective_workers=effective_workers(), cycle_reason=cycle_reason)
     return not failed
 
 

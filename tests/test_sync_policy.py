@@ -1,5 +1,7 @@
+import contextlib
 import importlib.util
 import pathlib
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -106,6 +108,59 @@ class AdaptiveWorkerTests(unittest.TestCase):
 
     def test_unknown_memory_uses_configured_value(self):
         self.assertEqual(proton_sync.adaptive_worker_limit(12, None), 12)
+
+    def test_rate_limit_lowers_and_clean_chunks_raise(self):
+        self.assertEqual(proton_sync.adjust_worker_limit(8, True, 0), 6)
+        self.assertEqual(proton_sync.adjust_worker_limit(6, False, 2), 6)
+        self.assertEqual(proton_sync.adjust_worker_limit(6, False, 3), 7)
+        self.assertEqual(proton_sync.adjust_worker_limit(16, False, 3), 16)
+
+
+class TransferSchedulerTests(unittest.TestCase):
+    def test_caps_concurrency_at_max_workers(self):
+        lock = threading.Lock()
+        active = 0
+        peak = 0
+
+        def fake(parent, rels, locked):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            time.sleep(0.02)
+            with lock:
+                active -= 1
+
+        batches = [
+            {"parent": str(i), "uploads": [f"dir-{i}/file-{i}"], "downloads": []}
+            for i in range(10)
+        ]
+        with patch.object(proton_sync, "cli_lock", return_value=contextlib.nullcontext()), patch.object(
+            proton_sync, "probe_session"
+        ), patch.object(proton_sync, "write_health"):
+            failed, done = proton_sync.run_transfer_batches(batches, fake, fake, 4)
+        self.assertLessEqual(peak, 4)
+        self.assertEqual(failed, set())
+        self.assertEqual(done, {f"dir-{i}/file-{i}" for i in range(10)})
+
+    def test_rate_limit_backs_off_transfer_limit(self):
+        old = proton_sync.TRANSFER_LIMIT
+        proton_sync.TRANSFER_LIMIT = 8
+
+        def fake(parent, rels, locked):
+            raise proton_sync.CliError("429 too many requests")
+
+        batches = [{"parent": "a", "uploads": ["a/one"], "downloads": []}]
+        try:
+            with patch.object(proton_sync, "cli_lock", return_value=contextlib.nullcontext()), patch.object(
+                proton_sync, "probe_session"
+            ), patch.object(proton_sync, "write_health"):
+                failed, done = proton_sync.run_transfer_batches(batches, fake, fake, 4)
+            self.assertEqual(failed, {"a/one"})
+            self.assertEqual(done, set())
+            self.assertEqual(proton_sync.TRANSFER_LIMIT, 6)
+        finally:
+            proton_sync.TRANSFER_LIMIT = old
 
 
 class HealthPhaseTests(unittest.TestCase):
