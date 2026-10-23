@@ -1,3 +1,12 @@
+## 3.16.14 — 2026-10-23
+
+- **The window leaves the welcome screen once the keyring unlocks.** The
+  startup sign-in probe runs at the same moment the keyring may still be
+  locked, so it can report "not signed in" even though the engine has since
+  unlocked and resumed. The window now re-checks the account when the engine
+  reports a keyring problem and again when the engine is healthy, instead of
+  waiting for the next launch.
+
 ## 3.16.13 — 2026-10-23
 
 - **No more false "session expired" after boot or resume.** The official CLI

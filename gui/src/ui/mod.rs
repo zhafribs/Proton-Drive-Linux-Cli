@@ -766,8 +766,17 @@ impl App {
             .error
             .as_deref()
             .is_some_and(|e| e.to_ascii_lowercase().contains("keyring"));
-        if keyring_issue && !self.logged_in() && self.identity_retry.is_none() {
-            self.identity_retry = Some(std::time::Instant::now() + Duration::from_secs(30));
+        // Also retry once the engine reports healthy again (it has just
+        // unlocked the keyring and is syncing): the first identity probe was
+        // answered while the keyring was still locked.
+        let engine_signed_in = matches!(health.status.as_str(), "ok" | "syncing");
+        let identity_ready = self.identity.as_ref().is_some_and(|i| i.error.is_none());
+        if (keyring_issue || (active && engine_signed_in))
+            && identity_ready
+            && !self.logged_in()
+            && self.identity_retry.is_none()
+        {
+            self.identity_retry = Some(Instant::now() + Duration::from_secs(15));
         }
         self.health = health;
         self.active = active;
