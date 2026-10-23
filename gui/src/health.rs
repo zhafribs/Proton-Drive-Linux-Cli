@@ -21,6 +21,20 @@ pub struct Health {
     pub local_entries: Option<u64>,
     pub state_records: Option<u64>,
     pub interval: Option<u64>,
+    pub cache_age: Option<u64>,
+    pub audit_pending: Option<bool>,
+    pub audit_done: Option<u64>,
+    pub audit_total: Option<u64>,
+    pub audit_phase: Option<String>,
+    pub audit_seconds: Option<f64>,
+    pub phase: Option<String>,
+    pub cycle_reason: Option<String>,
+    pub effective_workers: Option<u64>,
+    pub full_scan_seconds: Option<f64>,
+    pub transfer_active: Option<bool>,
+    pub transfer_done: Option<u64>,
+    pub transfer_total: Option<u64>,
+    pub transfer_bytes: Option<u64>,
 }
 
 pub fn read(path: &Path) -> Health {
@@ -179,6 +193,32 @@ mod tests {
         assert!(!line.contains("Next check"));
         let empty: Health = serde_json::from_str(r#"{"interval":0}"#).unwrap();
         assert_eq!(synced_line(&empty), "Waiting for the first check");
+    }
+
+    /// Fast-start telemetry is additive; the GUI must parse it without
+    /// changing the existing status behavior.
+    #[test]
+    fn parses_fast_start_health() {
+        let json = r#"{
+            "status": "ok",
+            "mode": "fast",
+            "cache_age": 120,
+            "audit_pending": true,
+            "audit_done": 420,
+            "audit_total": 1230,
+            "phase": "audit",
+            "cycle_reason": "startup",
+            "effective_workers": 12
+        }"#;
+        let h: Health = serde_json::from_str(json).unwrap();
+        assert_eq!(h.mode.as_deref(), Some("fast"));
+        assert_eq!(h.cache_age, Some(120));
+        assert_eq!(h.audit_pending, Some(true));
+        assert_eq!(h.audit_done, Some(420));
+        assert_eq!(h.audit_total, Some(1230));
+        assert_eq!(h.phase.as_deref(), Some("audit"));
+        assert_eq!(h.cycle_reason.as_deref(), Some("startup"));
+        assert_eq!(h.effective_workers, Some(12));
     }
 
     /// A lost keyring session is its own state: the engine is running fine,

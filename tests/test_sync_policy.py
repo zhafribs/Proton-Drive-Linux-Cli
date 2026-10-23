@@ -1,5 +1,6 @@
 import importlib.util
 import pathlib
+import time
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -104,6 +105,15 @@ class AdaptiveWorkerTests(unittest.TestCase):
 
     def test_unknown_memory_uses_configured_value(self):
         self.assertEqual(proton_sync.adaptive_worker_limit(12, None), 12)
+
+
+class HealthPhaseTests(unittest.TestCase):
+    def test_reports_phase_elapsed_and_extras(self):
+        started = time.monotonic() - 0.5
+        payload = proton_sync.health_phase("scan-remote", started, cycle_reason="startup")
+        self.assertEqual(payload["phase"], "scan-remote")
+        self.assertGreaterEqual(payload["phase_seconds"], 0.4)
+        self.assertEqual(payload["cycle_reason"], "startup")
 
 
 if __name__ == "__main__":

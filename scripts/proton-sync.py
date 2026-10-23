@@ -406,6 +406,16 @@ def excluded(rel):
     return any(fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(base, pat) for pat in EXCLUDE)
 
 
+def health_phase(name, started, **extra):
+    """Phase timing payload merged into health.json."""
+    payload = {
+        "phase": name,
+        "phase_seconds": round(max(0.0, time.monotonic() - started), 1),
+    }
+    payload.update(extra)
+    return payload
+
+
 def write_health(**kw):
     """Merge-update the telemetry file the GUI reads. Never breaks a cycle."""
     try:
@@ -1746,6 +1756,7 @@ def apply_scope(remote, rel):
 def run_once(dry_run=False, force_full=False, push_pending=None):
     LOCAL_ROOT.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
+    cycle_reason = "manual" if force_full else ("push" if push_pending else ("dry-run" if dry_run else "poll"))
     if not dry_run:
         write_health(status="syncing",
                      started=datetime.datetime.now().astimezone().isoformat(timespec="seconds"))
@@ -1837,12 +1848,18 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
         else:
             log.info("walk not cached (no fingerprint) - next cycle will walk again")
 
+    write_health(**health_phase("remote-scan", t0, cycle_reason=cycle_reason))
+
+    local_started = time.monotonic()
     local = scan_local()
     state = load_state()
+    write_health(**health_phase("local-scan", local_started, cycle_reason=cycle_reason))
     log.info("scan: %d remote / %d local / %d state records in %.0fs",
              len(remote), len(local), len(state), time.time() - t0)
 
+    plan_started = time.monotonic()
     actions, holds = plan_cycle(remote, local, state)
+    write_health(**health_phase("plan", plan_started, cycle_reason=cycle_reason))
     log.info("plan: %d action(s), %d hold(s)%s", len(actions), holds, "  [DRY RUN]" if dry_run else "")
     for kind, rel, _ in actions:
         log.info("  %-13s %s", kind.upper(), rel)
@@ -1857,10 +1874,12 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
                      actions=0, holds=holds, failed=0, uploaded=0, downloaded=0, conflicts=0,
                      error="", mode=mode,
                      remote_entries=len(remote), local_entries=len(local),
-                     state_records=len(state), interval=INTERVAL)
+                     state_records=len(state), interval=INTERVAL, cycle_reason=cycle_reason)
         return True
 
+    execute_started = time.monotonic()
     failed, downloaded, did_upload = execute(actions, remote, local)
+    write_health(**health_phase("execute", execute_started, cycle_reason=cycle_reason))
     if downloaded:
         apply_mtimes(downloaded, remote)   # before the local rescan, so state records them
 
@@ -1922,7 +1941,8 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
                  actions=len(actions), holds=holds, failed=len(failed),
                  uploaded=uploaded_n, downloaded=len(downloaded), conflicts=conflicts_n,
                  remote_entries=len(remote), local_entries=len(local),
-                 state_records=len(saved), interval=INTERVAL, error="", mode=mode)
+                 state_records=len(saved), interval=INTERVAL, error="", mode=mode,
+                 cycle_reason=cycle_reason)
     return not failed
 
 
