@@ -28,6 +28,8 @@ pub struct Health {
     pub audit_phase: Option<String>,
     pub audit_seconds: Option<f64>,
     pub audit_error: Option<String>,
+    pub phase_seconds: Option<f64>,
+    pub last_audit: Option<String>,
     pub phase: Option<String>,
     pub cycle_reason: Option<String>,
     pub effective_workers: Option<u64>,
@@ -52,6 +54,10 @@ impl Health {
 
     pub fn next_poll_dt(&self) -> Option<chrono::DateTime<chrono::FixedOffset>> {
         self.next_poll.as_deref().and_then(crate::util::parse_iso)
+    }
+
+    pub fn last_audit_dt(&self) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+        self.last_audit.as_deref().and_then(crate::util::parse_iso)
     }
 }
 
@@ -233,6 +239,18 @@ mod tests {
         assert_eq!(h.phase.as_deref(), Some("audit"));
         assert_eq!(h.cycle_reason.as_deref(), Some("startup"));
         assert_eq!(h.effective_workers, Some(12));
+    }
+
+    #[test]
+    fn cached_age_line_is_replaced_after_the_audit() {
+        let cached: Health =
+            serde_json::from_str(r#"{"status":"ok","cache_age":120}"#).unwrap();
+        assert!(synced_line(&cached).contains("Cached view \u{b7} 120s old"));
+        let checked: Health = serde_json::from_str(
+            r#"{"status":"ok","ts":"2026-10-20T00:30:02+08:00","cache_age":null}"#,
+        )
+        .unwrap();
+        assert!(synced_line(&checked).starts_with("Last checked"));
     }
 
     #[test]

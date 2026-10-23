@@ -563,11 +563,7 @@ def effective_workers():
     instead of swapping or getting OOM-killed mid-scan.
     """
     limit = max(1, WORKER_LIMIT if AUTO_WORKERS else SCAN_WORKERS)
-    avail = _mem_available_mb()
-    if avail is None:
-        return limit
-    budget = max(0, avail - max(MEM_RESERVE_MB, avail // 5))
-    return max(1, min(limit, budget // CLI_PROCESS_MB))
+    return adaptive_worker_limit(limit, _mem_available_mb())
 
 
 def scan_remote(start_rel=None, progress=None):
@@ -857,7 +853,10 @@ def hold_actions_for_audit(actions, remote, state):
             continue
         if kind == "up" and isinstance(payload, dict) and payload.get("type") == "file":
             prior = state.get(rel) if isinstance(state, dict) else None
-            if isinstance(prior, dict) and prior.get("r_mtime"):
+            known_remote = bool(isinstance(prior, dict) and prior.get("r_mtime"))
+            if not known_remote and isinstance(remote, dict) and rel in remote:
+                known_remote = True
+            if known_remote:
                 held += 1
                 continue
         allowed.append(action)
@@ -874,8 +873,10 @@ def group_transfer_batches(actions):
             continue
         parent = rel.rsplit("/", 1)[0] if "/" in rel else ""
         key = (kind, parent)
-        batch = batches.setdefault(key, {"parent": parent, "uploads": [], "downloads": []})
+        batch = batches.setdefault(
+            key, {"parent": parent, "uploads": [], "downloads": [], "bytes": 0})
         (batch["uploads"] if kind == "up" else batch["downloads"]).append(rel)
+        batch["bytes"] += int(payload.get("size") or 0)
     return list(batches.values())
 
 
@@ -888,6 +889,7 @@ def run_transfer_batches(batches, upload_fn, download_fn, max_workers):
     if not batches:
         return set(), set()
     total = sum(len(b.get("uploads", [])) + len(b.get("downloads", [])) for b in batches)
+    total_bytes = sum(int(b.get("bytes", 0)) for b in batches)
     failed, completed = set(), set()
     done = 0
     saw_rate = False
@@ -903,7 +905,7 @@ def run_transfer_batches(batches, upload_fn, download_fn, max_workers):
                 log.error("FAILED transfer batch (%d path(s)): %s", len(rels), error)
         done += len(rels)
         write_health(transfer_active=True, transfer_done=done,
-                     transfer_total=total, transfer_bytes=0)
+                     transfer_total=total, transfer_bytes=total_bytes)
 
     try:
         with cli_lock():
@@ -931,19 +933,19 @@ def run_transfer_batches(batches, upload_fn, download_fn, max_workers):
         failed.update(all_rels)
         log.error("FAILED transfer group (%d path(s)): %s", len(all_rels), e)
         write_health(transfer_active=False, transfer_done=done,
-                     transfer_total=total, transfer_bytes=0)
+                     transfer_total=total, transfer_bytes=total_bytes)
         return failed, completed
 
     if saw_rate:
-        TRANSFER_LIMIT = adjust_worker_limit(TRANSFER_LIMIT, True, 0)
+        TRANSFER_LIMIT = min(TRANSFERS, adjust_worker_limit(TRANSFER_LIMIT, True, 0))
         TRANSFER_CLEAN = 0
     else:
         TRANSFER_CLEAN += 1
         if TRANSFER_CLEAN >= 3:
-            TRANSFER_LIMIT = adjust_worker_limit(TRANSFER_LIMIT, False, 3)
+            TRANSFER_LIMIT = min(TRANSFERS, adjust_worker_limit(TRANSFER_LIMIT, False, 3))
             TRANSFER_CLEAN = 0
     write_health(transfer_active=False, transfer_done=done,
-                 transfer_total=total, transfer_bytes=0)
+                 transfer_total=total, transfer_bytes=total_bytes)
     return failed, completed
 
 
@@ -1895,6 +1897,7 @@ class AuditState:
         self.touched = set()
         self.error = None
         self.probed = False
+        self.probed_at = 0.0
 
     @property
     def complete(self):
@@ -1955,9 +1958,11 @@ def audit_tick():
         return True
     try:
         with cli_lock():
-            if not AUDIT_STATE.probed:
+            now = time.monotonic()
+            if not AUDIT_STATE.probed or now - AUDIT_STATE.probed_at > 60:
                 probe_session()
                 AUDIT_STATE.probed = True
+                AUDIT_STATE.probed_at = now
             def list_one(rpath):
                 _rpath, entries, err = _list_folder(rpath)
                 if err:
@@ -1999,19 +2004,32 @@ def finish_audit_if_ready():
         AUDIT_STATE = AuditState(REMOTE_ROOT)
         return False
     finished = AUDIT_STATE
-    FAST_VIEW = dict(finished.tree)
     fp = remote_fingerprint()
-    if fp is not None:
-        save_snapshot(FAST_VIEW, fp)
+    if fp is None:
+        finished.error = "could not read the remote fingerprint; deletes stay held"
+        write_health(audit_pending=True, audit_phase="error",
+                     audit_error=finished.error,
+                     error="Background check finished but its cache could not be saved.",
+                     cycle_reason="audit")
+        log.warning("audit finished but fingerprint is unavailable - keeping deletes held")
+        return False
+    FAST_VIEW = dict(finished.tree)
+    save_snapshot(FAST_VIEW, fp)
     AUDIT_PENDING = False
     AUDIT_STATE = None
     LAST_AUDIT = time.time()
     write_health(status="ok", mode="fast", audit_pending=False,
                  audit_done=finished.done, audit_total=finished.total,
                  audit_seconds=round(max(0.0, time.monotonic() - finished.started), 1),
-                 audit_phase="idle", audit_error="", phase="idle", cycle_reason="audit", error="")
+                 audit_phase="idle", audit_error="", cache_age=None,
+                 last_audit=datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+                 phase="idle", cycle_reason="audit", error="")
     log.info("audit complete: %d folders", finished.done)
     return True
+
+
+def cache_age_fields():
+    return {} if AUDIT_PENDING else {"cache_age": None}
 
 
 def audit_status_fields():
@@ -2029,10 +2047,10 @@ def maybe_start_periodic_audit():
         return False
     if time.time() - LAST_AUDIT < AUDIT_EVERY:
         return False
-    return begin_audit()
+    return begin_audit("periodic")
 
 
-def begin_audit():
+def begin_audit(reason="manual"):
     """Start (or restart) a background audit from the current cached view."""
     global AUDIT_PENDING, AUDIT_STATE
     if not FAST_START or FAST_VIEW is None:
@@ -2040,7 +2058,7 @@ def begin_audit():
     AUDIT_PENDING = True
     AUDIT_STATE = AuditState(REMOTE_ROOT)
     write_health(audit_pending=True, **audit_status_fields(), audit_done=0,
-                 audit_total=0, cycle_reason="manual", error="")
+                 audit_total=0, cycle_reason=reason, error="")
     return True
 
 
@@ -2095,6 +2113,11 @@ def fast_cycle_remote(push_pending):
                                                 PUSH.volume_id, PUSH.root_uid)
             if unknown:
                 log.debug("fast: %d push event(s) unresolvable in cache", unknown)
+            if "" in rels:
+                log.info("fast: root push event - falling back to a full walk")
+                if AUDIT_PENDING and AUDIT_STATE is not None:
+                    AUDIT_STATE.touched.add("")
+                return scan_remote(), "push-full"
             applied = 0
             for rel in rels:
                 apply_scope(remote, rel)
@@ -2114,6 +2137,7 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
     global FAST_VIEW, FAST_STARTED
     LOCAL_ROOT.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
+    remote_started = time.monotonic()
     cycle_reason = "manual" if force_full else ("push" if push_pending else ("dry-run" if dry_run else "poll"))
     if not dry_run:
         write_health(status="syncing",
@@ -2127,7 +2151,7 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
         fast_remote, fast_reason = fast_cycle_remote(push_pending)
         mode = "fast"
         cycle_reason = "startup" if not FAST_STARTED else (
-            "push" if fast_reason == "push" else "local"
+            "push" if fast_reason.startswith("push") else "local"
         )
 
     # smart cadence: push events decide first (targeted re-list of one folder),
@@ -2144,6 +2168,7 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
                 log.debug("push: %d event(s) unresolvable in snapshot", unknown)
             if "" in rels:
                 log.info("push: change at the volume root - falling back to a full walk")
+                mode, push_handled = "full", True
             elif rels:
                 log.info("push: %d folder change(s) in scope: %s",
                          len(push_pending), ", ".join(rels[:5]) + ("..." if len(rels) > 5 else ""))
@@ -2204,10 +2229,12 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
                 else:
                     log.info("push: fingerprint unavailable - snapshot left for the next peek")
     if mode == "full":
+        scan_started = time.monotonic()
         def scan_progress(done, total):
             write_health(phase="full-scan", audit_done=done, audit_total=total,
-                         audit_pending=FAST_START, cycle_reason=cycle_reason)
+                         audit_pending=AUDIT_PENDING, cycle_reason=cycle_reason)
         remote = scan_remote(progress=scan_progress)
+        write_health(full_scan_seconds=round(time.monotonic() - scan_started, 1))
         fp_after = remote_fingerprint()
         if fp_after is None and fp is not None:
             # transient size failure right after an expensive walk: cache the
@@ -2221,7 +2248,7 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
         else:
             log.info("walk not cached (no fingerprint) - next cycle will walk again")
 
-    write_health(**health_phase("remote-scan", t0, cycle_reason=cycle_reason))
+    write_health(**health_phase("remote-scan", remote_started, cycle_reason=cycle_reason))
 
     local_started = time.monotonic()
     local = scan_local()
@@ -2263,7 +2290,7 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
         write_health(status="ok", cycle_seconds=round(time.time() - t0, 1),
                      actions=0, holds=holds, failed=0, uploaded=0, downloaded=0, conflicts=0,
                      error="", mode=mode, audit_pending=AUDIT_PENDING,
-                     **audit_status_fields(), transfer_active=False,
+                     **audit_status_fields(), **cache_age_fields(), transfer_active=False,
                      remote_entries=len(remote), local_entries=len(local),
                      state_records=len(saved), interval=INTERVAL,
                      effective_workers=effective_workers(), cycle_reason=cycle_reason)
@@ -2337,8 +2364,9 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
                  uploaded=uploaded_n, downloaded=len(downloaded), conflicts=conflicts_n,
                  remote_entries=len(remote2), local_entries=len(local2),
                  state_records=len(saved), interval=INTERVAL, error="", mode=mode,
-                 audit_pending=AUDIT_PENDING, **audit_status_fields(), transfer_active=False,
-                 effective_workers=effective_workers(), cycle_reason=cycle_reason)
+                 audit_pending=AUDIT_PENDING, **audit_status_fields(), **cache_age_fields(),
+                 transfer_active=False, effective_workers=effective_workers(),
+                 cycle_reason=cycle_reason)
     return not failed
 
 
@@ -2535,7 +2563,8 @@ def loop_forever():
         audit_wait = (AUDIT_PENDING and AUDIT_STATE is not None
                       and not AUDIT_STATE.complete)
         if audit_wait:
-            deadline = time.time() + 1
+            wait_s = 30 if (AUDIT_STATE is not None and AUDIT_STATE.error) else 1
+            deadline = time.time() + wait_s
             write_health(interval=INTERVAL)
         elif retry_in > 0:
             deadline = time.time() + retry_in

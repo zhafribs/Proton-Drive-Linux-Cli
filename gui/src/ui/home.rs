@@ -50,6 +50,29 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                     };
                     ui.label(egui::RichText::new(note).size(12.0).weak());
                 }
+                if app.health.transfer_active == Some(true)
+                    && app.health.transfer_total.unwrap_or(0) > 0
+                {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Transferring {} / {} files...",
+                            app.health.transfer_done.unwrap_or(0),
+                            app.health.transfer_total.unwrap_or(0)
+                        ))
+                        .size(12.0)
+                        .weak(),
+                    );
+                }
+                if let Some(dt) = app.health.last_audit_dt() {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Last full check {}",
+                            util::rel_time(Some(dt))
+                        ))
+                        .size(12.0)
+                        .weak(),
+                    );
+                }
                 ui.add_space(10.0);
 
                 ui.horizontal(|ui| {

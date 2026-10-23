@@ -69,6 +69,13 @@ class AuditHoldTests(unittest.TestCase):
         self.assertEqual(allowed, actions)
         self.assertEqual(held, 0)
 
+    def test_holds_existing_remote_file_without_state(self):
+        remote = {"known.txt": {"uid": "u1", "type": "file", "size": 1, "mtime": "x"}}
+        actions = [("up", "known.txt", {"type": "file"})]
+        allowed, held = proton_sync.hold_actions_for_audit(actions, remote, {})
+        self.assertEqual(allowed, [])
+        self.assertEqual(held, 1)
+
     def test_allows_download_and_directory_upload(self):
         actions = [
             ("dl", "remote.txt", {"type": "file"}),
@@ -172,8 +179,10 @@ class TransferSchedulerTests(unittest.TestCase):
         self.assertEqual(done, {f"dir-{i}/file-{i}" for i in range(10)})
 
     def test_rate_limit_backs_off_transfer_limit(self):
-        old = proton_sync.TRANSFER_LIMIT
+        old_limit = proton_sync.TRANSFER_LIMIT
+        old_transfers = proton_sync.TRANSFERS
         proton_sync.TRANSFER_LIMIT = 8
+        proton_sync.TRANSFERS = 10
 
         def fake(parent, rels, locked):
             raise proton_sync.CliError("429 too many requests")
@@ -188,7 +197,8 @@ class TransferSchedulerTests(unittest.TestCase):
             self.assertEqual(done, set())
             self.assertEqual(proton_sync.TRANSFER_LIMIT, 6)
         finally:
-            proton_sync.TRANSFER_LIMIT = old
+            proton_sync.TRANSFER_LIMIT = old_limit
+            proton_sync.TRANSFERS = old_transfers
 
 
 class HealthPhaseTests(unittest.TestCase):
