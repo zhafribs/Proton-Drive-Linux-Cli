@@ -769,6 +769,71 @@ def detect_moves(remote, local, state, busy=frozenset()):
     return local_moves, remote_moves
 
 
+def snapshot_usable(snapshot, state):
+    """Whether the cached remote tree can be used for a fast-start cycle.
+
+    A cache without state would make every path look new, so it is rejected.
+    """
+    if not isinstance(snapshot, dict):
+        return False, "no snapshot"
+    if not isinstance(snapshot.get("tree"), dict):
+        return False, "invalid snapshot tree"
+    if not isinstance(snapshot.get("fp"), list) or "sig" not in snapshot:
+        return False, "invalid snapshot metadata"
+    if not isinstance(state, dict):
+        return False, "state unavailable"
+    if snapshot["tree"] and not state:
+        return False, "state empty"
+    return True, "ok"
+
+
+def hold_actions_for_audit(actions, remote, state):
+    """Filter actions that are unsafe while the remote cache is being audited.
+
+    Deletes, moves and conflicts wait. File edits whose remote existence was
+    known at the last sync also wait; brand-new local files/folders and
+    downloads are safe.
+    """
+    allowed = []
+    held = 0
+    for action in actions:
+        kind, rel, payload = action
+        if kind in ("trash_remote", "trash_local", "mv_remote", "mv_local", "conflict"):
+            held += 1
+            continue
+        if kind == "up" and isinstance(payload, dict) and payload.get("type") == "file":
+            prior = state.get(rel) if isinstance(state, dict) else None
+            if isinstance(prior, dict) and prior.get("r_mtime"):
+                held += 1
+                continue
+        allowed.append(action)
+    return allowed, held
+
+
+def group_transfer_batches(actions):
+    """Group file uploads/downloads into one CLI batch per parent and kind."""
+    batches = {}
+    for kind, rel, payload in actions:
+        if kind not in ("up", "dl"):
+            continue
+        if not isinstance(payload, dict) or payload.get("type") != "file":
+            continue
+        parent = rel.rsplit("/", 1)[0] if "/" in rel else ""
+        key = (kind, parent)
+        batch = batches.setdefault(key, {"parent": parent, "uploads": [], "downloads": []})
+        (batch["uploads"] if kind == "up" else batch["downloads"]).append(rel)
+    return list(batches.values())
+
+
+def adaptive_worker_limit(configured, available_mb):
+    """Cap scan workers by the configured limit and available RAM."""
+    limit = max(1, int(configured))
+    if available_mb is None:
+        return limit
+    budget = max(0, available_mb - max(MEM_RESERVE_MB, available_mb // 5))
+    return max(1, min(limit, budget // CLI_PROCESS_MB))
+
+
 def local_changed(l, s):
     return s.get("l_mtime_ns") is None or l["mtime_ns"] != s["l_mtime_ns"] or l["size"] != s.get("l_size")
 
