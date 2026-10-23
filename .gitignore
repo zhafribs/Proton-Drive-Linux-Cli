@@ -20,3 +20,6 @@ __pycache__/
 
 # Rust build artifacts
 gui/target/
+
+# Isolated git worktrees
+.worktrees/
