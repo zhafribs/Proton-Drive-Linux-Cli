@@ -14,25 +14,30 @@ setup, no Qt — the app and its sync runtime travel inside the AppImage.
 > Unofficial. Not affiliated with, endorsed by, sponsored or supported by
 > Proton AG. "Proton Drive" is a trademark of Proton AG.
 
-**Get it:** [`ProtonDrive-CLI-0.9.0-GUI-3.16.11-x86_64.AppImage`](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/latest)
+**Get it:** [`ProtonDrive-CLI-0.9.0-GUI-3.16.15-x86_64.AppImage`](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/latest)
 (≈80 MB · x86_64 · [all releases](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases))
 
 | Inside the file | Version |
 | --- | --- |
 | Proton Drive CLI — official, unmodified, SHA-512-verified at build | **0.9.0** (2026-10-05) |
-| Desktop app + folder-sync engine (this repo) | **3.16.11** |
+| Desktop app + folder-sync engine (this repo) | **3.16.15** |
 
 ## Start here
 
 1. Download the AppImage and make it executable once:
    ```bash
-   chmod +x ProtonDrive-CLI-0.9.0-GUI-3.16.11-x86_64.AppImage
+   chmod +x ProtonDrive-CLI-0.9.0-GUI-3.16.15-x86_64.AppImage
    ```
 2. Double-click it. Click **Sign in** — Proton's official login opens in a
    terminal (that's how their CLI does 2FA); the app picks the session up.
 3. Settings → pick your sync folder → **Save**. The first save installs the
    background sync service; from then on `~/ProtonDrive` mirrors your Drive
    and the tray icon watches it.
+
+> **Prefer the source build?** Every release page also has **Source code
+> (tar.gz)**. The full walkthrough — build the AppImage, or install natively
+> without an AppImage — is in
+> [Install from source](docs/INSTALL-FROM-SOURCE.md).
 
 Works on any x86_64 desktop with **glibc ≥ 2.28** (Debian 10 / Ubuntu 20.04 /
 Fedora 32 era or newer). If it won't start you're missing FUSE — Arch
@@ -42,9 +47,9 @@ Fedora 32 era or newer). If it won't start you're missing FUSE — Arch
 The upstream CLI is untouched — arguments pass straight through:
 
 ```bash
-./ProtonDrive-CLI-0.9.0-GUI-3.16.11-x86_64.AppImage --help
-./ProtonDrive-CLI-0.9.0-GUI-3.16.11-x86_64.AppImage auth login   # the app's sign-in
-./ProtonDrive-CLI-0.9.0-GUI-3.16.11-x86_64.AppImage filesystem list /
+./ProtonDrive-CLI-0.9.0-GUI-3.16.15-x86_64.AppImage --help
+./ProtonDrive-CLI-0.9.0-GUI-3.16.15-x86_64.AppImage auth login   # the app's sign-in
+./ProtonDrive-CLI-0.9.0-GUI-3.16.15-x86_64.AppImage filesystem list /
 ```
 
 `auth login`, `filesystem …`, `sharing …`, `photo timeline`, `takeout run …` —
@@ -126,15 +131,59 @@ SUBFOLDERS/EXCLUDE/INOTIFY/…` — settings live in
 
 ## Optional: menu entry
 
+**AppImage:** open **Settings → Add to my app menu**.
+
+**Native source build:** install the launcher and icon for the current user:
+
 ```bash
-./scripts/install-sync.sh    # the sync service (above)
-./scripts/install-gui.sh     # app menu entry + icon for the current user
-proton-drive-gui             # or search "Proton Drive" in your menu
+./scripts/install-gui.sh          # menu entry + icon
+./scripts/install-gui.sh remove   # undo
 ```
 
-No admin rights; works with the AppImage on Debian, Fedora and Arch. Inside
-the AppImage the app uses the runtime bundled in the file; running these
-repo scripts directly uses your distro's `python3` for the sync engine.
+The sync service is separate: `./scripts/install-sync.sh` installs it and
+`./scripts/install-sync.sh uninstall` removes it. No admin rights are needed.
+Running the AppImage uses the runtime bundled in the file; a native source
+build uses your distro's `python3` for the sync engine.
+
+## Install from source (tar.gz)
+
+Every release page includes a **Source code (tar.gz)** archive next to the
+AppImage. The short path to a locally built AppImage is:
+
+Install Rust with [rustup](https://rustup.rs/) if `cargo` is not already
+present, then install the build packages (Debian/Ubuntu names; Fedora and Arch
+equivalents are in the full guide):
+
+```bash
+sudo apt install build-essential wget curl python3 python3-pip \
+  librsvg2-bin file desktop-file-utils appstream
+```
+
+Download and extract the source archive, then build:
+
+```bash
+TAG=v0.9.0-gui3.16.15   # replace with the tag you downloaded
+wget -O proton-drive-src.tar.gz \
+  "https://github.com/zhafribs/Proton-Drive-Linux-Cli/archive/refs/tags/${TAG}.tar.gz"
+mkdir -p proton-drive-src
+tar -xzf proton-drive-src.tar.gz -C proton-drive-src --strip-components=1
+cd proton-drive-src
+./build.sh
+chmod +x dist/ProtonDrive-CLI-*-x86_64.AppImage
+./dist/ProtonDrive-CLI-*-x86_64.AppImage
+```
+
+Install FUSE if the AppImage asks for it: `libfuse2t64` on Ubuntu 24.04+ or
+`libfuse2` on older releases, `fuse-libs` on Fedora, `fuse2` on Arch. Or launch
+with `APPIMAGE_EXTRACT_AND_RUN=1`.
+
+`build.sh` downloads Proton's official CLI and verifies its SHA-512, builds the
+Rust GUI, and bundles a portable Python runtime — the result is the same
+self-contained AppImage as the release. The guide also covers a **native
+install without an AppImage**, per-distro prerequisites, updating, uninstall,
+and troubleshooting:
+
+**[Install from source (tar.gz) →](docs/INSTALL-FROM-SOURCE.md)**
 
 ## Build it yourself
 
@@ -148,10 +197,11 @@ repo scripts directly uses your distro's `python3` for the sync engine.
   published SHA-512s, written only by `check-upstream.sh`. `build.sh`
   **aborts** if the downloaded binary doesn't match, so you never trust a
   number typed by hand.
-* Build deps (nothing installed system-wide, no `sudo`): `bash`, `curl`/`wget`,
-  `python3` with pip (used only to *download* wheels), `rsvg-convert`
-  (`librsvg2-bin` / `librsvg`), optionally `desktop-file-validate` and
-  `appstreamcli`. First run fetches `appimagetool` into `tools/`.
+* Build deps (the build itself needs no root and installs nothing
+  system-wide): `bash`, `wget`, `python3` with pip (used only to *download*
+  wheels), `rsvg-convert` (`librsvg2-bin` / `librsvg`), optionally
+  `desktop-file-validate` and `appstreamcli`. First run fetches
+  `appimagetool` into `tools/`.
 * GUI glibc floor is pinned at build time via `cargo-zigbuild` (glibc 2.28);
   a plain `cargo build` is the local-dev fallback.
 
@@ -177,6 +227,7 @@ so. Local equivalent:
 
 ```
 build.sh               download -> verify -> build GUI -> package -> validate
+docs/INSTALL-FROM-SOURCE.md  source (tar.gz) build and native install guide
 upstream.lock          CLI version + Proton's SHA-512s (written by check-upstream.sh only)
 scripts/check-upstream.sh   refresh upstream.lock from proton.me (CI runs this)
 scripts/release-notes.sh    render release-notes.md.tmpl for the built artifacts
