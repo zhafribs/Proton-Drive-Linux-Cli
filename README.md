@@ -14,19 +14,19 @@ setup, no Qt — the app and its sync runtime travel inside the AppImage.
 > Unofficial. Not affiliated with, endorsed by, sponsored or supported by
 > Proton AG. "Proton Drive" is a trademark of Proton AG.
 
-**Get it:** [`ProtonDrive-CLI-0.9.0-GUI-3.16.15-x86_64.AppImage`](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/latest)
+**Get it:** [`ProtonDrive-CLI-0.9.0-GUI-3.16.16-x86_64.AppImage`](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/latest)
 (≈80 MB · x86_64 · [all releases](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases))
 
 | Inside the file | Version |
 | --- | --- |
 | Proton Drive CLI — official, unmodified, SHA-512-verified at build | **0.9.0** (2026-10-05) |
-| Desktop app + folder-sync engine (this repo) | **3.16.15** |
+| Desktop app + folder-sync engine (this repo) | **3.16.16** |
 
 ## Start here
 
 1. Download the AppImage and make it executable once:
    ```bash
-   chmod +x ProtonDrive-CLI-0.9.0-GUI-3.16.15-x86_64.AppImage
+   chmod +x ProtonDrive-CLI-0.9.0-GUI-3.16.16-x86_64.AppImage
    ```
 2. Double-click it. Click **Sign in** — Proton's official login opens in a
    terminal (that's how their CLI does 2FA); the app picks the session up.
@@ -47,9 +47,9 @@ Fedora 32 era or newer). If it won't start you're missing FUSE — Arch
 The upstream CLI is untouched — arguments pass straight through:
 
 ```bash
-./ProtonDrive-CLI-0.9.0-GUI-3.16.15-x86_64.AppImage --help
-./ProtonDrive-CLI-0.9.0-GUI-3.16.15-x86_64.AppImage auth login   # the app's sign-in
-./ProtonDrive-CLI-0.9.0-GUI-3.16.15-x86_64.AppImage filesystem list /
+./ProtonDrive-CLI-0.9.0-GUI-3.16.16-x86_64.AppImage --help
+./ProtonDrive-CLI-0.9.0-GUI-3.16.16-x86_64.AppImage auth login   # the app's sign-in
+./ProtonDrive-CLI-0.9.0-GUI-3.16.16-x86_64.AppImage filesystem list /
 ```
 
 `auth login`, `filesystem …`, `sharing …`, `photo timeline`, `takeout run …` —
@@ -109,9 +109,27 @@ window (940×780 default, no page ever scrolls sideways, size remembered).*
   it ever does, the Home screen says so and offers **Sign in again**.
 
 Tunables: `PROTON_SYNC_LOCAL/REMOTE/INTERVAL/FULL_EVERY/DELETES/WORKERS/
-SUBFOLDERS/EXCLUDE/INOTIFY/…` — settings live in
-`~/.config/proton-sync.conf` (edit by hand or in the app). Uninstall:
-`./scripts/install-sync.sh uninstall` (folder and state kept).
+SUBFOLDERS/EXCLUDE/INOTIFY/FAST_START/AUTO_WORKERS/TRANSFERS/AUDIT_EVERY/…` —
+settings live in `~/.config/proton-sync.conf` (edit by hand or in the app).
+Uninstall: `./scripts/install-sync.sh uninstall` (folder and state kept).
+
+### Fast start
+
+On a warm start the engine reads the last remote metadata snapshot, shows
+**Ready from cache** in about 0.1 s, and keeps syncing while a chunked
+background audit checks the cloud. Deletes and edits to existing files are
+held for that audit; new files still upload. When the audit finishes, held
+paths are reconciled and deletes resume. The first-ever start still has to
+walk the remote tree (≈90 s for 1,230 entries); the audit and progress make
+that visible, and a persistent metadata helper is the future fix if needed.
+
+**Settings → Performance** controls fast start, adaptive concurrency,
+transfer concurrency, **Run full check now**, and **Clear snapshot cache**.
+Defaults: 12 scan workers (RAM/rate-limited, ceiling 16), transfer concurrency
+4 (allowed 1–10), audit every 30 min, and no periodic audits when scheduled
+checks are Off. Benchmarks and the one-key rollback
+(`PROTON_SYNC_FAST_START=0`) are in
+[docs/performance/fast-start-sync.md](docs/performance/fast-start-sync.md).
 
 ### Good-to-know settings
 
@@ -162,7 +180,7 @@ sudo apt install build-essential wget curl python3 python3-pip \
 Download and extract the source archive, then build:
 
 ```bash
-TAG=v0.9.0-gui3.16.15   # replace with the tag you downloaded
+TAG=v0.9.0-gui3.16.16   # replace with the tag you downloaded
 wget -O proton-drive-src.tar.gz \
   "https://github.com/zhafribs/Proton-Drive-Linux-Cli/archive/refs/tags/${TAG}.tar.gz"
 mkdir -p proton-drive-src
