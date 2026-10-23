@@ -552,7 +552,7 @@ def effective_workers():
     return max(1, min(limit, budget // CLI_PROCESS_MB))
 
 
-def scan_remote(start_rel=None):
+def scan_remote(start_rel=None, progress=None):
     """Walk from START_REL (default REMOTE_ROOT) in parallel -> {relpath: node}
     for that subtree only ('' = root). relpaths stay absolute from REMOTE_ROOT
     so a subtree result merges straight into the cached full snapshot.
@@ -587,6 +587,11 @@ def scan_remote(start_rel=None):
                             rel_of[child_rpath] = child_rel
                             next_dirs.append(child_rpath)
                 pending = next_dirs   # next BFS round lists all of these in parallel
+                if progress is not None:
+                    try:
+                        progress(len(visited), len(visited) + len(pending))
+                    except Exception:
+                        log.debug("scan progress callback failed", exc_info=True)
     return tree
 
 
@@ -1762,6 +1767,127 @@ def apply_scope(remote, rel):
 
 # ------------------------------------------------------------------ fast start
 
+class AuditState:
+    """Breadth-first remote audit, split into small CLI-locked chunks."""
+
+    def __init__(self, root_rpath):
+        self.pending = [("", root_rpath)]
+        self.tree = {}
+        self.rel_of = {root_rpath: ""}
+        self.visited = set()
+        self.done = 0
+        self.total = 1
+        self.started = time.monotonic()
+        self.touched = set()
+        self.error = None
+        self.probed = False
+
+    @property
+    def complete(self):
+        return not self.pending and self.error is None
+
+    def next_chunk(self, list_folder, max_folders=AUDIT_CHUNK_FOLDERS):
+        if not self.pending:
+            return 0
+        batch = self.pending[:max_folders]
+        self.pending = self.pending[max_folders:]
+        workers = max(1, min(effective_workers(), len(batch)))
+        try:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                results = list(pool.map(lambda item: (item, list_folder(item[1])), batch))
+            for (rel, rpath), entries in results:
+                self.visited.add(rpath)
+                self.done += 1
+                children = (_children_nodes(rel, rpath, entries)
+                            if entries and isinstance(entries[0], dict) else entries)
+                for child_rel, child_rpath, node in children:
+                    self.tree[child_rel] = node
+                    if node["type"] == "dir" and child_rpath not in self.visited:
+                        self.rel_of[child_rpath] = child_rel
+                        self.pending.append((child_rel, child_rpath))
+                        self.total += 1
+        except Exception as exc:  # noqa: BLE001 - surfaced through audit_tick
+            self.pending = batch + self.pending   # retry this chunk next tick
+            self.error = str(exc)
+            raise
+        return len(batch)
+
+    def health(self):
+        return {
+            "audit_phase": "audit",
+            "audit_done": self.done,
+            "audit_total": self.total,
+            "audit_seconds": round(max(0.0, time.monotonic() - self.started), 1),
+        }
+
+
+def scan_remote_chunk(state, list_folder, max_folders):
+    return state.next_chunk(list_folder, max_folders)
+
+
+def merge_touched_scopes(state):
+    for rel in sorted(state.touched, key=lambda value: (value.count("/"), value)):
+        apply_scope(state.tree, rel)
+    state.touched.clear()
+
+
+def audit_tick():
+    """List one chunk; return True when the audit is complete."""
+    if not FAST_START or not AUDIT_PENDING or AUDIT_STATE is None:
+        return True
+    if AUDIT_STATE.complete:
+        return True
+    try:
+        with cli_lock():
+            if not AUDIT_STATE.probed:
+                probe_session()
+                AUDIT_STATE.probed = True
+            def list_one(rpath):
+                _rpath, entries, err = _list_folder(rpath)
+                if err:
+                    raise CliError(f"cannot list {rpath}: {err}")
+                return entries
+            max_folders = min(AUDIT_CHUNK_FOLDERS, max(1, effective_workers() * 2))
+            scan_remote_chunk(AUDIT_STATE, list_one, max_folders)
+        AUDIT_STATE.error = None
+        write_health(**AUDIT_STATE.health(), audit_pending=True, cycle_reason="audit")
+    except Exception as exc:  # noqa: BLE001 - keep cached view and hold deletes
+        AUDIT_STATE.error = str(exc)
+        AUDIT_STATE.probed = False
+        write_health(audit_pending=True, audit_phase="error",
+                     error=str(exc)[:300], cycle_reason="audit")
+        log.warning("audit chunk failed: %s", str(exc)[:200])
+        return False
+    return AUDIT_STATE.complete
+
+
+def finish_audit_if_ready():
+    global FAST_VIEW, AUDIT_PENDING, AUDIT_STATE
+    if AUDIT_STATE is None or not AUDIT_STATE.complete:
+        return False
+    try:
+        merge_touched_scopes(AUDIT_STATE)
+    except Exception as exc:  # noqa: BLE001 - keep the cached view
+        write_health(audit_pending=True, audit_phase="error",
+                     error=str(exc)[:300], cycle_reason="audit")
+        log.warning("audit merge failed (%s) - restarting audit", str(exc)[:200])
+        AUDIT_STATE = AuditState(REMOTE_ROOT)
+        return False
+    finished = AUDIT_STATE
+    FAST_VIEW = dict(finished.tree)
+    fp = remote_fingerprint()
+    if fp is not None:
+        save_snapshot(FAST_VIEW, fp)
+    AUDIT_PENDING = False
+    AUDIT_STATE = None
+    write_health(status="ok", mode="fast", audit_pending=False,
+                 audit_done=finished.done, audit_total=finished.total,
+                 audit_seconds=round(max(0.0, time.monotonic() - finished.started), 1),
+                 phase="idle", cycle_reason="audit", error="")
+    log.info("audit complete: %d folders", finished.done)
+    return True
+
+
 def start_fast_view():
     """Load the last snapshot for an immediate first cycle."""
     global FAST_VIEW, AUDIT_PENDING, AUDIT_STATE, FAST_STARTED
@@ -1775,7 +1901,7 @@ def start_fast_view():
         return False
     FAST_VIEW = snapshot_tree(snap)
     AUDIT_PENDING = True
-    AUDIT_STATE = None
+    AUDIT_STATE = AuditState(REMOTE_ROOT)
     FAST_STARTED = False
     age = max(0, int(time.time() - float(snap.get("ts") or 0)))
     write_health(status="ok", mode="fast", cache_age=age, audit_pending=True,
@@ -1904,7 +2030,10 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
                 else:
                     log.info("push: fingerprint unavailable - snapshot left for the next peek")
     if mode == "full":
-        remote = scan_remote()
+        def scan_progress(done, total):
+            write_health(phase="full-scan", audit_done=done, audit_total=total,
+                         audit_pending=FAST_START, cycle_reason=cycle_reason)
+        remote = scan_remote(progress=scan_progress)
         fp_after = remote_fingerprint()
         if fp_after is None and fp is not None:
             # transient size failure right after an expensive walk: cache the
@@ -1935,6 +2064,11 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
         holds += held
         write_health(audit_pending=True, holds=holds,
                      audit_phase="queued", cycle_reason=cycle_reason)
+        if AUDIT_STATE is not None:
+            for kind, rel, _payload in actions:
+                if kind in ("up", "trash_remote", "trash_local", "mv_remote", "mv_local"):
+                    parent = rel.rsplit("/", 1)[0] if "/" in rel else ""
+                    AUDIT_STATE.touched.add(parent)
     log.info("plan: %d action(s), %d hold(s)%s", len(actions), holds, "  [DRY RUN]" if dry_run else "")
     for kind, rel, _ in actions:
         log.info("  %-13s %s", kind.upper(), rel)
@@ -2195,6 +2329,16 @@ def loop_forever():
         except Exception as e:  # noqa: BLE001 - keep the loop alive, report it
             log.exception("cycle crashed")
             write_health(status="error", error=str(e)[:300], interval=INTERVAL)
+        reconcile = False
+        if AUDIT_PENDING:
+            if AUDIT_STATE is not None and not AUDIT_STATE.complete:
+                audit_tick()
+            if AUDIT_STATE is not None and AUDIT_STATE.complete:
+                reconcile = finish_audit_if_ready()
+        if reconcile:
+            # held edits become safe as soon as the audit is trusted; run one
+            # more cycle now instead of waiting for the next event/interval
+            continue
         push_pending = None   # events are hints; peek/PEEK_AGE are the backstop
         # Release the per-cycle trees (remote/local/state, often thousands of
         # small dicts) before idling: CPython otherwise keeps those arenas
@@ -2205,7 +2349,12 @@ def loop_forever():
         # sleep until the retry/interval expires, a local change, or a push event.
         # 0 = no scheduled checks: wait without a deadline (push events, local
         # edits and the wake file still break out); no next-check countdown.
-        if retry_in > 0:
+        audit_wait = (AUDIT_PENDING and AUDIT_STATE is not None
+                      and not AUDIT_STATE.complete)
+        if audit_wait:
+            deadline = time.time() + 1
+            write_health(interval=INTERVAL)
+        elif retry_in > 0:
             deadline = time.time() + retry_in
             write_health(next_poll=datetime.datetime.fromtimestamp(deadline)
                          .astimezone().isoformat(timespec="seconds"),
