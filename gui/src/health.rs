@@ -27,6 +27,7 @@ pub struct Health {
     pub audit_total: Option<u64>,
     pub audit_phase: Option<String>,
     pub audit_seconds: Option<f64>,
+    pub audit_error: Option<String>,
     pub phase: Option<String>,
     pub cycle_reason: Option<String>,
     pub effective_workers: Option<u64>,

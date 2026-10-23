@@ -3,6 +3,7 @@ import importlib.util
 import pathlib
 import threading
 import time
+import types
 import unittest
 from unittest.mock import patch
 
@@ -78,6 +79,24 @@ class AuditHoldTests(unittest.TestCase):
         self.assertEqual(held, 0)
 
 
+class HeldStateTests(unittest.TestCase):
+    def test_refresh_state_preserves_held_paths(self):
+        old = {"edit.txt": {
+            "l_mtime_ns": 1,
+            "l_size": 3,
+            "r_mtime": "2026-01-01T00:00:00Z",
+            "r_uid": "u1",
+        }}
+        remote = {"edit.txt": {
+            "uid": "u1", "type": "file", "size": 3, "mtime": "2026-01-01T00:00:00Z",
+        }}
+        local = {"edit.txt": {"type": "file", "mtime_ns": 2, "size": 4}}
+        saved = proton_sync.refresh_state(
+            remote, local, old, set(), set(), planned_local=local, preserve={"edit.txt"}
+        )
+        self.assertEqual(saved["edit.txt"], old["edit.txt"])
+
+
 class TransferBatchTests(unittest.TestCase):
     def test_groups_uploads_by_parent(self):
         actions = [
@@ -114,6 +133,15 @@ class AdaptiveWorkerTests(unittest.TestCase):
         self.assertEqual(proton_sync.adjust_worker_limit(6, False, 2), 6)
         self.assertEqual(proton_sync.adjust_worker_limit(6, False, 3), 7)
         self.assertEqual(proton_sync.adjust_worker_limit(16, False, 3), 16)
+
+
+class RegressionGuardTests(unittest.TestCase):
+    def test_worker_and_transfer_limits_stay_safe(self):
+        self.assertGreaterEqual(proton_sync.SCAN_WORKERS, 1)
+        self.assertLessEqual(proton_sync.SCAN_WORKERS, 16)
+        self.assertGreaterEqual(proton_sync.TRANSFERS, 1)
+        self.assertLessEqual(proton_sync.TRANSFERS, 10)
+        self.assertGreaterEqual(proton_sync.AUDIT_CHUNK_FOLDERS, 1)
 
 
 class TransferSchedulerTests(unittest.TestCase):
@@ -229,6 +257,19 @@ class FastViewTests(unittest.TestCase):
         remote, reason = proton_sync.fast_cycle_remote(None)
         self.assertIn("a.txt", remote)
         self.assertEqual(reason, "fast")
+
+    def test_push_scope_is_queued_for_the_audit_swap(self):
+        proton_sync.FAST_VIEW = {"a/x.txt": {"uid": "u1", "type": "file", "size": 1, "mtime": ""}}
+        proton_sync.AUDIT_PENDING = True
+        state = proton_sync.AuditState("/my-files")
+        proton_sync.AUDIT_STATE = state
+        push = types.SimpleNamespace(volume_id="v", root_uid="r")
+        with patch.object(proton_sync, "PUSH", push), patch.object(
+            proton_sync, "resolve_push_scopes", return_value=(["a"], 0)
+        ), patch.object(proton_sync, "apply_scope"):
+            _remote, reason = proton_sync.fast_cycle_remote({"parent"})
+        self.assertEqual(reason, "push")
+        self.assertEqual(state.touched, {"a"})
 
 
 if __name__ == "__main__":

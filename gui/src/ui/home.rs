@@ -43,13 +43,12 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                 };
                 ui.label(egui::RichText::new(sub).size(14.0).weak());
                 if app.health.audit_pending == Some(true) {
-                    ui.label(
-                        egui::RichText::new(
-                            "Deletes and edits to existing files are held until the background check finishes.",
-                        )
-                        .size(12.0)
-                        .weak(),
-                    );
+                    let note = if app.health.audit_phase.as_deref() == Some("error") {
+                        "Background check failed - deletes and existing-file edits stay held for safety."
+                    } else {
+                        "Deletes and edits to existing files are held until the background check finishes."
+                    };
+                    ui.label(egui::RichText::new(note).size(12.0).weak());
                 }
                 ui.add_space(10.0);
 

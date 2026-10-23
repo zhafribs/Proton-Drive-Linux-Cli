@@ -73,11 +73,32 @@ class AuditFailureTests(unittest.TestCase):
             proton_sync, "scan_remote_chunk", side_effect=proton_sync.CliError("boom")
         ), patch.object(
             proton_sync, "write_health"
-        ):
+        ) as write_health:
             complete = proton_sync.audit_tick()
             self.assertFalse(complete)
             self.assertTrue(proton_sync.AUDIT_PENDING)
             self.assertEqual(state.error, "boom")
+            self.assertEqual(write_health.call_args.kwargs["audit_error"], "boom")
+
+
+class ScopeRefreshTests(unittest.TestCase):
+    def test_root_scope_refresh_is_supported(self):
+        remote = {
+            "old.txt": {"uid": "old", "type": "file", "size": 1, "mtime": "2026-01-01T00:00:00Z"},
+            "old-folder": {"uid": "olddir", "type": "dir", "size": 0, "mtime": ""},
+        }
+        entries = [{
+            "uid": "new",
+            "type": "file",
+            "name": {"ok": True, "value": "new.txt"},
+            "modificationTime": "2026-01-02T00:00:00Z",
+            "activeRevision": {"claimedSize": 2},
+        }]
+        with patch.object(proton_sync, "_list_folder", return_value=("/my-files", entries, None)):
+            proton_sync.apply_scope(remote, "")
+        self.assertIn("new.txt", remote)
+        self.assertNotIn("old.txt", remote)
+        self.assertNotIn("old-folder", remote)
 
 
 class AuditFinishTests(unittest.TestCase):

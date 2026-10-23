@@ -376,9 +376,21 @@ def cli(args, as_json=False, timeout=None, locked=True):
     return p.stdout
 
 
-def cli_transfer(args, locked=True):
+def cli_transfer(args, locked=True, retries=0):
     """Run a transfer command and echo its summary lines into the log."""
-    out = cli(args, locked=locked)
+    attempt = 0
+    while True:
+        try:
+            out = cli(args, locked=locked)
+            break
+        except CliError as e:
+            if attempt >= retries or session_lost(str(e)):
+                raise
+            attempt += 1
+            delay = 2 * attempt
+            log.warning("transfer failed (%s) - retrying in %ds (%d/%d)",
+                        str(e)[:160], delay, attempt, retries)
+            time.sleep(delay)
     for line in out.splitlines():
         s = line.strip()
         if s:
@@ -1084,7 +1096,8 @@ def download_folder(rel):
     """Download a whole remote subtree whose local folder does not exist yet."""
     parent_local = LOCAL_ROOT / (rel.rsplit("/", 1)[0] if "/" in rel else "")
     parent_local.mkdir(parents=True, exist_ok=True)
-    cli_transfer(["fs", "download", remote_path(rel), str(parent_local), "-f", "remove", "-d", "merge"])
+    cli_transfer(["fs", "download", remote_path(rel), str(parent_local), "-f", "remove", "-d", "merge"],
+                 retries=1)
     log.info("DOWNLOAD dir  %s/ (whole subtree)", rel)
 
 
@@ -1092,7 +1105,7 @@ def download_files(parent, rels, locked=True):
     target = LOCAL_ROOT / parent if parent else LOCAL_ROOT
     target.mkdir(parents=True, exist_ok=True)
     cli_transfer(["fs", "download", *[remote_path(r) for r in rels], str(target),
-                  "-f", "remove", "-d", "merge"], locked=locked)
+                  "-f", "remove", "-d", "merge"], locked=locked, retries=2)
     for r in rels:
         log.info("DOWNLOAD %s", r)
 
@@ -1101,7 +1114,7 @@ def upload_batch(parent, rels, tree, created, locked=True):
     ensure_remote_dir(parent, tree, created, locked=locked)
     cli_transfer(["fs", "upload", "-f", "create-new-revision", "-d", "merge",
                   *[str(LOCAL_ROOT / r) for r in rels], remote_parent(rels[0])],
-                 locked=locked)
+                 locked=locked, retries=2)
     for r in rels:
         log.info("UPLOAD %s", r)
 
@@ -1303,7 +1316,8 @@ def execute(actions, remote, local):
 
 # ------------------------------------------------------------------- state
 
-def refresh_state(remote, local, old_state, failed, acted, planned_local=None, downloaded=None):
+def refresh_state(remote, local, old_state, failed, acted, planned_local=None, downloaded=None,
+                  preserve=None):
     """
     Record the observed reality for every trustworthy path.
     * failed paths keep their previous record so the exact same action retries
@@ -1320,12 +1334,13 @@ def refresh_state(remote, local, old_state, failed, acted, planned_local=None, d
       nulled so an old deletion never fires if the user enables them later
     """
     downloaded = downloaded or set()
+    preserve = preserve or set()
     if planned_local is None:
         planned_local = local
     new_state = {}
     for rel in sorted(set(remote) | set(local)):
         o = old_state.get(rel)
-        if rel in failed:
+        if rel in failed or rel in preserve:
             if o is not None:
                 new_state[rel] = o
             continue
@@ -1793,8 +1808,6 @@ def apply_scope(remote, rel):
     walk - a partial refresh must never leave the snapshot silently
     inconsistent. A definitively vanished target drops its subtree
     (plan_cycle then trash-deletes locally, like any cloud deletion)."""
-    if not rel:
-        raise CliError("root refresh must run as a full walk")
     rpath = remote_path(rel)
     _, entries, err = _list_folder(rpath)
     if err is not None:
@@ -1805,7 +1818,7 @@ def apply_scope(remote, rel):
             return "dropped"
         raise CliError(f"cannot list {rpath}: {err}")
 
-    prefix = rel + "/"
+    prefix = rel + "/" if rel else ""
     fresh = {}                                   # child name -> (child_rel, child_rpath, node)
     for child_rel, child_rpath, node in _children_nodes(rel, rpath, entries):
         fresh[child_rel.rsplit("/", 1)[-1]] = (child_rel, child_rpath, node)
@@ -1919,6 +1932,7 @@ class AuditState:
             "audit_done": self.done,
             "audit_total": self.total,
             "audit_seconds": round(max(0.0, time.monotonic() - self.started), 1),
+            "audit_error": "",
         }
 
 
@@ -1964,7 +1978,8 @@ def audit_tick():
             WORKER_LIMIT = adjust_worker_limit(WORKER_LIMIT, True, 0)
             CLEAN_CHUNKS = 0
         write_health(audit_pending=True, audit_phase="error",
-                     error=str(exc)[:300], cycle_reason="audit")
+                     audit_error=str(exc)[:300], error=str(exc)[:300],
+                     cycle_reason="audit")
         log.warning("audit chunk failed: %s", str(exc)[:200])
         return False
     return AUDIT_STATE.complete
@@ -1978,7 +1993,8 @@ def finish_audit_if_ready():
         merge_touched_scopes(AUDIT_STATE)
     except Exception as exc:  # noqa: BLE001 - keep the cached view
         write_health(audit_pending=True, audit_phase="error",
-                     error=str(exc)[:300], cycle_reason="audit")
+                     audit_error=str(exc)[:300], error=str(exc)[:300],
+                     cycle_reason="audit")
         log.warning("audit merge failed (%s) - restarting audit", str(exc)[:200])
         AUDIT_STATE = AuditState(REMOTE_ROOT)
         return False
@@ -1993,9 +2009,17 @@ def finish_audit_if_ready():
     write_health(status="ok", mode="fast", audit_pending=False,
                  audit_done=finished.done, audit_total=finished.total,
                  audit_seconds=round(max(0.0, time.monotonic() - finished.started), 1),
-                 audit_phase="idle", phase="idle", cycle_reason="audit", error="")
+                 audit_phase="idle", audit_error="", phase="idle", cycle_reason="audit", error="")
     log.info("audit complete: %d folders", finished.done)
     return True
+
+
+def audit_status_fields():
+    if not AUDIT_PENDING:
+        return {"audit_phase": "idle", "audit_error": ""}
+    if AUDIT_STATE is not None and AUDIT_STATE.error:
+        return {"audit_phase": "error", "audit_error": str(AUDIT_STATE.error)[:300]}
+    return {"audit_phase": "queued", "audit_error": ""}
 
 
 def maybe_start_periodic_audit():
@@ -2015,7 +2039,7 @@ def begin_audit():
         return False
     AUDIT_PENDING = True
     AUDIT_STATE = AuditState(REMOTE_ROOT)
-    write_health(audit_pending=True, audit_phase="queued", audit_done=0,
+    write_health(audit_pending=True, **audit_status_fields(), audit_done=0,
                  audit_total=0, cycle_reason="manual", error="")
     return True
 
@@ -2054,7 +2078,7 @@ def start_fast_view():
     FAST_STARTED = False
     age = max(0, int(time.time() - float(snap.get("ts") or 0)))
     write_health(status="ok", mode="fast", cache_age=age, audit_pending=True,
-                 audit_phase="queued", audit_done=0, audit_total=0,
+                 **audit_status_fields(), audit_done=0, audit_total=0,
                  cycle_reason="startup", error="")
     log.info("fast start from cache (%ds old, %d entries); audit pending",
              age, len(FAST_VIEW))
@@ -2073,9 +2097,10 @@ def fast_cycle_remote(push_pending):
                 log.debug("fast: %d push event(s) unresolvable in cache", unknown)
             applied = 0
             for rel in rels:
-                if rel:
-                    apply_scope(remote, rel)
-                    applied += 1
+                apply_scope(remote, rel)
+                if AUDIT_PENDING and AUDIT_STATE is not None:
+                    AUDIT_STATE.touched.add(rel)
+                applied += 1
             if applied:
                 reason = "push"
         except CliError as e:
@@ -2208,11 +2233,14 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
     plan_started = time.monotonic()
     actions, holds = plan_cycle(remote, local, state)
     write_health(**health_phase("plan", plan_started, cycle_reason=cycle_reason))
+    held_paths = set()
     if AUDIT_PENDING:
+        planned_actions = actions
         actions, held = hold_actions_for_audit(actions, remote, state)
         holds += held
+        held_paths = {a[1] for a in planned_actions if a not in actions}
         write_health(audit_pending=True, holds=holds,
-                     audit_phase="queued", cycle_reason=cycle_reason)
+                     **audit_status_fields(), cycle_reason=cycle_reason)
         if AUDIT_STATE is not None:
             for kind, rel, _payload in actions:
                 if kind in ("up", "trash_remote", "trash_local", "mv_remote", "mv_local"):
@@ -2226,7 +2254,8 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
         return True
 
     if not actions:
-        save_state(refresh_state(remote, local, state, set(), set()))
+        saved = refresh_state(remote, local, state, set(), set(), preserve=held_paths)
+        save_state(saved)
         log.info("cycle done: in sync")
         if fast_remote is not None:
             FAST_VIEW = dict(remote)
@@ -2234,9 +2263,9 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
         write_health(status="ok", cycle_seconds=round(time.time() - t0, 1),
                      actions=0, holds=holds, failed=0, uploaded=0, downloaded=0, conflicts=0,
                      error="", mode=mode, audit_pending=AUDIT_PENDING,
-                     transfer_active=False,
+                     **audit_status_fields(), transfer_active=False,
                      remote_entries=len(remote), local_entries=len(local),
-                     state_records=len(state), interval=INTERVAL,
+                     state_records=len(saved), interval=INTERVAL,
                      effective_workers=effective_workers(), cycle_reason=cycle_reason)
         return True
 
@@ -2295,7 +2324,7 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
         if fp2 is not None:
             save_snapshot(remote2, fp2)            # keep the cached view in step
     saved = refresh_state(remote2, local2, state, failed, {a[1] for a in actions},
-                          planned_local=local, downloaded=downloaded)
+                          planned_local=local, downloaded=downloaded, preserve=held_paths)
     save_state(saved)
     if fast_remote is not None:
         FAST_VIEW = dict(remote2)
@@ -2306,9 +2335,9 @@ def run_once(dry_run=False, force_full=False, push_pending=None):
     write_health(status="ok", cycle_seconds=round(time.time() - t0, 1),
                  actions=len(actions), holds=holds, failed=len(failed),
                  uploaded=uploaded_n, downloaded=len(downloaded), conflicts=conflicts_n,
-                 remote_entries=len(remote), local_entries=len(local),
+                 remote_entries=len(remote2), local_entries=len(local2),
                  state_records=len(saved), interval=INTERVAL, error="", mode=mode,
-                 audit_pending=AUDIT_PENDING, transfer_active=False,
+                 audit_pending=AUDIT_PENDING, **audit_status_fields(), transfer_active=False,
                  effective_workers=effective_workers(), cycle_reason=cycle_reason)
     return not failed
 
