@@ -554,6 +554,34 @@ fn workers_enabled(auto_workers: bool) -> bool {
     !auto_workers
 }
 
+fn number_combo(
+    ui: &mut egui::Ui,
+    id_salt: &str,
+    value: &mut i32,
+    range: std::ops::RangeInclusive<i32>,
+    enabled: bool,
+    hover: &str,
+) {
+    // Clamp in place so the saved draft equals what the dropdown shows.
+    *value = clamp_to_range(*value, range.clone());
+    let selected = number_display(*value, range.clone());
+    let response = ui
+        .add_enabled_ui(enabled, |ui| {
+            egui::ComboBox::from_id_salt(id_salt)
+                .selected_text(selected)
+                .show_ui(ui, |ui| {
+                    for option in number_options(range.clone()) {
+                        ui.selectable_value(value, option, number_display(option, range.clone()));
+                    }
+                })
+                .response
+        })
+        .inner;
+    if !hover.is_empty() {
+        response.on_hover_text(hover);
+    }
+}
+
 fn performance_card(app: &mut App, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Performance"), |ui| {
         let mut fast = app.draft.fast_start;
@@ -578,15 +606,24 @@ fn performance_card(app: &mut App, ui: &mut egui::Ui) {
         }
         ui.horizontal(|ui| {
             ui.label("Scan workers");
-            ui.add_enabled(
-                !app.draft.auto_workers,
-                egui::DragValue::new(&mut app.draft.workers).range(1..=16),
-            )
-            .on_hover_text("Raw ceiling used when adaptive scans are off.");
+            number_combo(
+                ui,
+                "scan-workers",
+                &mut app.draft.workers,
+                WORKERS_RANGE,
+                workers_enabled(app.draft.auto_workers),
+                "Raw ceiling used when adaptive scans are off.",
+            );
             ui.add_space(24.0);
             ui.label("Transfer concurrency");
-            ui.add(egui::DragValue::new(&mut app.draft.transfers).range(1..=10))
-                .on_hover_text("Independent parent folders transferred at the same time.");
+            number_combo(
+                ui,
+                "transfer-concurrency",
+                &mut app.draft.transfers,
+                TRANSFERS_RANGE,
+                true,
+                "Independent parent folders transferred at the same time.",
+            );
         });
         ui.add_space(8.0);
         ui.horizontal(|ui| {
@@ -819,14 +856,18 @@ fn fine_tuning_card(app: &mut App, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Fine-tuning"), |ui| {
         ui.horizontal(|ui| {
             ui.label("Parallel connections");
-            ui.add(egui::DragValue::new(&mut app.draft.workers).range(1..=16))
-                .on_hover_text(
-                    "Ceiling for parallel CLI calls. The engine uses fewer \
-                     automatically when memory is tight.",
-                );
+            number_combo(
+                ui,
+                "parallel-connections",
+                &mut app.draft.workers,
+                WORKERS_RANGE,
+                workers_enabled(app.draft.auto_workers),
+                "Ceiling for parallel CLI calls. The engine uses fewer \
+                 automatically when memory is tight.",
+            );
             ui.add_space(24.0);
             ui.label("Retries per folder");
-            ui.add(egui::DragValue::new(&mut app.draft.retries).range(1..=10));
+            number_combo(ui, "retries-per-folder", &mut app.draft.retries, RETRIES_RANGE, true, "");
         });
     });
 }
