@@ -1,3 +1,14 @@
+## 3.16.17 — 2026-10-24
+
+- **Settings numbers are dropdowns.** Scan workers, Transfer concurrency,
+  Parallel connections and Retries per folder are picked from a list instead
+  of dragged. Every value in range is offered, an out-of-range value already
+  in the config clamps to the nearest valid choice, and the two cards that
+  edit the same setting stay in step (both grey out while adaptive scans is
+  on).
+- **Tooltips on greyed rows.** Hovering a worker row while adaptive scans is
+  on now explains what the setting does instead of showing nothing.
+
 ## 3.16.16 — 2026-10-24
 
 - **Fast start on a warm machine.** The engine now loads the last remote
