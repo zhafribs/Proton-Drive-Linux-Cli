@@ -578,7 +578,11 @@ fn number_combo(
         })
         .inner;
     if !hover.is_empty() {
-        response.on_hover_text(hover);
+        if enabled {
+            response.on_hover_text(hover);
+        } else {
+            response.on_disabled_hover_text(hover);
+        }
     }
 }
 

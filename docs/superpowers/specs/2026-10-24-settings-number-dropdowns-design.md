@@ -37,8 +37,13 @@ merged, and the push to `main` triggers CI to publish `v0.9.0-gui3.16.16`.
   range, enabled, hover)` — builds the `ComboBox`, clamps out-of-range values on
   render (stale config like `99` shows the top entry), and keeps the existing
   hover text. Only `settings.rs` needs it, so it does not go in `widgets.rs`.
-- **Adaptive behaviour is unchanged:** Scan workers / Parallel connections stay
-  greyed out while `auto_workers` is on (`ui.add_enabled`).
+- **Adaptive behaviour now greys out both workers rows:** Scan workers was
+  already disabled while `auto_workers` is on, and Parallel connections in
+  Fine-tuning is now disabled too — the engine ignores that value when
+  `PROTON_SYNC_AUTO_WORKERS=1`, and both rows write `PROTON_SYNC_WORKERS`, so
+  they must look the same. Built with `ui.add_enabled_ui` (egui 0.37's
+  `ComboBox` has no `impl Widget`, so it cannot be passed to `ui.add_enabled`);
+  the greyed rows keep their tooltip via `on_disabled_hover_text`.
 - **No engine or config change:** keys, ranges, defaults (`WORKERS=12`,
   `TRANSFERS=4`, `RETRIES=3`), the save path, and `parse_transfers` stay as they
   are. Existing combo ids (`interval`, `theme`, `ui_scale`) stay untouched.
