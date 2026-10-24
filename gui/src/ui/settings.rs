@@ -534,6 +534,26 @@ fn how_often_card(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
+const WORKERS_RANGE: std::ops::RangeInclusive<i32> = 1..=16;
+const TRANSFERS_RANGE: std::ops::RangeInclusive<i32> = 1..=10;
+const RETRIES_RANGE: std::ops::RangeInclusive<i32> = 1..=10;
+
+fn clamp_to_range(value: i32, range: std::ops::RangeInclusive<i32>) -> i32 {
+    value.clamp(*range.start(), *range.end())
+}
+
+fn number_display(value: i32, range: std::ops::RangeInclusive<i32>) -> String {
+    clamp_to_range(value, range).to_string()
+}
+
+fn number_options(range: std::ops::RangeInclusive<i32>) -> Vec<i32> {
+    range.collect()
+}
+
+fn workers_enabled(auto_workers: bool) -> bool {
+    !auto_workers
+}
+
 fn performance_card(app: &mut App, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Performance"), |ui| {
         let mut fast = app.draft.fast_start;
@@ -955,5 +975,45 @@ mod tests {
         assert_eq!(values.get("PROTON_SYNC_FAST_START").map(String::as_str), Some("1"));
         assert_eq!(values.get("PROTON_SYNC_AUTO_WORKERS").map(String::as_str), Some("1"));
         assert_eq!(values.get("PROTON_SYNC_TRANSFERS").map(String::as_str), Some("4"));
+    }
+
+    #[test]
+    fn clamps_values_to_range() {
+        assert_eq!(clamp_to_range(99, 1..=16), 16);
+        assert_eq!(clamp_to_range(0, 1..=16), 1);
+        assert_eq!(clamp_to_range(12, 1..=16), 12);
+        assert_eq!(clamp_to_range(99, 1..=10), 10);
+        assert_eq!(clamp_to_range(0, 1..=10), 1);
+    }
+
+    #[test]
+    fn ranges_match_spec() {
+        assert_eq!(*WORKERS_RANGE.start(), 1);
+        assert_eq!(*WORKERS_RANGE.end(), 16);
+        assert_eq!(*TRANSFERS_RANGE.start(), 1);
+        assert_eq!(*TRANSFERS_RANGE.end(), 10);
+        assert_eq!(*RETRIES_RANGE.start(), 1);
+        assert_eq!(*RETRIES_RANGE.end(), 10);
+    }
+
+    #[test]
+    fn display_shows_saved_value() {
+        assert_eq!(number_display(12, WORKERS_RANGE), "12");
+        assert_eq!(number_display(4, TRANSFERS_RANGE), "4");
+        assert_eq!(number_display(99, TRANSFERS_RANGE), "10");
+        assert_eq!(number_display(0, RETRIES_RANGE), "1");
+    }
+
+    #[test]
+    fn options_cover_every_integer() {
+        assert_eq!(number_options(WORKERS_RANGE), (1..=16).collect::<Vec<i32>>());
+        assert_eq!(number_options(TRANSFERS_RANGE), (1..=10).collect::<Vec<i32>>());
+        assert_eq!(number_options(RETRIES_RANGE), (1..=10).collect::<Vec<i32>>());
+    }
+
+    #[test]
+    fn workers_enabled_follows_adaptive() {
+        assert!(!workers_enabled(true));
+        assert!(workers_enabled(false));
     }
 }
