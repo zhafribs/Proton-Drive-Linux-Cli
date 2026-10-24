@@ -51,7 +51,7 @@ fn number_options(range: std::ops::RangeInclusive<i32>) -> Vec<i32>;
 fn workers_enabled(auto_workers: bool) -> bool;
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to the existing `mod tests` in `gui/src/ui/settings.rs`:
 
@@ -97,12 +97,12 @@ fn workers_enabled_follows_adaptive() {
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test --manifest-path gui/Cargo.toml settings::tests`
 Expected: compilation error — `cannot find function clamp_to_range` / `cannot find value WORKERS_RANGE` (Rust tests fail at compile time when the symbol is missing).
 
-- [ ] **Step 3: Implement the constants and four functions**
+- [x] **Step 3: Implement the constants and four functions**
 
 Add just above `fn performance_card` in `gui/src/ui/settings.rs`. Bodies are fixed by the signatures and tests:
 
@@ -128,12 +128,12 @@ fn workers_enabled(auto_workers: bool) -> bool {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test --manifest-path gui/Cargo.toml`
 Expected: `test result: ok` — 49 existing tests plus the 5 new ones (54 total), 0 failures.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs/superpowers/specs/2026-10-24-settings-number-dropdowns-design.md gui/src/ui/settings.rs
@@ -151,11 +151,11 @@ git commit -m "test: add settings dropdown helpers for numeric controls"
 - Consumes: `WORKERS_RANGE`, `TRANSFERS_RANGE`, `RETRIES_RANGE`, `number_display`, `number_options`, `workers_enabled` (Task 1).
 - Produces: `fn number_combo(ui: &mut egui::Ui, id_salt: &str, value: &mut i32, range: std::ops::RangeInclusive<i32>, enabled: bool, hover: &str)` — no later task.
 
-- [ ] **Step 1: Implement `number_combo`**
+- [x] **Step 1: Implement `number_combo`**
 
 Add after the Task 1 helpers. Behaviour the signature and hover rule fix: clamp `*value` in place (so the saved draft equals what the user saw), `selected_text(number_display(*value, range.clone()))`, one `selectable_value` per entry from `number_options(range)`, the whole combo wrapped in `ui.add_enabled(enabled, ...)`, and `.on_hover_text(hover)` only when `hover` is non-empty (retries has no tooltip today).
 
-- [ ] **Step 2: Replace the Performance card rows**
+- [x] **Step 2: Replace the Performance card rows**
 
 Replace the current `ui.horizontal` block in `performance_card` with:
 
@@ -183,7 +183,7 @@ ui.horizontal(|ui| {
 });
 ```
 
-- [ ] **Step 3: Replace the Fine-tuning rows**
+- [x] **Step 3: Replace the Fine-tuning rows**
 
 Replace the current `ui.horizontal` block in `fine_tuning_card` with:
 
@@ -205,23 +205,23 @@ ui.horizontal(|ui| {
 });
 ```
 
-- [ ] **Step 4: Confirm no spinners and one shared predicate remain**
+- [x] **Step 4: Confirm no spinners and one shared predicate remain**
 
 Run: `grep -n 'DragValue\|workers_enabled' gui/src/ui/settings.rs`
 Expected: no `DragValue` in `performance_card`/`fine_tuning_card` (the `interval`, `theme`, `ui_scale` combos are untouched `ComboBox`es); exactly two `workers_enabled(app.draft.auto_workers)` call sites, one per card.
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `cargo test --manifest-path gui/Cargo.toml`
 Expected: 54 passed, 0 failed.
 
-- [ ] **Step 6: Build and smoke the AppImage**
+- [x] **Step 6: Build and smoke the AppImage**
 
 Run: `PATH=/tmp/opencode/bin:$PATH ./build.sh && ./dist/ProtonDrive-CLI-0.9.0-GUI-3.16.16-x86_64.AppImage --smoke`
 Expected: build succeeds; `smoke ok: gui 3.16.16`. (The `/tmp/opencode/bin` shim supplies the pinned `jeepney` wheel because this machine's Python has no `pip`; it is outside the repo and changes nothing in the build.)
 Manual check: open Settings — all four rows render as dropdowns showing the current values (`12`, `4`, `12`, `3`), with the workers row greyed while "Adapt parallel scans to available memory" is ticked.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add gui/src/ui/settings.rs
@@ -239,27 +239,27 @@ git commit -m "feat: use dropdowns for settings numeric controls"
 - Consumes: the pushed `feat/fast-start-sync` branch; PR #1 (base `main`); CI job `.github/workflows/release.yml` (push to `main` with a new `GUI_VERSION` publishes tag `v0.9.0-gui3.16.16`).
 - Produces: GitHub release `v0.9.0-gui3.16.16` with the x86_64 AppImage asset installed at `~/Downloads/AppImage/ProtonDrive-CLI-0.9.0-GUI-3.16.16-x86_64.AppImage`.
 
-- [ ] **Step 1: Push the branch**
+- [x] **Step 1: Push the branch**
 
 Run: `git push origin feat/fast-start-sync`
 Expected: `feat/fast-start-sync -> feat/fast-start-sync`; `gh pr view 1 --json mergeable` still `MERGEABLE`.
 
-- [ ] **Step 2: Merge PR #1**
+- [x] **Step 2: Merge PR #1**
 
 Run: `gh pr merge 1 --merge --subject "feat: fast-start sync with background audit"`
 Expected: PR state `MERGED`. Do **not** pass `--delete-branch` (the worktree is attached to the branch).
 
-- [ ] **Step 3: Wait for the release workflow**
+- [x] **Step 3: Wait for the release workflow**
 
 Run: `gh run list --workflow release.yml --limit 3` then `gh run watch <id> --exit-status`
 Expected: the `main` run succeeds and publishes tag `v0.9.0-gui3.16.16`.
 
-- [ ] **Step 4: Verify the release**
+- [x] **Step 4: Verify the release**
 
 Run: `gh release view v0.9.0-gui3.16.16 --json tagName,assets`
 Expected: one `ProtonDrive-CLI-0.9.0-GUI-3.16.16-x86_64.AppImage` asset.
 
-- [ ] **Step 5: Install the official artifact over the local build**
+- [x] **Step 5: Install the official artifact over the local build**
 
 ```bash
 cd ~/Downloads/AppImage
@@ -272,6 +272,6 @@ systemctl --user is-active proton-sync.service
 ```
 Expected: smoke prints `gui 3.16.16`; service `active`; the service unit and desktop/autostart entries already point at this exact path (updated when the local build was installed), so only the file content changes. Relaunch the GUI so it runs the official binary.
 
-- [ ] **Step 6: Report**
+- [x] **Step 6: Report**
 
 Confirm to the user: official release URL, asset checksum, service active, GUI running the official build.
