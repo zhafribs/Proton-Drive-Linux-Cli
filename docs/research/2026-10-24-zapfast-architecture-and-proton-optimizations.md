@@ -143,6 +143,31 @@ and can get an account suspended. ZapFast says so in its own README. Building
 one is a legitimate learning project; shipping one asks users to accept that
 risk.
 
+## 8. Applied in 3.16.19
+
+Two of the ranked levers shipped:
+
+- **eframe now uses `glow`** (`default-features = false`, features `accesskit`,
+  `clipboard`, `default_fonts`, `glow`, `wayland`, `x11`), dropping wgpu,
+  egui-wgpu and the Vulkan stack.
+- **`panic = "abort"`** added to the GUI release profile.
+
+Measured on this machine, same GUI, same account, idle 12 s after launch:
+
+| Metric | wgpu build (3.16.18) | glow build (3.16.19) | Change |
+| --- | ---: | ---: | ---: |
+| GUI process PSS | 127.3 MiB | 108.9 MiB | **−18.4 MiB (−14%)** |
+| GUI process RSS | 193.9 MiB | 143.5 MiB | −50.4 MiB |
+| Shared clean (driver/code) | 78.6 MiB | 42.3 MiB | −36.3 MiB |
+| GUI binary on disk | 22 MiB | 15 MiB | **−7 MiB (−32%)** |
+
+The window renders correctly under Wayland (verified from a captured frame);
+`--smoke` still reports `gui 3.16.19`. The remaining differences from ZapFast
+are the official CLI subprocess model (deliberately kept) and its ~100 MB per
+scan worker; the GUI poller still runs `journalctl` every 3 s and walks the
+local folder every ~21 s, worth roughly 0.4% of one core — left as an optional
+follow-up, not a memory lever.
+
 ## Sources
 
 - ZapFast repository: https://github.com/crmne/zapfast

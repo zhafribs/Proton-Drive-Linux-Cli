@@ -1,3 +1,11 @@
+## 3.16.19 — 2026-10-24
+
+- **A smaller, lighter interface.** The GUI now renders with OpenGL (`glow`)
+  instead of wgpu, and the release binary is built with `panic = "abort"`.
+  Idle memory for the interface process dropped from 127 to 109 MiB (PSS),
+  the GUI binary from 22 to 15 MiB, and the AppImage is smaller. No visual or
+  behavioural change.
+
 ## 3.16.18 — 2026-10-24
 
 - **Worker dropdowns always work.** "Scan workers" and "Parallel connections"
