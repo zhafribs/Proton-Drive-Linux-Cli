@@ -1,3 +1,38 @@
+## 3.16.16 — 2026-10-24
+
+- **Fast start on a warm machine.** The engine now loads the last remote
+  metadata snapshot and the sync state immediately, publishes a healthy
+  status, and starts syncing without waiting for the old ~90-second full walk.
+  A cached remote tree is shown as *Ready from cache* while a background audit
+  catches up. On the current 1,230-entry account the status is ready in about
+  0.12 s instead of 4.1 s (and the old path still walks first, at ~90 s when
+  there is no cache).
+- **A chunked background audit replaces the blocking startup walk.** The audit
+  takes the CLI lock for small folder chunks, releases it between chunks, and
+  reports progress in health/GUI. It completes in about 96 s for 213 folders
+  without freezing local work. Push/local events queue behind the chunks.
+- **Deletes and existing-file edits are held while the cache is being
+  audited.** New files and new folders can upload. Once the audit is trusted,
+  held paths are reconciled: local edits upload, deletes go to trash in the
+  correct direction, and a both-sides edit keeps both versions as a conflict
+  copy. Audit failures leave the deletes held and show the error; they never
+  silently claim the cache is up to date.
+- **Adaptive scans and parallel transfers.** Scan workers start at the
+  configured 12 and cap at 16, backed off by the RAM budget and by 429/rate
+  limits. Independent parent-folder transfers run in parallel with a default
+  of 4 (allowed 1–10). A disposable 64 × 512 KiB benchmark improved from
+  119 s at 2 workers to 89/87/81 s at 4/6/10, with zero failures; 10 is stable
+  on this account but remains opt-in.
+- **Performance controls and diagnostics.** Settings → *Performance* adds fast
+  start, adaptive concurrency, transfer concurrency, **Run full check now**,
+  and **Clear snapshot cache** (confirmation required; removes only the
+  snapshot). Home shows audit progress and the “held for safety” note.
+- **One-key rollback.** `PROTON_SYNC_FAST_START=0` restores the old
+  fingerprint/peek/full-walk path; state, local files and trash history are
+  untouched. Periodic audits use `PROTON_SYNC_AUDIT_EVERY` (default 1800 s;
+  disabled when scheduled checks are Off). Details and measurements:
+  [docs/performance/fast-start-sync.md](docs/performance/fast-start-sync.md).
+
 ## 3.16.15 — 2026-10-23
 
 - **Scheduled checks can be turned off.** Settings → *How often* now has an

@@ -21,6 +21,23 @@ pub struct Health {
     pub local_entries: Option<u64>,
     pub state_records: Option<u64>,
     pub interval: Option<u64>,
+    pub cache_age: Option<u64>,
+    pub audit_pending: Option<bool>,
+    pub audit_done: Option<u64>,
+    pub audit_total: Option<u64>,
+    pub audit_phase: Option<String>,
+    pub audit_seconds: Option<f64>,
+    pub audit_error: Option<String>,
+    pub phase_seconds: Option<f64>,
+    pub last_audit: Option<String>,
+    pub phase: Option<String>,
+    pub cycle_reason: Option<String>,
+    pub effective_workers: Option<u64>,
+    pub full_scan_seconds: Option<f64>,
+    pub transfer_active: Option<bool>,
+    pub transfer_done: Option<u64>,
+    pub transfer_total: Option<u64>,
+    pub transfer_bytes: Option<u64>,
 }
 
 pub fn read(path: &Path) -> Health {
@@ -37,6 +54,10 @@ impl Health {
 
     pub fn next_poll_dt(&self) -> Option<chrono::DateTime<chrono::FixedOffset>> {
         self.next_poll.as_deref().and_then(crate::util::parse_iso)
+    }
+
+    pub fn last_audit_dt(&self) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+        self.last_audit.as_deref().and_then(crate::util::parse_iso)
     }
 }
 
@@ -94,6 +115,19 @@ pub fn status_text(status: UiStatus) -> (&'static str, &'static str) {
 
 /// "Last checked just now · Next check in 42s" - any half available is fine.
 pub fn synced_line(h: &Health) -> String {
+    if h.audit_pending == Some(true) {
+        return match h.audit_total.filter(|n| *n > 0) {
+            Some(total) => format!(
+                "Ready from cache \u{b7} checking {} / {} folders",
+                h.audit_done.unwrap_or(0),
+                total
+            ),
+            None => "Ready from cache \u{b7} background check running".to_string(),
+        };
+    }
+    if let Some(age) = h.cache_age {
+        return format!("Cached view \u{b7} {age}s old");
+    }
     let last = rel_time(h.ts_dt());
     // interval 0 means no scheduled checks, so there is no countdown to show -
     // just the last check, exactly like a normal cycle with no next time.
@@ -179,6 +213,57 @@ mod tests {
         assert!(!line.contains("Next check"));
         let empty: Health = serde_json::from_str(r#"{"interval":0}"#).unwrap();
         assert_eq!(synced_line(&empty), "Waiting for the first check");
+    }
+
+    /// Fast-start telemetry is additive; the GUI must parse it without
+    /// changing the existing status behavior.
+    #[test]
+    fn parses_fast_start_health() {
+        let json = r#"{
+            "status": "ok",
+            "mode": "fast",
+            "cache_age": 120,
+            "audit_pending": true,
+            "audit_done": 420,
+            "audit_total": 1230,
+            "phase": "audit",
+            "cycle_reason": "startup",
+            "effective_workers": 12
+        }"#;
+        let h: Health = serde_json::from_str(json).unwrap();
+        assert_eq!(h.mode.as_deref(), Some("fast"));
+        assert_eq!(h.cache_age, Some(120));
+        assert_eq!(h.audit_pending, Some(true));
+        assert_eq!(h.audit_done, Some(420));
+        assert_eq!(h.audit_total, Some(1230));
+        assert_eq!(h.phase.as_deref(), Some("audit"));
+        assert_eq!(h.cycle_reason.as_deref(), Some("startup"));
+        assert_eq!(h.effective_workers, Some(12));
+    }
+
+    #[test]
+    fn cached_age_line_is_replaced_after_the_audit() {
+        let cached: Health =
+            serde_json::from_str(r#"{"status":"ok","cache_age":120}"#).unwrap();
+        assert!(synced_line(&cached).contains("Cached view \u{b7} 120s old"));
+        let checked: Health = serde_json::from_str(
+            r#"{"status":"ok","ts":"2026-10-20T00:30:02+08:00","cache_age":null}"#,
+        )
+        .unwrap();
+        assert!(synced_line(&checked).starts_with("Last checked"));
+    }
+
+    #[test]
+    fn fast_start_audit_line_shows_progress() {
+        let h: Health = serde_json::from_str(
+            r#"{"status":"ok","audit_pending":true,"audit_done":420,"audit_total":1230}"#,
+        )
+        .unwrap();
+        let line = synced_line(&h);
+        assert!(line.contains("checking 420 / 1230"), "{line}");
+        let queued: Health =
+            serde_json::from_str(r#"{"status":"ok","audit_pending":true}"#).unwrap();
+        assert!(synced_line(&queued).contains("background check running"));
     }
 
     /// A lost keyring session is its own state: the engine is running fine,

@@ -42,6 +42,37 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                     health::hero_sub(status, &app.health)
                 };
                 ui.label(egui::RichText::new(sub).size(14.0).weak());
+                if app.health.audit_pending == Some(true) {
+                    let note = if app.health.audit_phase.as_deref() == Some("error") {
+                        "Background check failed - deletes and existing-file edits stay held for safety."
+                    } else {
+                        "Deletes and edits to existing files are held until the background check finishes."
+                    };
+                    ui.label(egui::RichText::new(note).size(12.0).weak());
+                }
+                if app.health.transfer_active == Some(true)
+                    && app.health.transfer_total.unwrap_or(0) > 0
+                {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Transferring {} / {} files...",
+                            app.health.transfer_done.unwrap_or(0),
+                            app.health.transfer_total.unwrap_or(0)
+                        ))
+                        .size(12.0)
+                        .weak(),
+                    );
+                }
+                if let Some(dt) = app.health.last_audit_dt() {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Last full check {}",
+                            util::rel_time(Some(dt))
+                        ))
+                        .size(12.0)
+                        .weak(),
+                    );
+                }
                 ui.add_space(10.0);
 
                 ui.horizontal(|ui| {

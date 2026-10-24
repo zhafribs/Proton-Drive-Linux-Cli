@@ -106,7 +106,7 @@ Open the [latest release](https://github.com/zhafribs/Proton-Drive-Linux-Cli/rel
 and download **Source code (tar.gz)** from the Assets section. Then extract it:
 
 ```bash
-TAG=v0.9.0-gui3.16.15   # replace with the tag you downloaded
+TAG=v0.9.0-gui3.16.16   # replace with the tag you downloaded
 mkdir -p ~/src/proton-drive-src
 cd ~/src
 wget -O proton-drive-src.tar.gz \
@@ -151,7 +151,7 @@ It can take 5–20 minutes depending on the machine and network. A normal run
 ends with a path like:
 
 ```text
-dist/ProtonDrive-CLI-0.9.0-GUI-3.16.15-x86_64.AppImage
+dist/ProtonDrive-CLI-0.9.0-GUI-3.16.16-x86_64.AppImage
 ```
 
 The exact version comes from `upstream.lock` and `gui/src/main.rs`. Find the
@@ -165,14 +165,14 @@ ls -1t dist/*.AppImage | head -1
 
 ```bash
 chmod +x dist/*.AppImage
-./dist/ProtonDrive-CLI-0.9.0-GUI-3.16.15-x86_64.AppImage
+./dist/ProtonDrive-CLI-0.9.0-GUI-3.16.16-x86_64.AppImage
 ```
 
 If your desktop lacks FUSE, use:
 
 ```bash
 APPIMAGE_EXTRACT_AND_RUN=1 \
-  ./dist/ProtonDrive-CLI-0.9.0-GUI-3.16.15-x86_64.AppImage
+  ./dist/ProtonDrive-CLI-0.9.0-GUI-3.16.16-x86_64.AppImage
 ```
 
 ### Optional: put the CLI on your PATH
@@ -186,7 +186,7 @@ This creates `~/.local/bin/proton-drive` as a symlink to the built AppImage.
 You can also pass a path explicitly:
 
 ```bash
-./install-command.sh ~/Applications/ProtonDrive-CLI-0.9.0-GUI-3.16.15-x86_64.AppImage
+./install-command.sh ~/Applications/ProtonDrive-CLI-0.9.0-GUI-3.16.16-x86_64.AppImage
 ```
 
 The AppImage passes CLI arguments straight through, so `proton-drive filesystem
