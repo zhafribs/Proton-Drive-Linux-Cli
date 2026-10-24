@@ -1,3 +1,11 @@
+## 3.16.18 — 2026-10-24
+
+- **Worker dropdowns always work.** "Scan workers" and "Parallel connections"
+  are selectable even while adaptive scans is on, instead of greying out with
+  no way to open them. Your chosen value is now a real ceiling: adaptive scans
+  may use fewer workers under memory pressure or rate limiting, but never more
+  than you picked. Rate-limit recovery stops at your limit too.
+
 ## 3.16.17 — 2026-10-24
 
 - **Settings numbers are dropdowns.** Scan workers, Transfer concurrency,

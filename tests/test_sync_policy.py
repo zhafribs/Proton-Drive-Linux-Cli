@@ -141,6 +141,11 @@ class AdaptiveWorkerTests(unittest.TestCase):
         self.assertEqual(proton_sync.adjust_worker_limit(6, False, 3), 7)
         self.assertEqual(proton_sync.adjust_worker_limit(16, False, 3), 16)
 
+    def test_clean_chunks_never_exceed_the_configured_ceiling(self):
+        self.assertEqual(proton_sync.adjust_worker_limit(4, False, 3, ceiling=4), 4)
+        self.assertEqual(proton_sync.adjust_worker_limit(3, False, 3, ceiling=4), 4)
+        self.assertEqual(proton_sync.adjust_worker_limit(9, False, 3, ceiling=10), 10)
+
 
 class RegressionGuardTests(unittest.TestCase):
     def test_worker_and_transfer_limits_stay_safe(self):

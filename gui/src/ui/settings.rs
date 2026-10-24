@@ -550,39 +550,25 @@ fn number_options(range: std::ops::RangeInclusive<i32>) -> Vec<i32> {
     range.collect()
 }
 
-fn workers_enabled(auto_workers: bool) -> bool {
-    !auto_workers
-}
-
 fn number_combo(
     ui: &mut egui::Ui,
     id_salt: &str,
     value: &mut i32,
     range: std::ops::RangeInclusive<i32>,
-    enabled: bool,
     hover: &str,
 ) {
     // Clamp in place so the saved draft equals what the dropdown shows.
     *value = clamp_to_range(*value, range.clone());
-    let selected = number_display(*value, range.clone());
-    let response = ui
-        .add_enabled_ui(enabled, |ui| {
-            egui::ComboBox::from_id_salt(id_salt)
-                .selected_text(selected)
-                .show_ui(ui, |ui| {
-                    for option in number_options(range.clone()) {
-                        ui.selectable_value(value, option, number_display(option, range.clone()));
-                    }
-                })
-                .response
+    let response = egui::ComboBox::from_id_salt(id_salt)
+        .selected_text(number_display(*value, range.clone()))
+        .show_ui(ui, |ui| {
+            for option in number_options(range.clone()) {
+                ui.selectable_value(value, option, number_display(option, range.clone()));
+            }
         })
-        .inner;
+        .response;
     if !hover.is_empty() {
-        if enabled {
-            response.on_hover_text(hover);
-        } else {
-            response.on_disabled_hover_text(hover);
-        }
+        response.on_hover_text(hover);
     }
 }
 
@@ -603,7 +589,10 @@ fn performance_card(app: &mut App, ui: &mut egui::Ui) {
         let mut auto = app.draft.auto_workers;
         if ui
             .checkbox(&mut auto, "Adapt parallel scans to available memory")
-            .on_hover_text("Keeps the worker count within a safe RAM budget, up to 16.")
+            .on_hover_text(
+                "Starts from your scan-worker limit and lowers it when memory is tight; \
+                 it never goes above that limit.",
+            )
             .changed()
         {
             app.draft.auto_workers = auto;
@@ -615,8 +604,7 @@ fn performance_card(app: &mut App, ui: &mut egui::Ui) {
                 "scan-workers",
                 &mut app.draft.workers,
                 WORKERS_RANGE,
-                workers_enabled(app.draft.auto_workers),
-                "Raw ceiling used when adaptive scans are off.",
+                "Upper limit for parallel scans. Adaptive scans may use fewer under memory pressure.",
             );
             ui.add_space(24.0);
             ui.label("Transfer concurrency");
@@ -625,7 +613,6 @@ fn performance_card(app: &mut App, ui: &mut egui::Ui) {
                 "transfer-concurrency",
                 &mut app.draft.transfers,
                 TRANSFERS_RANGE,
-                true,
                 "Independent parent folders transferred at the same time.",
             );
         });
@@ -865,13 +852,12 @@ fn fine_tuning_card(app: &mut App, ui: &mut egui::Ui) {
                 "parallel-connections",
                 &mut app.draft.workers,
                 WORKERS_RANGE,
-                workers_enabled(app.draft.auto_workers),
-                "Ceiling for parallel CLI calls. The engine uses fewer \
+                "Upper limit for parallel CLI calls. Adaptive scans may use fewer \
                  automatically when memory is tight.",
             );
             ui.add_space(24.0);
             ui.label("Retries per folder");
-            number_combo(ui, "retries-per-folder", &mut app.draft.retries, RETRIES_RANGE, true, "");
+            number_combo(ui, "retries-per-folder", &mut app.draft.retries, RETRIES_RANGE, "");
         });
     });
 }
@@ -1054,11 +1040,5 @@ mod tests {
         assert_eq!(number_options(WORKERS_RANGE), (1..=16).collect::<Vec<i32>>());
         assert_eq!(number_options(TRANSFERS_RANGE), (1..=10).collect::<Vec<i32>>());
         assert_eq!(number_options(RETRIES_RANGE), (1..=10).collect::<Vec<i32>>());
-    }
-
-    #[test]
-    fn workers_enabled_follows_adaptive() {
-        assert!(!workers_enabled(true));
-        assert!(workers_enabled(false));
     }
 }

@@ -596,7 +596,7 @@ def scan_remote(start_rel=None, progress=None):
                     if err:
                         if is_rate_limit(err):
                             saw_rate = True
-                            WORKER_LIMIT = adjust_worker_limit(WORKER_LIMIT, True, 0)
+                            WORKER_LIMIT = adjust_worker_limit(WORKER_LIMIT, True, 0, ceiling=SCAN_WORKERS)
                             CLEAN_CHUNKS = 0
                         raise CliError(f"cannot list {rpath}: {err}")
                     visited.add(rpath)
@@ -610,7 +610,7 @@ def scan_remote(start_rel=None, progress=None):
                 if not saw_rate:
                     CLEAN_CHUNKS += 1
                     if CLEAN_CHUNKS >= 3:
-                        WORKER_LIMIT = adjust_worker_limit(WORKER_LIMIT, False, 3)
+                        WORKER_LIMIT = adjust_worker_limit(WORKER_LIMIT, False, 3, ceiling=SCAN_WORKERS)
                         CLEAN_CHUNKS = 0
                 if progress is not None:
                     try:
@@ -958,12 +958,17 @@ def adaptive_worker_limit(configured, available_mb):
     return max(1, min(limit, budget // CLI_PROCESS_MB))
 
 
-def adjust_worker_limit(current, saw_rate_limit, clean_chunks):
-    """Back off on throttling, then creep back up after three clean chunks."""
+def adjust_worker_limit(current, saw_rate_limit, clean_chunks, ceiling=16):
+    """Back off on throttling, then creep back up after three clean chunks.
+
+    ``ceiling`` is the configured scan-worker limit: the adaptive loop may use
+    fewer workers under RAM pressure or throttling, but never more than the
+    user asked for. The default keeps the policy helper usable on its own.
+    """
     if saw_rate_limit:
         return max(1, int(current) - 2)
     if clean_chunks >= 3:
-        return min(16, int(current) + 1)
+        return min(max(1, int(ceiling)), int(current) + 1)
     return int(current)
 
 
@@ -1973,14 +1978,14 @@ def audit_tick():
         AUDIT_STATE.error = None
         CLEAN_CHUNKS += 1
         if CLEAN_CHUNKS >= 3:
-            WORKER_LIMIT = adjust_worker_limit(WORKER_LIMIT, False, 3)
+            WORKER_LIMIT = adjust_worker_limit(WORKER_LIMIT, False, 3, ceiling=SCAN_WORKERS)
             CLEAN_CHUNKS = 0
         write_health(**AUDIT_STATE.health(), audit_pending=True, cycle_reason="audit")
     except Exception as exc:  # noqa: BLE001 - keep cached view and hold deletes
         AUDIT_STATE.error = str(exc)
         AUDIT_STATE.probed = False
         if is_rate_limit(str(exc)):
-            WORKER_LIMIT = adjust_worker_limit(WORKER_LIMIT, True, 0)
+            WORKER_LIMIT = adjust_worker_limit(WORKER_LIMIT, True, 0, ceiling=SCAN_WORKERS)
             CLEAN_CHUNKS = 0
         write_health(audit_pending=True, audit_phase="error",
                      audit_error=str(exc)[:300], error=str(exc)[:300],
