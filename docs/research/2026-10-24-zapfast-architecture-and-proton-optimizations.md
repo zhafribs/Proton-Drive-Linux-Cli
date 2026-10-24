@@ -152,21 +152,24 @@ Two of the ranked levers shipped:
   egui-wgpu and the Vulkan stack.
 - **`panic = "abort"`** added to the GUI release profile.
 
-Measured on this machine, same GUI, same account, idle 12 s after launch:
+Measured on this machine with a controlled A/B: both builds launched the same
+way (installed AppImage, start-in-tray, tray-hidden), two PSS samples 3 s apart,
+after the background audit had finished:
 
 | Metric | wgpu build (3.16.18) | glow build (3.16.19) | Change |
 | --- | ---: | ---: | ---: |
-| GUI process PSS | 127.3 MiB | 108.9 MiB | **−18.4 MiB (−14%)** |
-| GUI process RSS | 193.9 MiB | 143.5 MiB | −50.4 MiB |
-| Shared clean (driver/code) | 78.6 MiB | 42.3 MiB | −36.3 MiB |
+| GUI process PSS, idle | 114.5–114.6 MiB | 55.4 MiB | **−59.1 MiB (−52%)** |
 | GUI binary on disk | 22 MiB | 15 MiB | **−7 MiB (−32%)** |
+| AppImage size | 81 MB | 78 MB | −3 MB |
 
 The window renders correctly under Wayland (verified from a captured frame);
-`--smoke` still reports `gui 3.16.19`. The remaining differences from ZapFast
-are the official CLI subprocess model (deliberately kept) and its ~100 MB per
-scan worker; the GUI poller still runs `journalctl` every 3 s and walks the
-local folder every ~21 s, worth roughly 0.4% of one core — left as an optional
-follow-up, not a memory lever.
+`--smoke` reports `gui 3.16.19`. An earlier spot measurement of the raw build
+(wgpu 127.3 MiB) is kept in section 4 as the pre-change figure; the A/B above
+is the like-for-like comparison. The remaining differences from ZapFast are
+the official CLI subprocess model (deliberately kept) and its ~45 MiB PSS per
+scan worker while a scan is running; the GUI poller still runs `journalctl`
+every 3 s and walks the local folder every ~21 s, worth roughly 0.4% of one
+core — left as an optional follow-up, not a memory lever.
 
 ## Sources
 

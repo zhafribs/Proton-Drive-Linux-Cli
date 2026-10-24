@@ -2,8 +2,9 @@
 
 - **A smaller, lighter interface.** The GUI now renders with OpenGL (`glow`)
   instead of wgpu, and the release binary is built with `panic = "abort"`.
-  Idle memory for the interface process dropped from 127 to 109 MiB (PSS),
-  the GUI binary from 22 to 15 MiB, and the AppImage is smaller. No visual or
+  In a same-machine A/B (both tray-hidden), the interface process' idle memory
+  dropped from **114.5 to 55.4 MiB PSS** (−59 MiB, −52%), the GUI binary from
+  **22 to 15 MiB**, and the AppImage from **81 to 78 MB**. No visual or
   behavioural change.
 
 ## 3.16.18 — 2026-10-24
