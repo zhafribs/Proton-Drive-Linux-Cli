@@ -1,3 +1,14 @@
+## 3.16.20 — 2026-10-26
+
+- **The missing icons are back.** The pane carets, the cloud sort arrow, the
+  selective-sync tri-state boxes, the upload/download arrows and the folder
+  cards render again. Rendering the interface with OpenGL in 3.16.19 also
+  dropped eframe's system font fallback, so every character the bundled fonts
+  lack was drawn as a blank box. Restoring the fallback fixes non-Latin
+  filenames (Chinese, Arabic, Cyrillic) showing as boxes in the file list too.
+  Costs about 0.6 MB of binary size, and a test now fails the build if the
+  fallback is removed again.
+
 ## 3.16.19 — 2026-10-24
 
 - **A smaller, lighter interface.** The GUI now renders with OpenGL (`glow`)
