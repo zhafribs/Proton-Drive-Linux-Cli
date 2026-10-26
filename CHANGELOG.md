@@ -1,3 +1,14 @@
+## 3.16.26 — 2026-10-27
+
+- **No more endless re-downloads.** A folder that did not exist locally was
+  downloaded as a whole, and its files were then downloaded again one by one.
+  Each file was fetched once per folder above it, and the same files were
+  rewritten again and again. A folder now only creates its local folder; its
+  files are downloaded once.
+- **Live progress.** Each finished transfer batch updates the health file, so
+  the file totals and "Recently synced" move during a sync instead of only
+  when the whole cycle ends.
+
 ## 3.16.25 — 2026-10-27
 
 - **Files land in the right folder.** Downloads from the cloud were saved to

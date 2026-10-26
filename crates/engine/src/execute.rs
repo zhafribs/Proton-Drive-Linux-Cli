@@ -120,17 +120,13 @@ pub fn execute(
             }
             Action::Dl { rel, node } => {
                 if node.kind == "dir" {
-                    // download whole subtree - simplified
-                    let parent_rpath = cli::remote_path(remote_root, rel);
-                    let parent_local = local_root.join(parent_of(rel));
-                    fs::create_dir_all(&parent_local)?;
-                    let res = cli.run(&["fs", "download", &parent_rpath, &parent_local.to_string_lossy(), "-f", "remove", "-d", "merge"], false, Some(3600), true);
-                    if res.is_err() {
+                    // Only the folder itself: its files are planned and
+                    // downloaded one by one, so a subtree download here would
+                    // fetch every file again for each folder above it.
+                    if let Err(e) = fs::create_dir_all(local_root.join(rel)) {
+                        eprintln!("FAILED folder {}: {}", rel, e);
                         failed.insert(rel.clone());
-                        continue;
                     }
-                    eprintln!("DOWNLOAD dir {} (whole subtree)", rel);
-                    downloaded.insert(rel.clone());
                     continue;
                 }
             }
@@ -218,9 +214,13 @@ pub fn execute(
         }
     }
 
+    let total_files: u64 = batches.iter().map(|b| b.rels.len() as u64).sum();
+    let done_files = std::sync::atomic::AtomicU64::new(0);
+    report_transfer(0, total_files);
     let outcomes = cli::with_cli_lock(|| {
         let _ = cli.run(&["fs", "info", remote_root], true, Some(120), false);
         Ok(cli::run_parallel(batches, transfers, |b| {
+            let n = b.rels.len() as u64;
             let res = if b.upload {
                 let locals: Vec<String> = b.rels.iter().map(|r| local_root.join(r).to_string_lossy().into_owned()).collect();
                 let parent_rpath = cli::remote_path(remote_root, &b.parent);
@@ -237,9 +237,12 @@ pub fn execute(
                 args.push(&target);
                 cli.run(&args, false, Some(3600), false)
             };
+            let done = done_files.fetch_add(n, std::sync::atomic::Ordering::Relaxed) + n;
+            report_transfer(done, total_files);
             (b, res)
         }))
     })?;
+    report_transfer(total_files, total_files);
 
     for (b, res) in outcomes {
         match res {
@@ -263,6 +266,16 @@ pub fn execute(
 }
 
 const MAX_BATCH: usize = 50;
+
+fn report_transfer(done: u64, total: u64) {
+    let path = crate::health::health_path();
+    let mut h = proton_core::health::read(&path);
+    h.status = "syncing".to_string();
+    h.transfer_active = Some(done < total);
+    h.transfer_done = Some(done);
+    h.transfer_total = Some(total);
+    crate::health::write_health(&h);
+}
 
 struct Batch {
     upload: bool,
