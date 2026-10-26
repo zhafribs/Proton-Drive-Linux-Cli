@@ -1,3 +1,9 @@
+## 3.16.24 — 2026-10-27
+
+- **First sync starts at once.** The Rust engine waited a full sync interval
+  (5 minutes by default) before its first cycle, so a fresh install sat on
+  "Checking your files" until then. The first cycle now runs immediately.
+
 ## 3.16.23 — 2026-10-27
 
 - **Rust sync engine fixes.** Uploads and downloads were being rejected by the

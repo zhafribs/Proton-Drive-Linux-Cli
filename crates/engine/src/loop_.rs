@@ -90,18 +90,21 @@ pub fn run_loop() -> Result<()> {
     let _push = crate::push::PushListener::start(wake_event.clone(), wake_mutex.clone());
 
     let mut last_cycle = Instant::now();
+    let mut first = true;
     loop {
-        // wait
-        if interval == 0 {
-            // wait for wake
-            let guard = wake_mutex.lock().unwrap();
-            drop(wake_event.wait_timeout(guard, Duration::from_secs(3600)).unwrap());
-        } else {
-            let elapsed = last_cycle.elapsed().as_secs();
-            if elapsed < interval {
-                std::thread::sleep(Duration::from_secs(interval - elapsed));
+        // the first cycle runs at once; later ones wait for the interval or a wake
+        if !first {
+            if interval == 0 {
+                let guard = wake_mutex.lock().unwrap();
+                drop(wake_event.wait_timeout(guard, Duration::from_secs(3600)).unwrap());
+            } else {
+                let elapsed = last_cycle.elapsed().as_secs();
+                if elapsed < interval {
+                    std::thread::sleep(Duration::from_secs(interval - elapsed));
+                }
             }
         }
+        first = false;
         wake.store(false, std::sync::atomic::Ordering::Relaxed);
         let _ = run_once_cycle(&cli, &local_root, &remote_root, &filter, propagate_deletes);
         last_cycle = Instant::now();
