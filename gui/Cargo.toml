@@ -26,6 +26,7 @@ inotify = { version = "0.9.6", default-features = false }
 ksni = { version = "0.3.6", features = ["blocking"] }
 notify-rust = "4.18.2"
 png = "0.18.1"
+proton-core = { path = "../crates/core" }
 regex = "1.13.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
@@ -38,11 +39,3 @@ zbus = { version = "5.19.0", features = ["blocking-api"] }
 # Only for `ui::glyph_tests`, which proves the icon glyphs resolve through
 # the same system font fallback eframe installs at runtime.
 egui_system_font_provider = "0.37.0"
-
-# The binary ships inside the AppImage - size matters (this replaced a
-# bundled Qt6 stack, the whole point being a smaller app).
-[profile.release]
-lto = true
-codegen-units = 1
-strip = true
-panic = "abort"

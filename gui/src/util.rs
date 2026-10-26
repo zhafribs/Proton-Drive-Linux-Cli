@@ -2,10 +2,7 @@
 
 use chrono::{DateTime, FixedOffset, Utc};
 
-/// journalctl `short-iso` timestamps: `2026-10-19T23:22:01+08:00`.
-pub fn parse_iso(s: &str) -> Option<DateTime<FixedOffset>> {
-    DateTime::parse_from_rfc3339(s.trim()).ok()
-}
+pub use proton_core::time::parse_iso;
 
 /// "just now" / "3 min ago" / "2 h ago" / "1 d ago" - PyQt `rel_time`.
 pub fn rel_time(dt: Option<DateTime<FixedOffset>>) -> String {

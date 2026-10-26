@@ -1,65 +1,9 @@
-//! `health.json` - the engine's periodic snapshot - and the status mapping
-//! that drives the Home orb, the tray dot and the notifications.
+//! Status mapping for the engine's health snapshot - the struct itself lives
+//! in `proton-core` so the GUI and the engine share one schema.
+
+pub use proton_core::health::{read, Health};
 
 use crate::util::rel_time;
-use serde::Deserialize;
-use std::path::Path;
-
-#[derive(Deserialize, Default, Clone, Debug)]
-#[serde(default)]
-pub struct Health {
-    pub status: String,
-    pub error: Option<String>,
-    pub ts: Option<String>,
-    pub next_poll: Option<String>,
-    pub uploaded: u64,
-    pub downloaded: u64,
-    pub actions: u64,
-    pub holds: u64,
-    pub mode: Option<String>,
-    pub remote_entries: Option<u64>,
-    pub local_entries: Option<u64>,
-    pub state_records: Option<u64>,
-    pub interval: Option<u64>,
-    pub cache_age: Option<u64>,
-    pub audit_pending: Option<bool>,
-    pub audit_done: Option<u64>,
-    pub audit_total: Option<u64>,
-    pub audit_phase: Option<String>,
-    pub audit_seconds: Option<f64>,
-    pub audit_error: Option<String>,
-    pub phase_seconds: Option<f64>,
-    pub last_audit: Option<String>,
-    pub phase: Option<String>,
-    pub cycle_reason: Option<String>,
-    pub effective_workers: Option<u64>,
-    pub full_scan_seconds: Option<f64>,
-    pub transfer_active: Option<bool>,
-    pub transfer_done: Option<u64>,
-    pub transfer_total: Option<u64>,
-    pub transfer_bytes: Option<u64>,
-}
-
-pub fn read(path: &Path) -> Health {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
-}
-
-impl Health {
-    pub fn ts_dt(&self) -> Option<chrono::DateTime<chrono::FixedOffset>> {
-        self.ts.as_deref().and_then(crate::util::parse_iso)
-    }
-
-    pub fn next_poll_dt(&self) -> Option<chrono::DateTime<chrono::FixedOffset>> {
-        self.next_poll.as_deref().and_then(crate::util::parse_iso)
-    }
-
-    pub fn last_audit_dt(&self) -> Option<chrono::DateTime<chrono::FixedOffset>> {
-        self.last_audit.as_deref().and_then(crate::util::parse_iso)
-    }
-}
 
 /// The states the Home orb cycles through.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

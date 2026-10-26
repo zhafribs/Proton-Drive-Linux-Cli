@@ -1,0 +1,5 @@
+# Keep the pre-workspace `gui/target` layout: build.sh and the release
+# workflow cache and probe that path, and a worktree can share the main
+# checkout's warm target directory through a symlink.
+[build]
+target-dir = "gui/target"

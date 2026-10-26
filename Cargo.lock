@@ -2578,6 +2578,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
+name = "proton-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dirs",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "proton-drive-gui"
 version = "0.1.0"
 dependencies = [
@@ -2591,6 +2601,7 @@ dependencies = [
  "ksni",
  "notify-rust",
  "png",
+ "proton-core",
  "regex",
  "serde",
  "serde_json",
