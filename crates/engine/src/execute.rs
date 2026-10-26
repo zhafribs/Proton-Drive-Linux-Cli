@@ -267,6 +267,17 @@ pub fn execute(
 
 const MAX_BATCH: usize = 50;
 
+/// Progress for a transfer whose total is not known yet (the streaming first
+/// download). Keeps the total the file already carries.
+pub fn report_progress(done: u64) {
+    let path = crate::health::health_path();
+    let mut h = proton_core::health::read(&path);
+    h.status = "syncing".to_string();
+    h.transfer_active = Some(true);
+    h.transfer_done = Some(done);
+    crate::health::write_health(&h);
+}
+
 fn report_transfer(done: u64, total: u64) {
     let path = crate::health::health_path();
     let mut h = proton_core::health::read(&path);

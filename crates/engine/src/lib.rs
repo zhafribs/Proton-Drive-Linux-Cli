@@ -8,6 +8,7 @@ pub mod action;
 pub mod cli;
 pub mod execute;
 pub mod filter;
+pub mod firstsync;
 pub mod health;
 pub mod loop_;
 pub mod plan;

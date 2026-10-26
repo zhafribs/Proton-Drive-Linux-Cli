@@ -1,3 +1,16 @@
+## 3.16.29 — 2026-10-27
+
+- **The first download starts while the cloud is still being read.** A fresh
+  sync used to walk the whole remote tree, plan, transfer, then walk the tree
+  again. Now each folder is handed to a transfer pool the moment it is listed,
+  so files land within seconds and the walk runs alongside them. Measured on a
+  1,255-entry account: first file on disk after ~12s (was after the full walk),
+  ~530 files in the first 4 minutes.
+- **No second walk after a download.** The cloud is walked again only when
+  this machine changed it (upload, remote trash, remote move); a download-only
+  cycle reuses the tree it already has.
+- **Eight transfers at once by default** (`PROTON_SYNC_TRANSFERS`).
+
 ## 3.16.28 — 2026-10-27
 
 - **In-app update check works again.** Release tags that carry a suffix

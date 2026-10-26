@@ -121,27 +121,53 @@ pub fn run_once_cycle(cli: &Cli, local_root: &str, remote_root: &str, filter: &F
         ..Default::default()
     });
 
-    let local = scan_local(Path::new(local_root), filter);
-    let remote = scan_remote(cli, remote_root, filter)?;
+    let mut local = scan_local(Path::new(local_root), filter);
     let state_path = state_dir().join("state.json");
     let st = state::read(&state_path);
+
+    // Nothing on disk and no state: a first sync. Read the cloud tree and
+    // download it in one overlapped pass instead of walking it, planning,
+    // then only then moving bytes.
+    let first = st.is_empty() && local.is_empty();
+    let mut failed: BTreeSet<String> = BTreeSet::new();
+    let mut downloaded: BTreeSet<String> = BTreeSet::new();
+    let remote = if first {
+        let out = crate::firstsync::download_all(cli, remote_root, Path::new(local_root), filter)?;
+        failed.extend(out.failed);
+        downloaded.extend(out.downloaded);
+        // the tree on disk changed: plan against what actually landed
+        local = scan_local(Path::new(local_root), filter);
+        out.tree
+    } else {
+        scan_remote(cli, remote_root, filter)?
+    };
 
     let config = PlanConfig { propagate_deletes, wipe_min: 5 };
     let result = plan_cycle(&remote, &local, &st, &config);
 
-    let mut failed: BTreeSet<String> = BTreeSet::new();
-    let mut downloaded: BTreeSet<String> = BTreeSet::new();
     if !result.actions.is_empty() {
         let (f, d) = execute(&result.actions, &remote, &local, remote_root, Path::new(local_root), filter)?;
-        failed = f;
-        downloaded = d;
+        failed.extend(f);
+        downloaded.extend(d);
     }
 
-    // rescan only when something was mutated; an idle cycle reuses the first walk
-    let (local2, remote2) = if result.actions.is_empty() {
-        (local.clone(), remote.clone())
+    // Only a remote-side change needs the cloud walked again; downloads,
+    // local trashes and local moves leave it as it was.
+    let remote_touched = result.actions.iter().any(|a| {
+        matches!(
+            a,
+            Action::Up { .. } | Action::TrashRemote { .. } | Action::MvRemote { .. } | Action::Conflict { .. }
+        )
+    });
+    let local2 = if result.actions.is_empty() && !first {
+        local.clone()
     } else {
-        (scan_local(Path::new(local_root), filter), scan_remote(cli, remote_root, filter)?)
+        scan_local(Path::new(local_root), filter)
+    };
+    let remote2 = if remote_touched {
+        scan_remote(cli, remote_root, filter)?
+    } else {
+        remote.clone()
     };
 
     let acted: BTreeSet<String> = result.actions.iter().map(|a| a.rel().to_string()).collect();
