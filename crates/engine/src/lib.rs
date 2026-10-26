@@ -5,6 +5,7 @@
 //! `scripts/proton-sync.py` before anything is allowed to touch files.
 
 pub mod action;
+pub mod cli;
 pub mod filter;
 pub mod plan;
 pub mod policy;

@@ -130,3 +130,106 @@ mod tests {
         fs::remove_dir_all(&outside).ok();
     }
 }
+
+
+/// Remote tree scan using the official CLI (`fs list --json`).
+use crate::cli::{self, Cli};
+use anyhow::Result;
+use proton_core::snapshot::{RemoteEntry, RemoteTree};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+#[derive(Clone)]
+struct RemoteConfig {
+    remote_root: String,
+    subfolders: String,
+    exclude: String,
+}
+
+pub fn scan_remote(cli: &Cli, remote_root: &str, filter: &Filter) -> Result<RemoteTree> {
+    let mut tree = RemoteTree::new();
+    let start_rpath = cli::remote_path(remote_root, "");
+    let mut rel_of: HashMap<String, String> = HashMap::new();
+    rel_of.insert(start_rpath.clone(), "".to_string());
+    let mut visited = std::collections::HashSet::new();
+    let mut pending: Vec<String> = vec![start_rpath.clone()];
+    let filter_arc = Arc::new(filter.clone());
+    let config = Arc::new(RemoteConfig {
+        remote_root: remote_root.to_string(),
+        subfolders: String::new(),
+        exclude: String::new(),
+    });
+    let _ = config;
+    {
+        let r = remote_root.to_string();
+        let c = cli.clone();
+        crate::cli::with_cli_lock(move || -> Result<()> {
+            let _ = c.run(&["fs", "info", &r], true, Some(120), false);
+            Ok(())
+        })?;
+    }
+    // simple sequential for now (parallel later) - but need to respect lock semantics
+    while !pending.is_empty() {
+        let mut next_dirs: Vec<String> = Vec::new();
+        for rpath in pending.drain(..).collect::<Vec<_>>() {
+            if visited.contains(&rpath) { continue; }
+            // list with lock held for session safety? python holds lock for whole batch
+            let rpath_clone = rpath.clone();
+            let c2 = cli.clone();
+            let entries_val = crate::cli::with_cli_lock(move || {
+                c2.run_json(&["fs", "list", &rpath_clone], false)
+            })?;
+            visited.insert(rpath.clone());
+            let rel = rel_of.get(&rpath).cloned().unwrap_or_default();
+            if let Value::Array(arr) = entries_val {
+                for e in arr {
+                    if !e.is_object() { continue; }
+                    let obj = e.as_object().unwrap();
+                    if !obj.contains_key("type") { continue; }
+                    let typ = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    let name_obj = obj.get("name");
+                    let ok = name_obj.and_then(|n| n.get("ok")).and_then(|v| v.as_bool()).unwrap_or(true);
+                    let name = name_obj.and_then(|n| n.get("value")).and_then(|v| v.as_str()).unwrap_or("");
+                    if !ok || name.is_empty() { continue; }
+                    if Filter::skip_name(name) { continue; }
+                    let child_rel = if rel.is_empty() { name.to_string() } else { format!("{}/{}", rel, name) };
+                    if filter.excluded(&child_rel) { continue; }
+                    let media = obj.get("mediaType").and_then(|v| v.as_str()).unwrap_or("");
+                    let size = obj.get("activeRevision")
+                        .and_then(|r| r.get("claimedSize"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let is_dir = typ == "folder";
+                    if is_dir {
+                        if !filter.allowed_dir(&child_rel) { continue; }
+                        tree.insert(child_rel.clone(), RemoteEntry {
+                            uid: obj.get("uid").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                            kind: "dir".to_string(),
+                            mtime: obj.get("modificationTime").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                            size: Some(0),
+                            doc: false,
+                        });
+                        let child_rpath = format!("{}/{}", rpath, cli::escape(name));
+                        if !visited.contains(&child_rpath) {
+                            rel_of.insert(child_rpath.clone(), child_rel.clone());
+                            next_dirs.push(child_rpath);
+                        }
+                    } else if typ == "file" {
+                        if !filter.allowed_file(&child_rel) { continue; }
+                        let doc = media.starts_with("application/vnd.proton");
+                        tree.insert(child_rel.clone(), RemoteEntry {
+                            uid: obj.get("uid").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                            kind: "file".to_string(),
+                            mtime: obj.get("modificationTime").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                            size: Some(size),
+                            doc,
+                        });
+                    }
+                }
+            }
+        }
+        pending = next_dirs;
+    }
+    Ok(tree)
+}
