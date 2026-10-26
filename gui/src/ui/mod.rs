@@ -1478,3 +1478,56 @@ impl eframe::App for App {
         self.dialog_ui(&ctx);
     }
 }
+
+#[cfg(test)]
+mod glyph_tests {
+    use eframe::egui;
+    use egui::epaint::text::{FontDefinitions, FontProvider, Fonts, TextOptions};
+    use egui::FontId;
+    use std::sync::Arc;
+
+    /// Every character the UI paints as an icon rather than as text.
+    ///
+    /// None of them exist in the fonts this app bundles (Ubuntu-Light, Hack,
+    /// egui-icons), so they only render through the system font fallback that
+    /// eframe's `system_fonts` feature installs. 3.16.19 dropped that feature
+    /// while switching to glow, and these turned into blank boxes: the pane
+    /// carets, the sort arrow, the tri-state boxes, the upload/download arrows
+    /// and the folder emoji.
+    const ICON_GLYPHS: &[char] = &[
+        '\u{25b8}', // ▸ collapsed caret
+        '\u{25be}', // ▾ expanded caret
+        '\u{25bc}', // ▼ sort descending
+        '\u{25b2}', // ▲ sort ascending
+        '\u{2611}', // ☑ folder fully selected
+        '\u{2610}', // ☐ folder not selected
+        '\u{25d0}', // ◐ folder partly selected
+        '\u{2191}', // ↑ upload
+        '\u{2193}', // ↓ download
+        '\u{1f4c1}', // 📁 local folder card
+        '\u{1f4c2}', // 📂 selective-sync folder card
+    ];
+
+    /// A character's font files, not just its glyph, must exist - a tofu box
+    /// would still be "drawn", so asking the rasterizer is not enough.
+    #[test]
+    fn icon_glyphs_resolve_through_system_fallback() {
+        let mut fonts = Fonts::new(TextOptions::default(), FontDefinitions::default());
+        let provider: Arc<dyn FontProvider> =
+            Arc::new(egui_system_font_provider::SystemFontProvider::new());
+        fonts = fonts.with_font_providers(vec![provider]);
+
+        let missing: Vec<String> = ICON_GLYPHS
+            .iter()
+            .filter(|c| !fonts.has_glyph(&FontId::proportional(14.0), **c))
+            .map(|c| format!("U+{:04X} {}", *c as u32, c))
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "no font on this machine resolves these UI glyphs: {missing:?}\n\
+             The bundled fonts do not contain them - check that eframe is built \
+             with the `system_fonts` feature in gui/Cargo.toml."
+        );
+    }
+}

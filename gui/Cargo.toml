@@ -13,6 +13,11 @@ eframe = { version = "0.37.0", default-features = false, features = [
     "clipboard",
     "default_fonts",
     "glow",
+    # Not optional: the UI's carets, arrows, tri-state boxes and folder
+    # emoji are in none of the bundled fonts, and non-Latin filenames need a
+    # fallback too. Without this they render blank/tofu (the 3.16.19
+    # regression). Costs ~0.6 MiB; see ui::glyph_tests.
+    "system_fonts",
     "wayland",
     "x11",
 ] }
@@ -27,6 +32,11 @@ sha2 = "0.11.1"
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "time", "sync"] }
 ureq = "3.4.2"
 zbus = { version = "5.19.0", features = ["blocking-api"] }
+
+[dev-dependencies]
+# Only for `ui::glyph_tests`, which proves the icon glyphs resolve through
+# the same system font fallback eframe installs at runtime.
+egui_system_font_provider = "0.37.0"
 
 # The binary ships inside the AppImage - size matters (this replaced a
 # bundled Qt6 stack, the whole point being a smaller app).
