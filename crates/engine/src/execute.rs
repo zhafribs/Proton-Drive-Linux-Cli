@@ -117,8 +117,9 @@ pub fn execute(
                 }
                 let full = local_root.join(rel);
                 let parent_rpath = cli::remote_path(remote_root, &parent);
-                let res = cli.run(&["fs", "upload", &full.to_string_lossy(), &parent_rpath, "-f", "create-new-revision", "-d", "skip-identical"], false, Some(3600), true);
-                if res.is_err() {
+                let res = cli.run(&["fs", "upload", &full.to_string_lossy(), &parent_rpath, "-f", "create-new-revision", "-d", "merge"], false, Some(3600), true);
+                if let Err(e) = res {
+                    eprintln!("FAILED upload {}: {}", rel, e);
                     failed.insert(rel.clone());
                     continue;
                 }
@@ -129,7 +130,7 @@ pub fn execute(
                     // download whole subtree - simplified
                     let parent_rpath = cli::remote_path(remote_root, rel);
                     let _ = local_root.join(rel).as_path();
-                    let res = cli.run(&["fs", "download", &parent_rpath, &local_root.to_string_lossy(), "-f", "skip", "-d", "skip-identical"], false, Some(3600), true);
+                    let res = cli.run(&["fs", "download", &parent_rpath, &local_root.to_string_lossy(), "-f", "remove", "-d", "merge"], false, Some(3600), true);
                     if res.is_err() {
                         failed.insert(rel.clone());
                         continue;
@@ -139,7 +140,7 @@ pub fn execute(
                     continue;
                 }
                 let parent_rpath_parent = cli::remote_path(remote_root, &parent_of(rel));
-                let res = cli.run(&["fs", "download", &cli::remote_path(remote_root, rel), &local_root.to_string_lossy(), "-f", "skip", "-d", "skip-identical"], false, Some(3600), true);
+                let res = cli.run(&["fs", "download", &cli::remote_path(remote_root, rel), &local_root.to_string_lossy(), "-f", "remove", "-d", "merge"], false, Some(3600), true);
                 if res.is_err() {
                     failed.insert(rel.clone());
                     continue;
@@ -196,13 +197,13 @@ pub fn execute(
                 let dir = parent_of(rel);
                 let conflict_name = if dir.is_empty() { format!("{} (conflict {}){}", stem, ts, ext) } else { format!("{}/{} (conflict {}){}", dir, stem, ts, ext) };
                 // download remote version to conflict path
-                let _ = cli.run(&["fs", "download", &cli::remote_path(remote_root, rel), &local_root.join(&dir).to_string_lossy(), "-f", "skip", "-d", "skip-identical"], false, Some(3600), true);
+                let _ = cli.run(&["fs", "download", &cli::remote_path(remote_root, rel), &local_root.join(&dir).to_string_lossy(), "-f", "remove", "-d", "merge"], false, Some(3600), true);
                 // rename downloaded to conflict name (best effort)
                 let _ = fs::rename(local_root.join(&dir).join(&base), local_root.join(&conflict_name));
                 eprintln!("CONFLICT {} (kept remote copy as {})", rel, conflict_name);
                 // upload local as canonical
                 let parent_rpath = cli::remote_path(remote_root, &dir);
-                let _ = cli.run(&["fs", "upload", &local_root.join(rel).to_string_lossy(), &parent_rpath, "-f", "create-new-revision", "-d", "skip-identical"], false, Some(3600), true);
+                let _ = cli.run(&["fs", "upload", &local_root.join(rel).to_string_lossy(), &parent_rpath, "-f", "create-new-revision", "-d", "merge"], false, Some(3600), true);
             }
         }
     }

@@ -1,6 +1,7 @@
 //! Basic loop/scheduler for the Rust engine (experimental).
 //! Starts with interval polling + inotify wake support similar to Python.
 
+use crate::action::Action;
 use crate::cli::Cli;
 use crate::execute::execute;
 use crate::filter::Filter;
@@ -156,6 +157,9 @@ pub fn run_once_cycle(cli: &Cli, local_root: &str, remote_root: &str, filter: &F
         status: "ok".to_string(),
         cycle_seconds: Some(secs),
         actions: result.actions.len() as u64,
+        uploaded: result.actions.iter().filter(|a| matches!(a, Action::Up { .. }) && !failed.contains(a.rel())).count() as u64,
+        downloaded: downloaded.len() as u64,
+        failed: failed.len() as u64,
         holds: result.holds as u64,
         remote_entries: Some(remote2.len() as u64),
         local_entries: Some(local2.len() as u64),
