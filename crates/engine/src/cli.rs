@@ -189,3 +189,39 @@ pub fn remote_path(remote_root: &str, rel: &str) -> String {
     }
     parts.join("/")
 }
+
+/// Integer setting from the environment or `proton-sync.conf`, clamped to `1..=max`.
+pub fn cfg_int(key: &str, default: usize, max: usize) -> usize {
+    let raw = env::var(key).ok().or_else(|| {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+        let dir = dirs::config_dir().unwrap_or_else(|| home.join(".config"));
+        proton_core::conf::read(&dir.join("proton-sync.conf")).get(key).cloned()
+    });
+    raw.and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(default)
+        .clamp(1, max)
+}
+
+/// Run `f` over `items` on up to `workers` threads, pulling from one shared queue.
+/// Results come back in input order.
+pub fn run_parallel<T, R, F>(items: Vec<T>, workers: usize, f: F) -> Vec<R>
+where
+    T: Send,
+    R: Send,
+    F: Fn(T) -> R + Sync,
+{
+    let n = items.len();
+    let queue = Mutex::new(items.into_iter().enumerate().collect::<std::collections::VecDeque<_>>());
+    let results: Mutex<Vec<Option<R>>> = Mutex::new((0..n).map(|_| None).collect());
+    std::thread::scope(|s| {
+        for _ in 0..workers.max(1).min(n.max(1)) {
+            s.spawn(|| loop {
+                let next = queue.lock().unwrap().pop_front();
+                let Some((i, item)) = next else { break };
+                let r = f(item);
+                results.lock().unwrap()[i] = Some(r);
+            });
+        }
+    });
+    results.into_inner().unwrap().into_iter().map(|r| r.expect("every item runs")).collect()
+}

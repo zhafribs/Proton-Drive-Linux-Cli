@@ -106,31 +106,25 @@ pub fn execute(
     let mut created_dirs: BTreeSet<String> = BTreeSet::new();
     let mut failed: BTreeSet<String> = BTreeSet::new();
     let mut downloaded: BTreeSet<String> = BTreeSet::new();
+    let mut deferred_up: Vec<String> = Vec::new();
+    let mut deferred_dl: Vec<String> = Vec::new();
 
     for action in actions {
         match action {
             Action::Up { rel, node } => {
                 if !node.is_file() { continue; }
-                let parent = parent_of(rel);
-                if !parent.is_empty() {
-                    ensure_remote_dir(&cli, remote_root, &parent, &mut tree, &mut created_dirs)?;
-                }
-                let full = local_root.join(rel);
-                let parent_rpath = cli::remote_path(remote_root, &parent);
-                let res = cli.run(&["fs", "upload", &full.to_string_lossy(), &parent_rpath, "-f", "create-new-revision", "-d", "merge"], false, Some(3600), true);
-                if let Err(e) = res {
-                    eprintln!("FAILED upload {}: {}", rel, e);
-                    failed.insert(rel.clone());
-                    continue;
-                }
-                eprintln!("UPLOAD {}", rel);
+                deferred_up.push(rel.clone());
+            }
+            Action::Dl { rel, node } if node.kind != "dir" => {
+                deferred_dl.push(rel.clone());
             }
             Action::Dl { rel, node } => {
                 if node.kind == "dir" {
                     // download whole subtree - simplified
                     let parent_rpath = cli::remote_path(remote_root, rel);
-                    let _ = local_root.join(rel).as_path();
-                    let res = cli.run(&["fs", "download", &parent_rpath, &local_root.to_string_lossy(), "-f", "remove", "-d", "merge"], false, Some(3600), true);
+                    let parent_local = local_root.join(parent_of(rel));
+                    fs::create_dir_all(&parent_local)?;
+                    let res = cli.run(&["fs", "download", &parent_rpath, &parent_local.to_string_lossy(), "-f", "remove", "-d", "merge"], false, Some(3600), true);
                     if res.is_err() {
                         failed.insert(rel.clone());
                         continue;
@@ -139,14 +133,6 @@ pub fn execute(
                     downloaded.insert(rel.clone());
                     continue;
                 }
-                let parent_rpath_parent = cli::remote_path(remote_root, &parent_of(rel));
-                let res = cli.run(&["fs", "download", &cli::remote_path(remote_root, rel), &local_root.to_string_lossy(), "-f", "remove", "-d", "merge"], false, Some(3600), true);
-                if res.is_err() {
-                    failed.insert(rel.clone());
-                    continue;
-                }
-                eprintln!("DOWNLOAD {}", rel);
-                downloaded.insert(rel.clone());
             }
             Action::TrashLocal { rel, .. } => {
                 if let Err(_) = trash_local_path(rel, local_root) {
@@ -207,5 +193,79 @@ pub fn execute(
             }
         }
     }
+    let transfers = cli::cfg_int("PROTON_SYNC_TRANSFERS", 4, 10);
+    let mut batches: Vec<Batch> = Vec::new();
+    let mut up_by_parent: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    for rel in &deferred_up {
+        up_by_parent.entry(parent_of(rel)).or_default().push(rel.clone());
+    }
+    for (parent, rels) in &up_by_parent {
+        if !parent.is_empty() {
+            ensure_remote_dir(&cli, remote_root, parent, &mut tree, &mut created_dirs)?;
+        }
+        for chunk in rels.chunks(MAX_BATCH) {
+            batches.push(Batch { upload: true, parent: parent.clone(), rels: chunk.to_vec() });
+        }
+    }
+    let mut dl_by_parent: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    for rel in &deferred_dl {
+        dl_by_parent.entry(parent_of(rel)).or_default().push(rel.clone());
+    }
+    for (parent, rels) in &dl_by_parent {
+        fs::create_dir_all(local_root.join(parent))?;
+        for chunk in rels.chunks(MAX_BATCH) {
+            batches.push(Batch { upload: false, parent: parent.clone(), rels: chunk.to_vec() });
+        }
+    }
+
+    let outcomes = cli::with_cli_lock(|| {
+        let _ = cli.run(&["fs", "info", remote_root], true, Some(120), false);
+        Ok(cli::run_parallel(batches, transfers, |b| {
+            let res = if b.upload {
+                let locals: Vec<String> = b.rels.iter().map(|r| local_root.join(r).to_string_lossy().into_owned()).collect();
+                let parent_rpath = cli::remote_path(remote_root, &b.parent);
+                let mut args: Vec<&str> = vec!["fs", "upload", "-f", "create-new-revision", "-d", "merge"];
+                args.extend(locals.iter().map(|s| s.as_str()));
+                args.push(&parent_rpath);
+                cli.run(&args, false, Some(3600), false)
+            } else {
+                let rpaths: Vec<String> = b.rels.iter().map(|r| cli::remote_path(remote_root, r)).collect();
+                let target = local_root.join(&b.parent).to_string_lossy().into_owned();
+                let mut args: Vec<&str> = vec!["fs", "download"];
+                args.extend(rpaths.iter().map(|s| s.as_str()));
+                args.extend(["-f", "remove", "-d", "merge"]);
+                args.push(&target);
+                cli.run(&args, false, Some(3600), false)
+            };
+            (b, res)
+        }))
+    })?;
+
+    for (b, res) in outcomes {
+        match res {
+            Ok(_) => {
+                for rel in &b.rels {
+                    if b.upload {
+                        eprintln!("UPLOAD {}", rel);
+                    } else {
+                        eprintln!("DOWNLOAD {}", rel);
+                        downloaded.insert(rel.clone());
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("FAILED transfer batch ({} path(s)): {}", b.rels.len(), e);
+                failed.extend(b.rels.iter().cloned());
+            }
+        }
+    }
     Ok((failed, downloaded))
+}
+
+const MAX_BATCH: usize = 50;
+
+struct Batch {
+    upload: bool,
+    parent: String,
+    rels: Vec<String>,
 }

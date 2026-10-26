@@ -137,129 +137,78 @@ use crate::cli::{self, Cli};
 use anyhow::Result;
 use proton_core::snapshot::{RemoteEntry, RemoteTree};
 use serde_json::Value;
-use std::collections::HashMap;
-use std::sync::Arc;
-
-#[derive(Clone)]
-struct RemoteConfig {
-    remote_root: String,
-    subfolders: String,
-    exclude: String,
-}
+use std::collections::{HashMap, HashSet};
 
 pub fn scan_remote(cli: &Cli, remote_root: &str, filter: &Filter) -> Result<RemoteTree> {
-    let tree: Arc<std::sync::Mutex<RemoteTree>> = Arc::new(std::sync::Mutex::new(RemoteTree::new()));
     let start_rpath = cli::remote_path(remote_root, "");
-    let rel_of: Arc<std::sync::Mutex<HashMap<String, String>>> = Arc::new(std::sync::Mutex::new(HashMap::new()));
-    rel_of.lock().unwrap().insert(start_rpath.clone(), "".to_string());
-    let visited: Arc<std::sync::Mutex<std::collections::HashSet<String>>> = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
-    let pending: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(vec![start_rpath.clone()]));
-    
-    let tree_c = tree.clone();
-    let rel_of_c = rel_of.clone();
-    let visited_c = visited.clone();
-    let pending_c = pending.clone();
-    let cli_c = cli.clone();
-    let filter_c = filter.clone();
-    let remote_root_c = remote_root.to_string();
-    crate::cli::with_cli_lock(move || -> Result<()> {
-        // Probe session first under lock like Python does
-        {
-            let r = remote_root_c.clone();
-            let c = cli_c.clone();
-            let _ = c.run(&["fs", "info", &r], true, Some(120), false);
-        }
-        let workers = 8;
-        loop {
-            let to_scan: Vec<String> = {
-                let mut p = pending.lock().unwrap();
-                if p.is_empty() { break; }
-                let v = visited.lock().unwrap();
-                p.drain(..).filter(|x| !v.contains(x)).collect()
-            };
-            if to_scan.is_empty() { break; }
-            
-            use std::sync::mpsc;
-            use std::thread;
-            let (tx, rx) = mpsc::channel();
-            let mut handles = vec![];
-            for chunk in to_scan.chunks((to_scan.len() + workers - 1) / workers) {
-                let chunk_vec: Vec<String> = chunk.to_vec();
-                let tx_clone = tx.clone();
-                let cli_clone = cli.clone();
-                let rel_of_clone = rel_of.clone();
-                handles.push(thread::spawn(move || {
-                    for rpath in chunk_vec {
-                        let rel_of_lock = rel_of_clone.lock().unwrap();
-                        let rel = rel_of_lock.get(&rpath).cloned().unwrap_or_default();
-                        drop(rel_of_lock);
-                        let rpath_clone = rpath.clone();
-                        let c2 = cli_clone.clone();
-                        let entries_res = c2.run_json(&["fs", "list", &rpath_clone], false);
-                        if let Ok(entries_val) = entries_res {
-                            let _ = tx_clone.send((rpath, rel, entries_val));
-                        }
-                    }
-                }));
-            }
-            drop(tx);
-            
-            let mut next_dirs: Vec<String> = Vec::new();
-            for (rpath, rel, entries_val) in rx {
-                visited_c.lock().unwrap().insert(rpath.clone());
-                if let Value::Array(arr) = entries_val {
-                    for e in arr {
-                        if !e.is_object() { continue; }
-                        let obj = e.as_object().unwrap();
-                        if !obj.contains_key("type") { continue; }
-                        let typ = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                        let name_obj = obj.get("name");
-                        let ok = name_obj.and_then(|n| n.get("ok")).and_then(|v| v.as_bool()).unwrap_or(true);
-                        let name = name_obj.and_then(|n| n.get("value")).and_then(|v| v.as_str()).unwrap_or("");
-                        if !ok || name.is_empty() { continue; }
-                        if Filter::skip_name(name) { continue; }
-                        let child_rel = if rel.is_empty() { name.to_string() } else { format!("{}/{}", rel, name) };
-                        if filter.excluded(&child_rel) { continue; }
-                        let media = obj.get("mediaType").and_then(|v| v.as_str()).unwrap_or("");
-                        let size = obj.get("activeRevision")
-                            .and_then(|r| r.get("claimedSize"))
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0);
-                        let is_dir = typ == "folder";
-                        if is_dir {
-                            if !filter_c.allowed_dir(&child_rel) { continue; }
-                            tree_c.lock().unwrap().insert(child_rel.clone(), RemoteEntry {
-                                uid: obj.get("uid").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                kind: "dir".to_string(),
-                                mtime: obj.get("modificationTime").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                size: Some(0),
-                                doc: false,
-                            });
-                            let child_rpath = format!("{}/{}", rpath, crate::cli::escape(name));
-                            if !visited.lock().unwrap().contains(&child_rpath) {
-                                rel_of.lock().unwrap().insert(child_rpath.clone(), child_rel.clone());
-                                next_dirs.push(child_rpath);
-                            }
-                        } else if typ == "file" {
-                            if !filter.allowed_file(&child_rel) { continue; }
-                            let doc = media.starts_with("application/vnd.proton");
-                            tree_c.lock().unwrap().insert(child_rel.clone(), RemoteEntry {
-                                uid: obj.get("uid").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                kind: "file".to_string(),
-                                mtime: obj.get("modificationTime").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                size: Some(size),
-                                doc,
-                            });
-                        }
+    let workers = cli::cfg_int("PROTON_SYNC_WORKERS", 12, 16);
+
+    cli::with_cli_lock(|| {
+        let _ = cli.run(&["fs", "info", remote_root], true, Some(120), false);
+
+        let mut tree = RemoteTree::new();
+        let mut visited: HashSet<String> = HashSet::new();
+        let mut rel_of: HashMap<String, String> = HashMap::new();
+        rel_of.insert(start_rpath.clone(), String::new());
+        let mut level = vec![start_rpath.clone()];
+
+        while !level.is_empty() {
+            level.retain(|p| visited.insert(p.clone()));
+            let items: Vec<(String, String)> = level
+                .iter()
+                .map(|p| (p.clone(), rel_of.get(p).cloned().unwrap_or_default()))
+                .collect();
+            let listed = cli::run_parallel(items, workers, |(rpath, rel)| {
+                let entries = cli.run_json(&["fs", "list", &rpath], false);
+                (rpath, rel, entries)
+            });
+
+            let mut next: Vec<String> = Vec::new();
+            for (rpath, rel, entries) in listed {
+                let Value::Array(arr) = entries? else { continue };
+                for e in arr {
+                    let Some(obj) = e.as_object() else { continue };
+                    if !obj.contains_key("type") { continue; }
+                    let typ = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    let name_obj = obj.get("name");
+                    let ok = name_obj.and_then(|n| n.get("ok")).and_then(|v| v.as_bool()).unwrap_or(true);
+                    let name = name_obj.and_then(|n| n.get("value")).and_then(|v| v.as_str()).unwrap_or("");
+                    if !ok || name.is_empty() { continue; }
+                    if Filter::skip_name(name) { continue; }
+                    let child_rel = if rel.is_empty() { name.to_string() } else { format!("{}/{}", rel, name) };
+                    if filter.excluded(&child_rel) { continue; }
+                    let media = obj.get("mediaType").and_then(|v| v.as_str()).unwrap_or("");
+                    let size = obj.get("activeRevision")
+                        .and_then(|r| r.get("claimedSize"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    if typ == "folder" {
+                        if !filter.allowed_dir(&child_rel) { continue; }
+                        tree.insert(child_rel.clone(), RemoteEntry {
+                            uid: obj.get("uid").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                            kind: "dir".to_string(),
+                            mtime: obj.get("modificationTime").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                            size: Some(0),
+                            doc: false,
+                        });
+                        let child_rpath = format!("{}/{}", rpath, cli::escape(name));
+                        rel_of.insert(child_rpath.clone(), child_rel);
+                        next.push(child_rpath);
+                    } else if typ == "file" {
+                        if !filter.allowed_file(&child_rel) { continue; }
+                        let doc = media.starts_with("application/vnd.proton");
+                        tree.insert(child_rel, RemoteEntry {
+                            uid: obj.get("uid").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                            kind: "file".to_string(),
+                            mtime: obj.get("modificationTime").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                            size: Some(size),
+                            doc,
+                        });
                     }
                 }
             }
-            for h in handles { let _ = h.join(); }
-            if !next_dirs.is_empty() {
-                pending_c.lock().unwrap().extend(next_dirs);
-            }
+            level = next;
         }
-        Ok(())
-    })?;
-    Ok(std::sync::Arc::try_unwrap(tree).unwrap().into_inner().unwrap())
+        Ok(tree)
+    })
 }

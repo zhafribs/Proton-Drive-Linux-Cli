@@ -1,3 +1,14 @@
+## 3.16.25 — 2026-10-27
+
+- **Files land in the right folder.** Downloads from the cloud were saved to
+  the top of the sync folder instead of their own subfolder. Each file now
+  goes to the folder it lives in on Proton Drive. Files from earlier syncs
+  stay where they are; a copy left at the top level is a duplicate and can be
+  deleted.
+- **Faster sync.** Uploads and downloads run in batches per folder, up to
+  four at a time (`PROTON_SYNC_TRANSFERS`). The remote walk uses a shared
+  work queue with `PROTON_SYNC_WORKERS` parallel listings.
+
 ## 3.16.24 — 2026-10-27
 
 - **First sync starts at once.** The Rust engine waited a full sync interval
