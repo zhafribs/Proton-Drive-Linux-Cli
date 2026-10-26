@@ -22,6 +22,7 @@ eframe = { version = "0.37.0", default-features = false, features = [
     "x11",
 ] }
 fs2 = "0.4.3"
+inotify = { version = "0.9.6", default-features = false }
 ksni = { version = "0.3.6", features = ["blocking"] }
 notify-rust = "4.18.2"
 png = "0.18.1"

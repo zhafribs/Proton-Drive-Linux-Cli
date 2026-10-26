@@ -16,7 +16,9 @@ use crate::{
 use eframe::egui;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -138,6 +140,9 @@ pub struct App {
     pub active: bool,
     pub enabled: bool,
     pub page: Page,
+    /// Set by `logic()`, read by the poller: while Activity is on screen the
+    /// journal is refreshed on the live-log cadence.
+    pub activity_open: Arc<AtomicBool>,
 
     pub identity: Option<cli::Identity>,
     /// Re-probe sign-in after the engine reports a keyring problem: a locked
@@ -224,27 +229,112 @@ pub fn decode_png(bytes: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
     Some((w, h, rgba))
 }
 
-fn spawn_poller(tx: mpsc::Sender<Back>, paths: Paths) {
+/// How often the poller looks at the state files when nothing wakes it.
+/// The expensive work (journalctl, systemctl, the folder walk) is gated
+/// below; this heartbeat only covers a dead watcher and a page switch.
+const HEARTBEAT: Duration = Duration::from_secs(3);
+/// The unit state costs two `systemctl` spawns; 5 s is indistinguishable in
+/// use and cuts the idle rate by 40%.
+const UNIT_REFRESH: Duration = Duration::from_secs(5);
+/// Telemetry can land several times a second during transfers. The window
+/// only repaints every 900 ms, so there is no point forwarding faster.
+const POLL_MIN_GAP: Duration = Duration::from_millis(900);
+/// The journal feeds the Activity list and the conflict/error notifications.
+/// Re-read it only when there is new telemetry or while Activity is open.
+const JOURNAL_ACTIVE: Duration = Duration::from_secs(3);
+const JOURNAL_IDLE: Duration = Duration::from_secs(30);
+/// After each sync cycle the file/byte totals are accurate, so the blind
+/// timer only has to catch edits made while sync is stopped.
+const STATS_FALLBACK: Duration = Duration::from_secs(300);
+
+fn journal_due(changed: bool, since: Duration, activity_open: bool) -> bool {
+    (activity_open && since >= JOURNAL_ACTIVE)
+        || (changed && since >= JOURNAL_ACTIVE)
+        || since >= JOURNAL_IDLE
+}
+
+fn stats_due(have: bool, local_changed: bool, cycle_done: bool, since: Duration) -> bool {
+    !have
+        || local_changed
+        || (cycle_done && since >= Duration::from_secs(5))
+        || since >= STATS_FALLBACK
+}
+
+fn spawn_poller(tx: mpsc::Sender<Back>, paths: Paths, activity_open: Arc<AtomicBool>) {
     std::thread::spawn(move || {
-        let mut tick: u64 = 0;
+        let (wake_tx, wake_rx) = mpsc::channel();
+        // inotify makes the window react to a write immediately; the short
+        // heartbeat below still runs, so a failed watch only costs latency.
+        let mut live = crate::statewatch::spawn(&paths.state_dir, wake_tx);
+
+        let mut active = service::is_active();
+        let mut enabled = service::is_enabled();
+        let mut last_unit = Instant::now();
+        let mut last_poll: Option<Instant> = None;
+        let mut dirty = true;
+        let mut last_journal: Option<Instant> = None;
+        let mut last_stats: Option<Instant> = None;
+        let mut have_stats = false;
+        let mut local = String::new();
+        let mut fingerprint = String::new();
+
         loop {
-            let h = health::read(&paths.health_file);
-            let active = service::is_active();
-            let enabled = service::is_enabled();
-            if tx.send(Back::Poll { health: h, active, enabled }).is_err() {
-                break;
-            }
-            if tx.send(Back::Journal(service::journal_lines(600))).is_err() {
-                break;
-            }
-            if tick % 7 == 0 {
-                let c = conf::read(&paths.conf_file);
-                let local = c.get("PROTON_SYNC_LOCAL").cloned().unwrap_or_default();
-                let (files, bytes) = service::folder_stats(&expand_user(&local).to_string_lossy());
-                if tx.send(Back::Stats { files, bytes }).is_err() {
-                    break;
+            // The first pass publishes the state immediately; after that,
+            // sleep until a write lands (or the heartbeat expires).
+            if last_poll.is_some() {
+                if live {
+                    match wake_rx.recv_timeout(HEARTBEAT) {
+                        Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            // The watcher stopped (I/O error, or the directory
+                            // went away): keep polling on the heartbeat.
+                            live = false;
+                        }
+                    }
+                    // A rename + create burst becomes one refresh.
+                    while live && wake_rx.try_recv().is_ok() {}
+                } else {
+                    std::thread::sleep(HEARTBEAT);
                 }
             }
+
+            let h = health::read(&paths.health_file);
+            // `ts` is second-granular, so include the counters that move
+            // between writes; the pair is enough to spot new telemetry.
+            let now_fingerprint = format!(
+                "{}|{}|{}|{}|{}|{}|{}",
+                h.ts.as_deref().unwrap_or(""),
+                h.status,
+                h.uploaded,
+                h.downloaded,
+                h.actions,
+                h.transfer_done.unwrap_or(0),
+                h.audit_phase.as_deref().unwrap_or(""),
+            );
+            let changed = now_fingerprint != fingerprint;
+            fingerprint = now_fingerprint;
+            dirty |= changed;
+
+            if last_unit.elapsed() >= UNIT_REFRESH {
+                active = service::is_active();
+                enabled = service::is_enabled();
+                last_unit = Instant::now();
+            }
+            // Batch telemetry bursts to the repaint cadence; the heartbeat
+            // still forwards an unchanged snapshot in case a status was lost.
+            let repaint_due = last_poll.is_none_or(|t| t.elapsed() >= POLL_MIN_GAP);
+            let heartbeat_due = last_poll.is_none_or(|t| t.elapsed() >= HEARTBEAT);
+            if (dirty && repaint_due) || heartbeat_due {
+                if tx.send(Back::Poll { health: h.clone(), active, enabled }).is_err() {
+                    break;
+                }
+                last_poll = Some(Instant::now());
+                dirty = false;
+            }
+
+            // A second launch pokes this file. The watcher wakes us on the
+            // create, so the window comes forward at once; the stat below is
+            // the fallback for a missed event.
             let show = paths.state_dir.join("show-request");
             if show.exists() {
                 let _ = std::fs::remove_file(&show);
@@ -252,8 +342,32 @@ fn spawn_poller(tx: mpsc::Sender<Back>, paths: Paths) {
                     break;
                 }
             }
-            std::thread::sleep(Duration::from_secs(3));
-            tick = tick.wrapping_add(1);
+
+            let since = last_journal.map_or(Duration::MAX, |t| t.elapsed());
+            let watching = activity_open.load(Ordering::Relaxed);
+            if journal_due(changed, since, watching) {
+                last_journal = Some(Instant::now());
+                if tx.send(Back::Journal(service::journal_lines(600))).is_err() {
+                    break;
+                }
+            }
+
+            let c = conf::read(&paths.conf_file);
+            let configured = c.get("PROTON_SYNC_LOCAL").cloned().unwrap_or_default();
+            // A cycle ends with an "ok" write; while it runs the status is
+            // "syncing", so this does not walk the tree mid-transfer.
+            let cycle_done = changed && h.status == "ok";
+            let since = last_stats.map_or(Duration::MAX, |t| t.elapsed());
+            if stats_due(have_stats, configured != local, cycle_done, since) {
+                let (files, bytes) =
+                    service::folder_stats(&expand_user(&configured).to_string_lossy());
+                if tx.send(Back::Stats { files, bytes }).is_err() {
+                    break;
+                }
+                last_stats = Some(Instant::now());
+                local = configured;
+                have_stats = true;
+            }
         }
     });
 }
@@ -310,8 +424,9 @@ impl App {
         let conf_extras = conf::read_extras(&paths.conf_file);
         let draft = settings::Draft::load(&conf, &conf_extras, &prefs, &paths);
         let (tx, rx) = mpsc::channel();
+        let activity = Arc::new(AtomicBool::new(false));
 
-        spawn_poller(tx.clone(), paths.clone());
+        spawn_poller(tx.clone(), paths.clone(), activity.clone());
         let theme_rx = system_theme::watch(cc.egui_ctx.clone());
 
         // Identity (version + sign-in) as soon as the window exists.
@@ -384,6 +499,7 @@ impl App {
             active: false,
             enabled: false,
             page: Page::Home,
+            activity_open: activity.clone(),
 
             identity: None,
             identity_retry: None,
@@ -1416,6 +1532,8 @@ impl eframe::App for App {
     /// `run_logic`) - so the sync poller keeps flowing to the tray even when
     /// the window is closed to the background.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.activity_open
+            .store(self.page == Page::Activity && !self.hidden, Ordering::Relaxed);
         self.drain(ctx);
         self.drain_theme(ctx);
 
@@ -1576,5 +1694,99 @@ mod glyph_tests {
              The bundled fonts do not contain them - check that eframe is built \
              with the `system_fonts` feature in gui/Cargo.toml."
         );
+    }
+}
+
+#[cfg(test)]
+mod poll_cadence {
+    use super::*;
+
+    #[test]
+    fn journal_is_event_driven_but_never_starves() {
+        let s = Duration::from_secs;
+        // Fresh telemetry: refresh at the live cadence.
+        assert!(journal_due(true, s(3), false));
+        assert!(!journal_due(true, s(1), false));
+        // No telemetry: the slow safety net only.
+        assert!(!journal_due(false, s(3), false));
+        assert!(!journal_due(false, s(29), false));
+        assert!(journal_due(false, s(30), false));
+        // The Activity page is a live log, so it ticks even while quiet.
+        assert!(journal_due(false, s(3), true));
+        assert!(!journal_due(false, s(1), true));
+    }
+
+    fn scratch_paths() -> (PathBuf, Paths) {
+        let root = std::env::temp_dir().join(format!(
+            "proton-gui-poller-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let state = root.join("state");
+        std::fs::create_dir_all(&state).unwrap();
+        let paths = Paths {
+            conf_file: root.join("proton-sync.conf"),
+            unit_file: root.join("proton-sync.service"),
+            state_dir: state.clone(),
+            health_file: state.join("health.json"),
+            wake_file: state.join("wake"),
+            lock_file: state.join("gui.lock"),
+            snapshot_file: state.join("remote-snapshot.json"),
+            cloud_cache_file: state.join("cloud-cache.json"),
+            release_cache_file: state.join("release-cache.json"),
+            update_mark_file: state.join("update-pending.json"),
+            autostart_file: root.join("autostart.desktop"),
+            menu_desktop_file: root.join("menu.desktop"),
+            menu_icon_file: root.join("icon.svg"),
+            prefs_file: root.join("gui.conf"),
+            appimage: None,
+        };
+        (root, paths)
+    }
+
+    /// The real thread, not just the cadence helpers: a health write and a
+    /// second launch must both reach the UI channel.
+    #[test]
+    fn poller_reacts_to_state_writes() {
+        let (root, paths) = scratch_paths();
+        let (tx, rx) = mpsc::channel();
+        spawn_poller(tx, paths.clone(), Arc::new(AtomicBool::new(false)));
+
+        std::fs::write(
+            &paths.health_file,
+            r#"{"status":"syncing","ts":"2026-10-26T12:00:00+00:00"}"#,
+        )
+        .unwrap();
+        std::fs::write(paths.state_dir.join("show-request"), b"1").unwrap();
+
+        let (mut saw_poll, mut saw_show) = (false, false);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline && !(saw_poll && saw_show) {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(Back::Poll { health, .. }) if health.status == "syncing" => saw_poll = true,
+                Ok(Back::ShowWindow) => saw_show = true,
+                Ok(_) | Err(_) => {}
+            }
+        }
+        assert!(saw_poll, "a health.json write should reach the UI");
+        assert!(saw_show, "show-request should reach the UI");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn stats_refresh_after_cycles_not_on_a_timer() {
+        let s = Duration::from_secs;
+        // Nothing known yet, a new folder, or a finished cycle: refresh.
+        assert!(stats_due(false, false, false, s(0)));
+        assert!(stats_due(true, true, false, s(1)));
+        assert!(stats_due(true, false, true, s(6)));
+        // Inside a cycle, or just after one: keep the cached totals.
+        assert!(!stats_due(true, false, true, s(2)));
+        assert!(!stats_due(true, false, false, s(29)));
+        // The fallback catches edits made while sync is stopped.
+        assert!(stats_due(true, false, false, s(300)));
     }
 }

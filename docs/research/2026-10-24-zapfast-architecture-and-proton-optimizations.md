@@ -98,7 +98,7 @@ three levers differ.
 | Protocol in-process | whatsapp-rust | official CLI subprocess per folder (~100 MB each) | **No** — Proton has no official public API; reimplementing it is the account-restriction risk we already hit |
 | Storage | SQLite, paged, lazy history | one JSON snapshot + JSON state; whole tree in memory | Partly, only for very large trees |
 | UI stack | eframe `glow`, no wgpu | `eframe = "0.37.0"` with defaults (wgpu) | **Yes** — concrete, measurable |
-| Event-driven | `Waker`, zero idle repaints | health file polled every 3 s; local folder stats re-walked every 7 ticks (~21 s) | **Yes** — inotify on health/state + cached stats |
+| Event-driven | `Waker`, zero idle repaints | inotify on the state files; journal, unit state and folder stats gated (3.16.22) | **Done** — see §9 |
 | Release profile | thin LTO, 1 CGU, strip, panic=abort | full LTO, 1 CGU, strip | Minor: add `panic = "abort"` |
 | Paced work | request limits/backoff | adaptive scan workers, RAM cap, rate-limit backoff, per-parent transfer batches, chunked audit | Already aligned |
 
@@ -108,10 +108,10 @@ three levers differ.
    features = ["glow", "wayland", "x11", ...]`). It drops the wgpu stack,
    shrinks the binary, and is the most likely source of the 127 MiB GUI PSS.
    Measure PSS and startup before/after; keep wgpu if rendering regresses.
-2. **Stop polling the health file and re-walking the local tree on a timer.**
-   Watch `health.json` (and `show-request`) with inotify and repaint only on
-   change; cache the "files / bytes" totals and refresh them after cycles, not
-   every ~21 s. Small CPU/battery win, noticeable with large folders.
+2. ~~**Stop polling the health file and re-walking the local tree on a timer.**~~
+   **Shipped in 3.16.22** (§9): `health.json` and `show-request` are watched
+   with inotify, the journal is read on new telemetry, and the "files / bytes"
+   totals are cached and refreshed after each cycle instead of every ~21 s.
 3. **Only if the tree grows past ~10k entries:** move the snapshot/state from
    one JSON blob to SQLite (or at least an append-friendly binary format),
    and write audit chunks incrementally instead of rewriting the snapshot.
@@ -170,6 +170,28 @@ the official CLI subprocess model (deliberately kept) and its ~45 MiB PSS per
 scan worker while a scan is running; the GUI poller still runs `journalctl`
 every 3 s and walks the local folder every ~21 s, worth roughly 0.4% of one
 core — left as an optional follow-up, not a memory lever.
+
+## 9. Applied in 3.16.22
+
+Lever 2 shipped for the GUI's own telemetry (sync itself is untouched - the
+engine already uses inotify for local edits and Proton's change events for the
+cloud side):
+
+- **inotify on the state directory.** A new `statewatch` module watches
+  `health.json` and `show-request`, so a write wakes the poller immediately
+  instead of being discovered on the next tick. A 3 s heartbeat remains: a
+  watch that cannot be installed (or dies) degrades to the old latency.
+- **`journalctl` is event-driven.** It feeds the Activity list and the
+  conflict/error notifications, so it is re-read when new telemetry arrives
+  (at most every 3 s), every 3 s while the Activity page is on screen, and
+  every 30 s otherwise. It used to spawn 20 times a minute unconditionally.
+- **Unit state every 5 s** (was 3 s). Two `systemctl` spawns per check.
+- **Folder totals after a cycle**, not on a timer: a walk happens when a cycle
+  finishes (status `ok`), when the configured folder changes, and on a 5 min
+  fallback for edits made while sync is stopped. It used to run every ~21 s.
+
+Idle process spawns drop from roughly 60/min to roughly 25/min, and the
+remaining 3 s wake-ups only read one small JSON file.
 
 ## Sources
 
