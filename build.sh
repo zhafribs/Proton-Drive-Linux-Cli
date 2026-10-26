@@ -173,6 +173,17 @@ make_appdir() {
     # checkouts fall back to the host's python3). The CLI payload above
     # stays unmodified.
     install -m 0755 "$GUI_BIN" "$appdir/usr/bin/proton-drive-gui"
+    # Build and ship Rust engine alongside Python fallback
+    if command -v cargo >/dev/null 2>&1; then
+        if command -v cargo-zigbuild >/dev/null 2>&1; then
+            ( cd "$ROOT" && cargo zigbuild --release -p proton-engine --target "$target" 2>/dev/null ) || true
+        elif [ "$(uname -m)" = "$arch" ]; then
+            ( cd "$ROOT" && cargo build --release -p proton-engine 2>/dev/null ) || true
+        fi
+        for ebin in "$ROOT/gui/target/$target/release/proton-engine" "$ROOT/gui/target/x86_64-unknown-linux-gnu/release/proton-engine" "$ROOT/target/$target/release/proton-engine" "$ROOT/target/x86_64-unknown-linux-gnu/release/proton-engine" "$ROOT/target/release/proton-engine"; do
+            [ -x "$ebin" ] && { install -m 0755 "$ebin" "$appdir/usr/bin/proton-engine"; break; }
+        done
+    fi
     install -m 0644 "$ROOT/scripts/proton-sync.py" \
         "$appdir/usr/lib/proton-sync/proton-sync.py"
     # The app icon: the GUI renders it for the window title, the tray and the

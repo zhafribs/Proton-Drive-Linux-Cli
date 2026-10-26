@@ -14,6 +14,7 @@
 HERE="$(CDPATH='' cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)"
 CLI="$HERE/usr/bin/proton-drive"
 GUI="$HERE/usr/bin/proton-drive-gui"
+ENGINE="$HERE/usr/bin/proton-engine"
 LIB="$HERE/usr/lib/proton-sync"
 PYBUNDLE="$HERE/usr/lib/bundled-python"
 
@@ -40,7 +41,11 @@ run_python() {
 case "${1:-}" in
     __sync-engine)
         shift
-        PROTON_DRIVE_BIN="$CLI" run_python "$LIB/proton-sync.py" --loop "$@"
+        PROTON_DRIVE_BIN="$CLI"
+        if [ -x "$ENGINE" ]; then
+            exec "$ENGINE" --loop "$@"
+        fi
+        run_python "$LIB/proton-sync.py" --loop "$@"
         ;;
     # __gui is explicit; "" is double-click; --smoke is the offscreen
     # start-up self-test the updater runs on a freshly downloaded build
