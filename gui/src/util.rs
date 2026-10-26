@@ -34,11 +34,16 @@ pub fn strip_build_suffix(v: &str) -> String {
 /// Parse a version like "0.9.0" into (major, minor, patch), tolerant of a
 /// leading "v" and trailing junk.
 pub fn parse_version(s: &str) -> Option<(u64, u64, u64)> {
+    // A tag may carry a suffix ("3.16.27-rust"), so only the leading digits
+    // of each component count.
+    fn num(s: &str) -> Option<u64> {
+        s.trim().chars().take_while(char::is_ascii_digit).collect::<String>().parse().ok()
+    }
     let s = s.trim().trim_start_matches('v');
     let mut it = s.split('.');
-    let major = it.next()?.parse().ok()?;
-    let minor = it.next().unwrap_or("0").parse().unwrap_or(0);
-    let patch = it.next().unwrap_or("0").parse().unwrap_or(0);
+    let major = num(it.next()?)?;
+    let minor = it.next().and_then(num).unwrap_or(0);
+    let patch = it.next().and_then(num).unwrap_or(0);
     Some((major, minor, patch))
 }
 
@@ -85,5 +90,13 @@ mod tests {
         assert!(!is_newer("3.14.0", "3.13.2"));
         assert!(!is_newer("3.14.0", "3.14.0"));
         assert!(is_newer("0.9.0", "0.10.0"));
+    }
+
+    #[test]
+    fn version_suffix_is_ignored() {
+        assert_eq!(parse_version("3.16.27-rust"), Some((3, 16, 27)));
+        assert!(is_newer("3.16.26", "3.16.27-rust"));
+        assert!(!is_newer("3.16.27-rust", "3.16.26"));
+        assert_eq!(parse_version("3.16.27"), parse_version("3.16.27-rust"));
     }
 }

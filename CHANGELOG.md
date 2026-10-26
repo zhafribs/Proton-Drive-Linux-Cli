@@ -1,3 +1,10 @@
+## 3.16.28 — 2026-10-27
+
+- **In-app update check works again.** Release tags that carry a suffix
+  (`v0.9.0-gui3.16.27-rust`) were read as version `3.16.0`, so a newer build
+  looked older and the app reported "already on the latest version". Only the
+  leading digits of each part count now, so any tag suffix is ignored.
+
 ## 3.16.27 — 2026-10-27
 
 - **"Waiting for the first check" is gone.** The engine wrote no check time,
