@@ -1,3 +1,16 @@
+## 3.16.23 — 2026-10-27
+
+- **Rust sync engine fixes.** Uploads and downloads were being rejected by the
+  official CLI because the engine passed conflict strategies it does not
+  accept (`skip-identical`), so changes never reached Proton. Transfers now
+  use the same flags as the Python engine (`-d merge`, `-f remove` for
+  downloads). Failed transfers are logged, and the health file reports
+  uploaded, downloaded and failed counts.
+- **Faster idle cycles.** The remote tree is walked in parallel under one CLI
+  lock, and a cycle with nothing to do no longer walks the tree a second time.
+- **Build fails loudly.** `build.sh` stops when the Rust engine does not
+  compile, instead of silently shipping an older engine.
+
 ## 3.16.22 — 2026-10-26
 
 - **The status poller stopped doing busywork.** A background thread asked the
