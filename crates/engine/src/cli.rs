@@ -142,13 +142,10 @@ impl Cli {
             let lines_vec: Vec<String> = raw
                 .split('\n')
                 .map(|l| l.trim().to_string())
-                .filter(|l| !l.is_empty() && l.chars().all(|c| c == '='))
+                .filter(|l| !l.is_empty() && !l.chars().all(|c| c == '='))
                 .collect();
-            let msg = if lines_vec.is_empty() {
-                raw.split('\n').take(2).collect::<Vec<_>>().join(" / ")
-            } else {
-                lines_vec.join(" / ")
-            };
+            let joined = lines_vec.join(" / ");
+            let msg: String = joined.chars().take(500).collect();
             bail!(
                 "{}: {}",
                 args.iter().take(4).cloned().collect::<Vec<_>>().join(" "),

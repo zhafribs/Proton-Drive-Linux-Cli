@@ -142,6 +142,7 @@ use std::collections::{HashMap, HashSet};
 pub fn scan_remote(cli: &Cli, remote_root: &str, filter: &Filter) -> Result<RemoteTree> {
     let start_rpath = cli::remote_path(remote_root, "");
     let workers = cli::cfg_int("PROTON_SYNC_WORKERS", 12, 16);
+    let retries = cli::cfg_int("PROTON_SYNC_RETRIES", 3, 10);
 
     cli::with_cli_lock(|| {
         let _ = cli.run(&["fs", "info", remote_root], true, Some(120), false);
@@ -159,7 +160,14 @@ pub fn scan_remote(cli: &Cli, remote_root: &str, filter: &Filter) -> Result<Remo
                 .map(|p| (p.clone(), rel_of.get(p).cloned().unwrap_or_default()))
                 .collect();
             let listed = cli::run_parallel(items, workers, |(rpath, rel)| {
-                let entries = cli.run_json(&["fs", "list", &rpath], false);
+                let mut entries = cli.run_json(&["fs", "list", &rpath], false);
+                for attempt in 1..retries {
+                    if entries.is_ok() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(2 * attempt as u64));
+                    entries = cli.run_json(&["fs", "list", &rpath], false);
+                }
                 (rpath, rel, entries)
             });
 

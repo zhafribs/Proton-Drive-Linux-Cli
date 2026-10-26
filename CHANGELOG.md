@@ -7,7 +7,11 @@
   deleted.
 - **Faster sync.** Uploads and downloads run in batches per folder, up to
   four at a time (`PROTON_SYNC_TRANSFERS`). The remote walk uses a shared
-  work queue with `PROTON_SYNC_WORKERS` parallel listings.
+  work queue with `PROTON_SYNC_WORKERS` parallel listings. A full scan of a
+  large tree dropped from about 2.5 minutes to about 1.3 minutes.
+- **Retries on folder listing.** A listing that fails is retried
+  (`PROTON_SYNC_RETRIES`, default 3) before the cycle gives up. CLI errors now
+  show their real message instead of a line of `=` signs.
 
 ## 3.16.24 — 2026-10-27
 
