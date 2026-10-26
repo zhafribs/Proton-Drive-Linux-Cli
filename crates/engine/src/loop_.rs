@@ -107,6 +107,7 @@ pub fn run_loop() -> Result<()> {
         first = false;
         wake.store(false, std::sync::atomic::Ordering::Relaxed);
         let _ = run_once_cycle(&cli, &local_root, &remote_root, &filter, propagate_deletes);
+        crate::health::write_schedule(interval);
         last_cycle = Instant::now();
     }
 }

@@ -18,10 +18,31 @@ pub fn health_path() -> std::path::PathBuf {
 }
 
 pub fn write_health(health: &Health) {
+    let prev = proton_core::health::read(&health_path());
+    let mut h = health.clone();
+    h.ts = Some(chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string());
+    if h.interval.is_none() {
+        h.interval = prev.interval;
+    }
+    if h.next_poll.is_none() {
+        h.next_poll = prev.next_poll;
+    }
     let _ = fs::create_dir_all(state_dir());
     let tmp = health_path().with_extension("json.tmp");
-    if let Ok(s) = serde_json::to_string_pretty(health) {
+    if let Ok(s) = serde_json::to_string_pretty(&h) {
         let _ = fs::write(&tmp, s);
         let _ = fs::rename(&tmp, health_path());
     }
+}
+
+/// Record the schedule after a cycle: the interval and when the next check is due.
+pub fn write_schedule(interval: u64) {
+    let mut h = proton_core::health::read(&health_path());
+    h.interval = Some(interval);
+    h.next_poll = (interval > 0).then(|| {
+        (chrono::Local::now() + chrono::Duration::seconds(interval as i64))
+            .format("%Y-%m-%dT%H:%M:%S%:z")
+            .to_string()
+    });
+    write_health(&h);
 }

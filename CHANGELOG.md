@@ -1,3 +1,10 @@
+## 3.16.27 — 2026-10-27
+
+- **"Waiting for the first check" is gone.** The engine wrote no check time,
+  interval or next-check time, so the window had nothing to show after a
+  cycle. It now records the time of the last check and when the next one is
+  due, and keeps the schedule across a restart.
+
 ## 3.16.26 — 2026-10-27
 
 - **No more endless re-downloads.** A folder that did not exist locally was
