@@ -18,6 +18,7 @@ mod portal;
 mod prefs;
 mod release;
 mod service;
+mod statewatch;
 mod system_theme;
 mod theme;
 mod tray;
@@ -28,7 +29,7 @@ use eframe::egui;
 use std::path::{Path, PathBuf};
 
 /// The GUI's own version (the release tag is `v<CLI>-gui<GUI>`).
-pub const GUI_VERSION: &str = "3.16.21";
+pub const GUI_VERSION: &str = "3.16.22";
 
 /// The systemd user unit path (shared with `service.rs`).
 pub fn service_unit_path() -> PathBuf {

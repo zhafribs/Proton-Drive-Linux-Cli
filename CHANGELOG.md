@@ -1,3 +1,18 @@
+## 3.16.22 — 2026-10-26
+
+- **The status poller stopped doing busywork.** A background thread asked the
+  system for everything every three seconds: it spawned `journalctl` for the
+  Activity log and the conflict/error notifications, ran two `systemctl`
+  queries, and walked the whole sync folder every ~21 s to count files and
+  bytes. The state directory is now watched with inotify, so a second launch
+  brings the window forward at once, and the expensive reads only run when
+  something actually happened: the log follows new engine telemetry (still
+  every 3 s while Activity is on screen), the unit state is checked every 5 s,
+  and the file totals refresh when a sync cycle finishes instead of on a blind
+  timer. Sync itself is unchanged - the engine already watches your folder
+  with inotify and receives Proton's change events; this only cuts idle CPU
+  and makes the window react faster.
+
 ## 3.16.21 — 2026-10-26
 
 - **"Match my system" follows your desktop.** Choosing it after Light used to
