@@ -91,15 +91,37 @@ pub fn status_color(key: &str) -> egui::Color32 {
     }
 }
 
-/// Pick the active egui theme to match the pref (`System` = follow the OS).
-/// `apply` always styles both visual sets, so this only flips which one
-/// egui paints with - without it the Appearance combo stored the choice
-/// without ever showing it.
+/// Pick the active egui theme. The app resolves `System` through
+/// [`crate::system_theme`] before calling this, because Linux never reports a
+/// system theme to egui; the `System` arm is only the defensive path (egui
+/// then uses its own dark fallback). `apply` always styles both visual sets,
+/// so this only flips which one egui paints with - without it the Appearance
+/// combo stored the choice without ever showing it.
 pub fn force(ctx: &egui::Context, theme: &Theme) {
     match theme {
-        Theme::System => {}
+        Theme::System => ctx.set_theme(egui::ThemePreference::System),
         Theme::Light => ctx.set_theme(egui::Theme::Light),
         Theme::Dark => ctx.set_theme(egui::Theme::Dark),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn force_flips_the_active_theme() {
+        let ctx = egui::Context::default();
+        force(&ctx, &Theme::Dark);
+        assert_eq!(ctx.theme(), egui::Theme::Dark);
+        force(&ctx, &Theme::Light);
+        assert_eq!(ctx.theme(), egui::Theme::Light);
+        // The original bug: `System` was a no-op, so the forced Light stayed.
+        force(&ctx, &Theme::System);
+        assert_eq!(
+            ctx.options(|o| o.theme_preference),
+            egui::ThemePreference::System
+        );
     }
 }
 

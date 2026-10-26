@@ -9,7 +9,10 @@ pub mod home;
 pub mod settings;
 pub mod widgets;
 
-use crate::{cli, conf, health, journal, notify, paths::Paths, prefs, release, service, theme, tray};
+use crate::{
+    cli, conf, health, journal, notify, paths::Paths, prefs, release, service,
+    system_theme, theme, tray,
+};
 use eframe::egui;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -166,6 +169,11 @@ pub struct App {
     pub hide_on_start: bool,
     pub quitting: bool,
     pub style_dirty: bool,
+    /// The desktop's colour scheme as last detected. Only used when the pref
+    /// is `System`, which egui cannot resolve on Linux.
+    pub system_theme: prefs::Theme,
+    /// New colour schemes from `system_theme::watch` (OS flips).
+    theme_rx: mpsc::Receiver<prefs::Theme>,
     pub icon_tex: Option<egui::TextureHandle>,
     /// The system tray (None when the desktop has no tray host).
     pub tray: Option<ksni::blocking::Handle<tray::AppTray>>,
@@ -284,11 +292,17 @@ impl App {
             release::update_confirm_health(&paths);
         }
         let prefs = prefs::Prefs::load(&paths.prefs_file);
+        // Read the desktop's scheme before the first frame so the first paint
+        // already matches it (Linux never reports it to egui itself).
+        let detected_theme = system_theme::detect();
         let upd_next_check = prefs.updates_auto().then(|| {
             std::time::Instant::now() + Duration::from_secs(5)
         });
         theme::apply(&cc.egui_ctx, &prefs.theme());
-        theme::force(&cc.egui_ctx, &prefs.theme());
+        theme::force(
+            &cc.egui_ctx,
+            &system_theme::resolve(&prefs.theme(), &detected_theme),
+        );
         // egui draws text at fixed point sizes with its own font - the
         // interface scale pref is the only way to shrink/grow it.
         cc.egui_ctx.set_zoom_factor(prefs.ui_scale().factor());
@@ -298,6 +312,7 @@ impl App {
         let (tx, rx) = mpsc::channel();
 
         spawn_poller(tx.clone(), paths.clone());
+        let theme_rx = system_theme::watch(cc.egui_ctx.clone());
 
         // Identity (version + sign-in) as soon as the window exists.
         let tx_id = tx.clone();
@@ -395,6 +410,8 @@ impl App {
             hidden: false,
             quitting: false,
             style_dirty: false,
+            system_theme: detected_theme,
+            theme_rx,
             icon_tex,
             tray,
             wayland_fallback,
@@ -403,6 +420,11 @@ impl App {
     }
 
     // ------------------------------------------------------------- status
+
+    /// The theme to paint with: `System` uses the desktop's last answer.
+    fn resolved_theme(&self) -> prefs::Theme {
+        system_theme::resolve(&self.prefs.theme(), &self.system_theme)
+    }
 
     pub fn status_key(&self) -> &'static str {
         health::map_status(self.active, &self.health.status).key()
@@ -739,6 +761,24 @@ impl App {
                     }
                 }
             }
+        }
+    }
+
+    /// Take the desktop's latest colour scheme. Only the "Match my system"
+    /// preference reacts; an explicit Light/Dark keeps winning.
+    fn drain_theme(&mut self, ctx: &egui::Context) {
+        let mut latest = None;
+        while let Ok(theme) = self.theme_rx.try_recv() {
+            latest = Some(theme);
+        }
+        let Some(theme) = latest else { return };
+        if theme == self.system_theme {
+            return;
+        }
+        self.system_theme = theme.clone();
+        if matches!(self.prefs.theme(), prefs::Theme::System) {
+            theme::force(ctx, &theme);
+            ctx.request_repaint();
         }
     }
 
@@ -1377,6 +1417,7 @@ impl eframe::App for App {
     /// the window is closed to the background.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain(ctx);
+        self.drain_theme(ctx);
 
         // Re-probe sign-in after a keyring-lock report (see on_poll).
         if let Some(t) = self.identity_retry {
@@ -1432,8 +1473,14 @@ impl eframe::App for App {
         }
 
         if self.style_dirty {
+            // Re-read now: the user just picked a theme, and "Match my
+            // system" must reflect the desktop this second, not the value
+            // the watcher last saw.
+            if matches!(self.prefs.theme(), prefs::Theme::System) {
+                self.system_theme = system_theme::detect();
+            }
             theme::apply(ctx, &self.prefs.theme());
-            theme::force(ctx, &self.prefs.theme());
+            theme::force(ctx, &self.resolved_theme());
             self.style_dirty = false;
         }
 

@@ -18,6 +18,7 @@ mod portal;
 mod prefs;
 mod release;
 mod service;
+mod system_theme;
 mod theme;
 mod tray;
 mod ui;
@@ -167,10 +168,11 @@ fn smoke() -> Result<(), String> {
     let cli_ok = cli::resolve_cli().map(|x| x.is_file()).unwrap_or(false);
     println!(
         "smoke ok: gui {GUI_VERSION}, conf keys {}, local {local}, cli {cli_ok}, \
-         health status '{}', theme {}",
+         health status '{}', theme {} (system {})",
         c.len(),
         health.status,
-        prefs.theme().as_str()
+        prefs.theme().as_str(),
+        system_theme::detect().as_str()
     );
     if Path::new(&local).is_absolute() {
         Ok(())
