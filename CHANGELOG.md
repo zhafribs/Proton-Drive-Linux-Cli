@@ -1,3 +1,13 @@
+## 3.16.21 — 2026-10-26
+
+- **"Match my system" follows your desktop.** Choosing it after Light used to
+  leave the app light, and a fresh start ignored the desktop entirely: on
+  Linux egui is never told the system theme (winit reports none, and the
+  window deliberately runs on X11/XWayland). The app now reads the XDG
+  portal's colour scheme, falling back to `gsettings` and GTK's settings file,
+  so the Appearance choice matches the desktop and follows a dark/light flip
+  while it runs. Setups that expose none of those start light.
+
 ## 3.16.20 — 2026-10-26
 
 - **The missing icons are back.** The pane carets, the cloud sort arrow, the
