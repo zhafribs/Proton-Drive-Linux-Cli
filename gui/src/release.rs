@@ -569,4 +569,16 @@ mod tests {
         // legacy GUI-less release: no update (GUI comparison impossible)
         assert!(!has_update("0.9.0", &rel("0.9.0", "")));
     }
+
+    #[test]
+    fn update_is_found_from_a_real_tag() {
+        // The tag shapes that have shipped, including the suffixed ones that
+        // used to parse as 3.16.0 and hide every update.
+        let (cli, gui) = parse_tag("v0.9.0-gui3.99.0").unwrap();
+        assert!(has_update("0.9.0", &rel(&cli, &gui)));
+        let (cli, gui) = parse_tag("v0.9.0-gui3.99.0-rust").unwrap();
+        assert!(has_update("0.9.0", &rel(&cli, &gui)));
+        // a release equal to the installed build is not an update
+        assert!(!has_update("0.9.0", &rel("0.9.0", crate::GUI_VERSION)));
+    }
 }
