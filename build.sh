@@ -171,9 +171,9 @@ make_appdir() {
     # Build and ship Rust engine only
     if command -v cargo >/dev/null 2>&1; then
         if command -v cargo-zigbuild >/dev/null 2>&1 && [ -n "${target:-}" ]; then
-            ( cd "$ROOT" && cargo zigbuild --release -p proton-engine --target "$target" 2>/dev/null ) || true
+            ( cd "$ROOT" && cargo zigbuild --release -p proton-engine --target "$target" ) || die "proton-engine build failed"
         elif [ "$(uname -m)" = "$arch" ]; then
-            ( cd "$ROOT" && cargo build --release -p proton-engine 2>/dev/null ) || true
+            ( cd "$ROOT" && cargo build --release -p proton-engine ) || die "proton-engine build failed"
         fi
         for ebin in "$ROOT/gui/target/${target:-}/release/proton-engine" "$ROOT/gui/target/x86_64-unknown-linux-gnu/release/proton-engine" "$ROOT/target/${target:-}/release/proton-engine" "$ROOT/target/x86_64-unknown-linux-gnu/release/proton-engine" "$ROOT/target/release/proton-engine"; do
             [ -x "$ebin" ] && { install -m 0755 "$ebin" "$appdir/usr/bin/proton-engine"; break; }

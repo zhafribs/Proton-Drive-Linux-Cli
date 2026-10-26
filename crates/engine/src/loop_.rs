@@ -132,9 +132,12 @@ pub fn run_once_cycle(cli: &Cli, local_root: &str, remote_root: &str, filter: &F
         downloaded = d;
     }
 
-    // rescan after mutations
-    let local2 = scan_local(Path::new(local_root), filter);
-    let remote2 = scan_remote(cli, remote_root, filter)?;
+    // rescan only when something was mutated; an idle cycle reuses the first walk
+    let (local2, remote2) = if result.actions.is_empty() {
+        (local.clone(), remote.clone())
+    } else {
+        (scan_local(Path::new(local_root), filter), scan_remote(cli, remote_root, filter)?)
+    };
 
     let acted: BTreeSet<String> = result.actions.iter().map(|a| a.rel().to_string()).collect();
     let options = RefreshOptions {
