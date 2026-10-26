@@ -42,16 +42,10 @@ case "${1:-}" in
     __sync-engine)
         shift
         PROTON_DRIVE_BIN="$CLI"
-        ENGINE_MODE="${PROTON_SYNC_ENGINE:-auto}"
-        if [ "$ENGINE_MODE" = "python" ]; then
-            run_python "$LIB/proton-sync.py" --loop "$@"
-        elif [ "$ENGINE_MODE" = "rust" ] && [ -x "$ENGINE" ]; then
+        if [ -x "$ENGINE" ]; then
             exec "$ENGINE" --loop "$@"
-        elif [ -x "$ENGINE" ]; then
-            exec "$ENGINE" --loop "$@"
-        else
-            run_python "$LIB/proton-sync.py" --loop "$@"
         fi
+        run_python "$LIB/proton-sync.py" --loop "$@"
         ;;
     # __gui is explicit; "" is double-click; --smoke is the offscreen
     # start-up self-test the updater runs on a freshly downloaded build

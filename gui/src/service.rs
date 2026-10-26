@@ -130,7 +130,6 @@ pub fn ensure_service_unit(appimage: Option<&Path>, smoke: bool) -> String {
          [Service]\n\
          Type=simple\n\
          Environment={}\n\
-         Environment={}\n\
          Environment=MALLOC_ARENA_MAX=2\n\
          EnvironmentFile={}\n\
          ExecStart={} __sync-engine\n\
@@ -140,7 +139,6 @@ pub fn ensure_service_unit(appimage: Option<&Path>, smoke: bool) -> String {
          [Install]\n\
          WantedBy=default.target\n",
         quote_for_unit(&format!("PROTON_DRIVE_BIN={exe}")),
-        quote_for_unit("PROTON_SYNC_ENGINE=rust"),
         quote_for_unit(&format!("-{conf}")),
         quote_for_unit(&exe)
     );

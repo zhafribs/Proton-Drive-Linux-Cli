@@ -85,6 +85,9 @@ pub fn run_loop() -> Result<()> {
         }
     });
 
+    // push listener (best-effort)
+    let _push = crate::push::PushListener::start(wake_event.clone(), wake_mutex.clone());
+
     let mut last_cycle = Instant::now();
     loop {
         // wait

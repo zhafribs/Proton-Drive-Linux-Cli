@@ -166,29 +166,20 @@ make_appdir() {
 
     install -m 0755 "$SRC/AppRun" "$appdir/AppRun"
     install -m 0755 "$payload"    "$appdir/usr/bin/proton-drive"
-    # GUI: this project's own Rust binary (built by build_gui), statically
-    # carrying everything it needs beyond the usual desktop libs - no
-    # bundled Qt, no bundled GUI runtime. The sync engine stays Python and
-    # runs on the portable CPython bundled by bundle_python (dev source
-    # checkouts fall back to the host's python3). The CLI payload above
-    # stays unmodified.
+    # GUI: Rust binary
     install -m 0755 "$GUI_BIN" "$appdir/usr/bin/proton-drive-gui"
-    # Build and ship Rust engine alongside Python fallback
+    # Build and ship Rust engine only
     if command -v cargo >/dev/null 2>&1; then
-        if command -v cargo-zigbuild >/dev/null 2>&1; then
+        if command -v cargo-zigbuild >/dev/null 2>&1 && [ -n "${target:-}" ]; then
             ( cd "$ROOT" && cargo zigbuild --release -p proton-engine --target "$target" 2>/dev/null ) || true
         elif [ "$(uname -m)" = "$arch" ]; then
             ( cd "$ROOT" && cargo build --release -p proton-engine 2>/dev/null ) || true
         fi
-        for ebin in "$ROOT/gui/target/$target/release/proton-engine" "$ROOT/gui/target/x86_64-unknown-linux-gnu/release/proton-engine" "$ROOT/target/$target/release/proton-engine" "$ROOT/target/x86_64-unknown-linux-gnu/release/proton-engine" "$ROOT/target/release/proton-engine"; do
+        for ebin in "$ROOT/gui/target/${target:-}/release/proton-engine" "$ROOT/gui/target/x86_64-unknown-linux-gnu/release/proton-engine" "$ROOT/target/${target:-}/release/proton-engine" "$ROOT/target/x86_64-unknown-linux-gnu/release/proton-engine" "$ROOT/target/release/proton-engine"; do
             [ -x "$ebin" ] && { install -m 0755 "$ebin" "$appdir/usr/bin/proton-engine"; break; }
         done
     fi
-    install -m 0644 "$ROOT/scripts/proton-sync.py" \
-        "$appdir/usr/lib/proton-sync/proton-sync.py"
-    # The app icon: the GUI renders it for the window title, the tray and the
-    # "add to app menu" entry - inside the AppImage it must ship next to the
-    # script (find_icon() looks there first).
+    # The app icon
     install -m 0644 "$SRC/protondrive-icon.svg" \
         "$appdir/usr/lib/proton-sync/protondrive-icon.svg"
 
@@ -228,6 +219,7 @@ bundle_python() {
     local arch="$1" appdir="$2"
     local bdir="$ROOT/download/bundle/$arch"
     local py_file dest sp whl
+    [ "${BUNDLE_PYTHON:-0}" = "0" ] && { BUNDLE_PY=0; return 0; }
     py_file="$(ls -1 "$bdir"/cpython-*-install_only.tar.gz 2>/dev/null | head -1 || true)"
     [ -n "$py_file" ] || die "portable CPython missing for ${arch} - run scripts/fetch-desktop-deps.sh ${arch}"
     ls -1 "$bdir"/wheels/*.whl >/dev/null 2>&1 || die "engine wheels missing for ${arch} - run scripts/fetch-desktop-deps.sh ${arch}"
@@ -291,7 +283,7 @@ build_one() {
     build_gui "$arch"
     make_appdir "$platform" "$appdir"
     "$ROOT/scripts/fetch-desktop-deps.sh" "$arch"
-    bundle_python "$arch" "$appdir"
+    BUNDLE_PYTHON=${BUNDLE_PYTHON:-0} bundle_python "$arch" "$appdir"
     validate "$appdir"
 
     mkdir -p "$DIST"
