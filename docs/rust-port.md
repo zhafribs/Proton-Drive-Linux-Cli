@@ -73,11 +73,12 @@ tests/test_sync_*.py    parity reference for engine behaviour
 - Port the Proton event-stream poller (Secret Service session via `zbus`,
   HTTP via `ureq`) and cursor persistence. Keep interval fallback.
 
-### Phase 5 - cutover
+### Phase 5 - cutover (done)
 
-- Switch the systemd unit to the Rust engine, keep `--engine=python` as a
-  fallback for one release, then remove the bundled CPython/jeepney from
-  `build.sh` and the dependency fetchers.
+- Systemd unit now sets `PROTON_SYNC_ENGINE=rust` by default; `PROTON_SYNC_ENGINE=python`
+  remains available as a fallback. AppRun prefers the Rust engine when present.
+- The Rust engine is built and shipped in the AppImage alongside the Python fallback.
+- Bundled CPython/jeepney remain for now as a safety fallback; they can be removed in a future cleanup release once the Rust engine has been shadow-run in production.
 
 ## Cancelling the project
 
