@@ -5,6 +5,7 @@
 //! Relative paths are the keys; a node is a directory or file with the remote
 //! uid/mtime/size the CLI reports.
 
+use crate::state::State;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io;
@@ -27,14 +28,11 @@ pub struct Snapshot {
 #[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq, Eq)]
 #[serde(default)]
 pub struct RemoteEntry {
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
     /// "dir" or "file".
     #[serde(rename = "type")]
     pub kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub mtime: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<u64>,
     #[serde(default)]
     pub doc: bool,
@@ -46,10 +44,23 @@ pub fn walk_signature(remote_root: &str, subfolders: &str, exclude: &str) -> Str
 }
 
 /// Parse a snapshot, returning `None` for a missing or malformed file.
+///
+/// `sig`, `fp` and `tree` must be present with the right JSON types, matching
+/// the Python `load_snapshot` gate; a snapshot missing its fingerprint is not
+/// trustworthy even if the rest parses.
 pub fn read(path: &Path) -> Option<Snapshot> {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
+    let text = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    if !value.get("sig").is_some_and(|v| v.is_string()) {
+        return None;
+    }
+    if !value.get("fp").is_some_and(|v| v.is_array()) {
+        return None;
+    }
+    if !value.get("tree").is_some_and(|v| v.is_object()) {
+        return None;
+    }
+    serde_json::from_value(value).ok()
 }
 
 /// Atomically replace the snapshot, compactly like the Python writer.
@@ -72,6 +83,15 @@ impl Snapshot {
             .filter(|(_, n)| n.uid.is_some() && matches!(n.kind.as_str(), "dir" | "file"))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
+    }
+
+    /// Whether this cached walk can seed a fast start, and why not otherwise.
+    /// A cache with entries but no state would make every path look new.
+    pub fn usable(&self, state: &State) -> (bool, &'static str) {
+        if !self.tree.is_empty() && state.is_empty() {
+            return (false, "state empty");
+        }
+        (true, "ok")
     }
 }
 
@@ -127,6 +147,32 @@ mod tests {
         assert_eq!(back.tree["a"].uid.as_deref(), Some("u"));
         std::fs::remove_file(&path).ok();
         std::fs::remove_file(path.with_file_name("remote-snapshot.json.tmp")).ok();
+    }
+
+    #[test]
+    fn usable_requires_state_for_a_nonempty_tree() {
+        let mut snap = Snapshot::default();
+        assert_eq!(snap.usable(&State::new()), (true, "ok"));
+        snap.tree.insert(
+            "a.txt".into(),
+            RemoteEntry {
+                uid: Some("u".into()),
+                kind: "file".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(snap.usable(&State::new()), (false, "state empty"));
+        let mut state = State::new();
+        state.insert("a.txt".into(), Default::default());
+        assert_eq!(snap.usable(&state), (true, "ok"));
+    }
+
+    #[test]
+    fn read_rejects_missing_metadata() {
+        let path = std::env::temp_dir().join(format!("pdsnap-bad-{}.json", std::process::id()));
+        std::fs::write(&path, r#"{"tree":{}}"#).unwrap();
+        assert!(read(&path).is_none()); // no sig, no fp
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]

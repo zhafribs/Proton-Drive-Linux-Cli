@@ -139,8 +139,8 @@ mod tests {
             serde_json::from_str(r#"{"status":"ok","future_metric":7,"nested":{"a":1}}"#).unwrap();
         assert_eq!(h.extra["future_metric"], serde_json::json!(7));
         let back = serde_json::to_value(&h).unwrap();
-        assert_eq!(back["future_metric"], 7);
-        assert_eq!(back["nested"]["a"], 1);
+        assert_eq!(back["future_metric"], serde_json::json!(7));
+        assert_eq!(back["nested"]["a"], serde_json::json!(1));
     }
 
     #[test]
