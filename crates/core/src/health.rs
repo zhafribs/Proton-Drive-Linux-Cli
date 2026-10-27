@@ -47,6 +47,10 @@ pub struct Health {
     pub transfer_total: Option<u64>,
     pub transfer_bytes: Option<u64>,
 
+    /// AppImage/GUI build the engine was launched from (`PROTON_GUI_VERSION`).
+    /// The GUI uses this to notice a stale engine after an in-app update.
+    pub build: Option<String>,
+
     /// Fields a newer engine wrote that this build does not know yet.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,

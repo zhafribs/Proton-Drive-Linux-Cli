@@ -142,6 +142,10 @@ pub fn run_once_cycle(cli: &Cli, local_root: &str, remote_root: &str, filter: &F
         scan_remote(cli, remote_root, filter)?
     };
 
+    // Publish the fresh walk immediately, before any transfers, so the GUI's
+    // folder tree goes instant as soon as the scan finishes.
+    publish_snapshot(remote_root, filter, &remote);
+
     let config = PlanConfig { propagate_deletes, wipe_min: 5 };
     let result = plan_cycle(&remote, &local, &st, &config);
 
@@ -170,22 +174,9 @@ pub fn run_once_cycle(cli: &Cli, local_root: &str, remote_root: &str, filter: &F
         remote.clone()
     };
 
-    // Publish the walk for the GUI's instant folder tree and first paint.
-    // Only a complete (unfiltered) walk is written: a selective-sync snapshot
-    // would omit folders the user can still browse in the cloud, and the GUI
-    // treats the snapshot as the whole folder list.
-    if filter.is_unfiltered() {
-        let snapshot = proton_core::snapshot::Snapshot {
-            sig: filter.signature(remote_root),
-            fp: Vec::new(),
-            ts: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs_f64())
-                .unwrap_or(0.0),
-            tree: remote2.clone(),
-        };
-        let _ =
-            proton_core::snapshot::write(&state_dir().join("remote-snapshot.json"), &snapshot);
+    // Remote-side actions changed the tree: publish the re-walk too.
+    if remote_touched {
+        publish_snapshot(remote_root, filter, &remote2);
     }
 
     let acted: BTreeSet<String> = result.actions.iter().map(|a| a.rel().to_string()).collect();
@@ -215,6 +206,30 @@ pub fn run_once_cycle(cli: &Cli, local_root: &str, remote_root: &str, filter: &F
         ..Default::default()
     });
     Ok(())
+}
+
+/// Publish a complete remote walk for the GUI's instant folder tree and first
+/// paint. Only an unfiltered walk is written: a selective-sync snapshot would
+/// omit folders the user can still browse in the cloud, and the GUI treats the
+/// snapshot as the whole folder list.
+fn publish_snapshot(
+    remote_root: &str,
+    filter: &Filter,
+    tree: &proton_core::snapshot::RemoteTree,
+) {
+    if !filter.is_unfiltered() {
+        return;
+    }
+    let snapshot = proton_core::snapshot::Snapshot {
+        sig: filter.signature(remote_root),
+        fp: Vec::new(),
+        ts: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0),
+        tree: tree.clone(),
+    };
+    let _ = proton_core::snapshot::write(&state_dir().join("remote-snapshot.json"), &snapshot);
 }
 
 #[cfg(target_os = "linux")]

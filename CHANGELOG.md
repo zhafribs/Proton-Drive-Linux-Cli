@@ -1,3 +1,16 @@
+## 3.16.38 — 2026-10-27
+
+- **In-app updates now update the sync engine too.** The updater replaces the
+  AppImage in place, so the systemd unit path never changed and the background
+  service kept running the old engine (this machine was on a 3.16.37 GUI with a
+  3.16.29 engine). The unit now carries the GUI build, and the app restarts the
+  service whenever the running engine's build does not match - so the instant
+  folder tree from 3.16.37 actually takes effect.
+- The engine publishes `remote-snapshot.json` immediately after the remote scan
+  (before any transfers), so the sidebar turns instant as soon as the scan ends.
+- Added a regression test that the GUI reads the exact snapshot shape the engine
+  writes.
+
 ## 3.16.37 — 2026-10-27
 
 - **Instant My files sidebar.** The sync engine now publishes its full remote

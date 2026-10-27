@@ -130,6 +130,7 @@ pub fn ensure_service_unit(appimage: Option<&Path>, smoke: bool) -> String {
          [Service]\n\
          Type=simple\n\
          Environment={}\n\
+         Environment=PROTON_GUI_VERSION={}\n\
          Environment=MALLOC_ARENA_MAX=2\n\
          EnvironmentFile={}\n\
          ExecStart={} __sync-engine\n\
@@ -139,6 +140,7 @@ pub fn ensure_service_unit(appimage: Option<&Path>, smoke: bool) -> String {
          [Install]\n\
          WantedBy=default.target\n",
         quote_for_unit(&format!("PROTON_DRIVE_BIN={exe}")),
+        crate::GUI_VERSION,
         quote_for_unit(&format!("-{conf}")),
         quote_for_unit(&exe)
     );

@@ -2137,6 +2137,40 @@ fn tree_rows(app: &mut App, ui: &mut egui::Ui, parent: &str, depth: usize) {
 mod tests {
     use super::collapse_segments;
 
+    /// The engine publishes `remote-snapshot.json`; the GUI's instant tree must
+    /// read exactly that shape (`type`, `mtime` with a `T`, null folder size).
+    #[test]
+    fn seed_entries_matches_the_engine_snapshot_format() {
+        use super::seed_entries;
+        let path = std::env::temp_dir().join(format!(
+            "pd-snapshot-test-{}.json",
+            std::process::id()
+        ));
+        let json = r#"{"sig":"/my-files||","fp":[],"ts":0.0,"tree":{
+            "A":{"uid":"u1","type":"dir","mtime":"2026-01-02T03:04:05.000Z","size":null,"doc":false},
+            "A/b.txt":{"uid":"u2","type":"file","mtime":"2026-01-02T03:04:05.000Z","size":12,"doc":false},
+            "A/Empty":{"uid":"u3","type":"dir","mtime":"2026-01-02T03:04:05.000Z","size":null,"doc":false}
+        }}"#;
+        std::fs::write(&path, json).unwrap();
+
+        let root = seed_entries(&path, "").expect("root listing");
+        assert_eq!(root.len(), 1);
+        assert_eq!(root[0].name, "A");
+        assert!(root[0].dir);
+
+        let a = seed_entries(&path, "A").expect("A listing");
+        let rows: Vec<_> = a.iter().map(|e| (e.name.as_str(), e.dir, e.size)).collect();
+        assert!(rows.contains(&("b.txt", false, 12)));
+        assert!(rows.contains(&("Empty", true, 0)));
+
+        // Present but childless means known-empty, not "unknown": the tree
+        // must not fetch it again just to discover that.
+        assert_eq!(seed_entries(&path, "A/Empty").map(|v| v.len()), Some(0));
+        assert!(seed_entries(&path, "missing").is_none());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
     /// What top_row feeds the collapse: (label, full path to that crumb).
     fn crumbs() -> Vec<(String, String)> {
         [

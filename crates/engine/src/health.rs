@@ -19,6 +19,11 @@ pub fn write_health(health: &Health) {
     let prev = proton_core::health::read(&health_path());
     let mut h = health.clone();
     h.ts = Some(chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string());
+    // Stamp the build this engine was launched from (set by the unit), so the
+    // GUI can restart a service that is still exec'ing an older AppImage.
+    if h.build.is_none() {
+        h.build = std::env::var("PROTON_GUI_VERSION").ok();
+    }
     if h.interval.is_none() {
         h.interval = prev.interval;
     }

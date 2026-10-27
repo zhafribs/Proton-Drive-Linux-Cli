@@ -453,13 +453,19 @@ impl App {
 
         // Keep the installed unit pointing at this copy (Qt parity).
         let appimage = paths.appimage.clone();
+        let health_file = paths.health_file.clone();
         std::thread::spawn(move || {
             let unit = service::ensure_service_unit(appimage.as_deref(), false);
-            // After installing a new AppImage the unit now points at the new
-            // binary, but the running service still execs the old one. Restart
-            // it so the engine actually runs this build (and publishes a fresh
-            // remote snapshot for the instant folder tree).
-            if unit == "written" && service::is_active() {
+            let active = service::is_active();
+            // After an in-app update the AppImage at the same path is
+            // replaced, so the unit never changes and the running service
+            // keeps exec'ing the old engine. The engine stamps its build into
+            // health.json; restart when it does not match this GUI.
+            let stale = crate::health::read(&health_file)
+                .build
+                .as_deref()
+                .is_some_and(|b| b != crate::GUI_VERSION);
+            if active && (unit == "written" || stale) {
                 let _ = service::restart();
             }
         });
