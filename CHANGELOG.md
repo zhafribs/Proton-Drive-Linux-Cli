@@ -1,3 +1,12 @@
+## 3.16.32 — 2026-10-27
+
+- **My files rebuilt.** The header and rows now share one column geometry and
+  render through egui's own text layout, so every cell is vertically centred
+  and lines up perfectly. The sort direction is a small caret beside the
+  active column title instead of the oversized arrow.
+- **Richer right-click menu.** Added Select all, Duplicate, Details, and - in
+  the trash - Empty trash and Delete permanently (both with a confirm).
+
 ## 3.16.31 — 2026-10-27
 
 - **Deeper visual refresh.** Cards now float on a soft drop shadow with a

@@ -88,6 +88,10 @@ pub enum Dialog {
     /// Text input (Cloud: rename / new folder); the buffer lives on App.
     Input { title: String, label: String, intent: InputIntent },
     ConfirmTrash { n: usize },
+    /// Permanently delete the trash selection (cannot be undone).
+    ConfirmDelete { n: usize },
+    /// Empty the whole Proton trash (cannot be undone).
+    ConfirmEmptyTrash,
     ConfirmClearCache,
     /// The "Move to..." cloud folder picker.
     CloudMove,
@@ -111,6 +115,8 @@ enum DlgAct {
     CloudRename { old: String, name: String },
     NewFolder(String),
     TrashConfirm,
+    DeleteConfirm,
+    EmptyTrashConfirm,
     ClearCache,
     MoveSel(String), // picker row clicked
     MovePick(String), // picker confirmed: move selection here
@@ -1347,6 +1353,50 @@ impl App {
                         });
                     });
             }
+            Dialog::ConfirmDelete { n } => {
+                let word = if *n == 1 { "this item".to_string() } else { format!("these {n} items") };
+                egui::Window::new("Delete permanently?")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .open(&mut open)
+                    .show(ctx, |ui| {
+                        ui.label(format!(
+                            "Permanently delete {word}? This cannot be undone."
+                        ));
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() || escape {
+                                act = Some(DlgAct::Close);
+                            }
+                            if widgets::danger_ghost_button(ui, "Delete permanently") {
+                                act = Some(DlgAct::DeleteConfirm);
+                            }
+                        });
+                    });
+            }
+            Dialog::ConfirmEmptyTrash => {
+                egui::Window::new("Empty trash?")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .open(&mut open)
+                    .show(ctx, |ui| {
+                        ui.label(
+                            "Permanently delete everything in the Proton trash? This cannot be \
+                             undone.",
+                        );
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() || escape {
+                                act = Some(DlgAct::Close);
+                            }
+                            if widgets::danger_ghost_button(ui, "Empty trash") {
+                                act = Some(DlgAct::EmptyTrashConfirm);
+                            }
+                        });
+                    });
+            }
             Dialog::ConfirmClearCache => {
                 egui::Window::new("Clear snapshot cache")
                     .collapsible(false)
@@ -1500,6 +1550,14 @@ impl App {
             DlgAct::TrashConfirm => {
                 self.dialog = None;
                 cloud::action_trash(self);
+            }
+            DlgAct::DeleteConfirm => {
+                self.dialog = None;
+                cloud::action_delete_permanent(self);
+            }
+            DlgAct::EmptyTrashConfirm => {
+                self.dialog = None;
+                cloud::action_empty_trash(self);
             }
             DlgAct::ClearCache => {
                 self.dialog = None;

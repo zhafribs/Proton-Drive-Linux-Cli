@@ -428,6 +428,59 @@ pub fn action_restore(app: &mut App) {
     mutate(app, args, "Restoring...", format!("Restored {n} item(s)."), None);
 }
 
+pub fn action_delete_permanent(app: &mut App) {
+    let n = app.cloud.sel.len();
+    if n == 0 {
+        return;
+    }
+    let mut args = vec!["fs".to_string(), "delete".to_string()];
+    for s in &app.cloud.sel {
+        args.push(format!("/trash/{s}"));
+    }
+    mutate(
+        app,
+        args,
+        "Deleting...",
+        format!("Deleted {n} item(s)."),
+        None,
+    );
+}
+
+pub fn action_empty_trash(app: &mut App) {
+    mutate(
+        app,
+        vec!["fs".to_string(), "empty-trash".to_string()],
+        "Emptying trash...",
+        "Trash emptied.".to_string(),
+        None,
+    );
+}
+
+/// Duplicate the single selected item into its own folder as "<name> copy".
+pub fn action_duplicate(app: &mut App) {
+    let Some(rel) = app.cloud.sel.first().cloned() else {
+        return;
+    };
+    let root = remote_root(&app.conf);
+    let parent = rel.rsplit_once('/').map(|(p, _)| p.to_string()).unwrap_or_default();
+    let name = rel.rsplit('/').next().unwrap_or(&rel).to_string();
+    let copy_name = format!("{name} copy");
+    mutate(
+        app,
+        vec![
+            "fs".into(),
+            "copy".into(),
+            "-n".into(),
+            copy_name.clone(),
+            cli::rpath(&root, &rel),
+            cli::rpath(&root, &parent),
+        ],
+        "Duplicating...",
+        format!("Duplicated to {copy_name}."),
+        None,
+    );
+}
+
 // ------------------------------------------------------- uploads / downloads
 
 pub fn pick_upload_files(app: &mut App) {
@@ -1014,45 +1067,58 @@ fn top_row(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
-fn header_cell(ui: &mut egui::Ui, label: &str, col: usize, width: f32, app: &mut App) {
+const HEAD_H: f32 = 26.0;
+const ROW_H: f32 = 34.0;
+
+/// One sortable column header. Rendered with egui's own label layout (not
+/// hand-anchored text) so it is vertically centred and stays flush with the
+/// rows below. The sort direction is a small caret beside the label - the
+/// active column's title is accent-coloured, inactive ones stay muted.
+fn header_cell(app: &mut App, ui: &mut egui::Ui, w: f32, label: &str, col: usize, right: bool) {
     let active = app.cloud.sort_col == col;
-    let arrow = if active {
-        if app.cloud.sort_desc { " \u{25bc}" } else { " \u{25b2}" }
-    } else {
-        ""
-    };
-    let (rect, resp) =
-        ui.allocate_exact_size(egui::vec2(width, 22.0), egui::Sense::click());
-    // Uppercase, tightly-set labels read as a real data-table header (Proton's
-    // own list uses the same treatment), while the sort arrow stays lowercase
-    // glyphs so the label never looks like shouting.
-    let text = format!("{}{}", label.to_uppercase(), arrow);
+    let accent = theme::accent(ui.visuals());
     let color = if active {
-        ui.visuals().strong_text_color()
+        accent
     } else {
         ui.visuals().weak_text_color()
     };
-    // Anchor each header on the same x as the values below it: Name starts
-    // where the names start (after the icon), Size/Modified end where their
-    // right-aligned values end.
-    let (anchor, align) = if col == 0 {
-        (
-            rect.left_center() + egui::vec2(32.0, 0.0),
-            egui::Align2::LEFT_CENTER,
-        )
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, HEAD_H), egui::Sense::click());
+
+    let layout = if right {
+        egui::Layout::right_to_left(egui::Align::Center)
     } else {
-        (
-            egui::pos2(rect.right() - 8.0, rect.center().y),
-            egui::Align2::RIGHT_CENTER,
-        )
+        egui::Layout::left_to_right(egui::Align::Center)
     };
-    ui.painter().text(
-        anchor,
-        align,
-        text,
-        egui::FontId::proportional(11.5),
-        color,
-    );
+    {
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(layout));
+        child.spacing_mut().item_spacing.x = 4.0;
+        if right {
+            child.add_space(8.0);
+            child.label(
+                egui::RichText::new(label.to_uppercase())
+                    .size(11.5)
+                    .strong()
+                    .color(color),
+            );
+            if active {
+                let c = if app.cloud.sort_desc { "\u{25be}" } else { "\u{25b4}" };
+                child.label(egui::RichText::new(c).size(10.0).color(accent));
+            }
+        } else {
+            child.add_space(32.0);
+            child.label(
+                egui::RichText::new(label.to_uppercase())
+                    .size(11.5)
+                    .strong()
+                    .color(color),
+            );
+            if active {
+                let c = if app.cloud.sort_desc { "\u{25be}" } else { "\u{25b4}" };
+                child.label(egui::RichText::new(c).size(10.0).color(accent));
+            }
+        }
+    }
+
     if resp.hovered() {
         ui.painter().hline(
             rect.x_range(),
@@ -1061,7 +1127,7 @@ fn header_cell(ui: &mut egui::Ui, label: &str, col: usize, width: f32, app: &mut
         );
     }
     if resp.clicked() {
-        // Qt: same column flips the order, new column starts ascending.
+        // Same column flips the order, a new column starts ascending.
         if app.cloud.sort_col == col {
             app.cloud.sort_desc = !app.cloud.sort_desc;
         } else {
@@ -1108,12 +1174,12 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
             let name_w = name_w.max(name_min);
 
             ui.horizontal(|ui| {
-                header_cell(ui, "Name", 0, name_w, app);
+                header_cell(app, ui, name_w, "Name", 0, false);
                 if show_size {
-                    header_cell(ui, "Size", 1, col_size_w, app);
+                    header_cell(app, ui, col_size_w, "Size", 1, true);
                 }
                 if show_mtime {
-                    header_cell(ui, "Modified", 2, col_mtime_w, app);
+                    header_cell(app, ui, col_mtime_w, "Modified", 2, true);
                 }
             });
             ui.separator();
@@ -1140,6 +1206,7 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
                             e,
                             name_w,
                             col_size_w,
+                            col_mtime_w,
                             show_size,
                             show_mtime,
                             &mut open_rel,
@@ -1199,6 +1266,10 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
                     }
                     resp.context_menu(|ui| {
                         if trash_view {
+                            if ui.button("Empty trash").clicked() {
+                                ui.close();
+                                menu_item = Some("emptytrash");
+                            }
                             return;
                         }
                         if ui.button("New folder...").clicked() {
@@ -1214,6 +1285,10 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
                             menu_item = Some("uploadfolder");
                         }
                         ui.separator();
+                        if ui.button("Select all").clicked() {
+                            ui.close();
+                            menu_item = Some("selectall");
+                        }
                         if ui.button("Refresh").clicked() {
                             ui.close();
                             menu_item = Some("refresh");
@@ -1278,12 +1353,13 @@ fn row(
     e: &cli::RemoteEntry,
     name_w: f32,
     size_w: f32,
+    mtime_w: f32,
     show_size: bool,
     show_mtime: bool,
     open_rel: &mut Option<String>,
     menu_item: &mut Option<&'static str>,
 ) {
-    let height = 32.0;
+    let height = ROW_H;
     let (rect, resp) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), height),
         egui::Sense::click_and_drag(),
@@ -1330,38 +1406,57 @@ fn row(
             icon_color.gamma_multiply(0.75),
         );
     }
-    // File names stop before the Size column - a fixed character count
-    // painted over the values once the sidebar was widened.
-    let name_font = egui::FontId::proportional(14.0);
-    let name_text = elide_fit(ui, &e.name, name_font.clone(), (name_w - 40.0).max(24.0));
-    ui.painter().text(
-        egui::pos2(rect.left() + 32.0, cy),
-        egui::Align2::LEFT_CENTER,
-        name_text,
-        name_font,
-        if selected { visuals.selection.stroke.color } else { visuals.text_color() },
+    // The three cells render through egui labels at the exact column rects the
+    // header uses, so header and values line up with no hand-tuned offsets.
+    let name_color = if selected {
+        visuals.selection.stroke.color
+    } else {
+        visuals.text_color()
+    };
+    let weak = visuals.weak_text_color();
+    let gap = ui.spacing().item_spacing.x;
+
+    // Name (starts after the icon, stops before the Size column).
+    let name_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + 32.0, rect.top()),
+        egui::vec2((name_w - 40.0).max(24.0), height),
     );
+    let name_text = elide_fit(ui, &e.name, egui::FontId::proportional(14.0), name_rect.width());
+    let mut name_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(name_rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    name_ui.label(egui::RichText::new(name_text).size(14.0).color(name_color));
+
+    // Size (right-aligned, files only).
     if show_size && !e.dir {
-        // Same column boundaries as the header: Name | gap | Size.
-        ui.painter().text(
-            egui::pos2(
-                rect.left() + name_w + ui.spacing().item_spacing.x + size_w - 8.0,
-                cy,
-            ),
-            egui::Align2::RIGHT_CENTER,
-            fmt_size(e.size),
-            egui::FontId::proportional(12.5),
-            visuals.weak_text_color(),
+        let size_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.left() + name_w + gap, rect.top()),
+            egui::vec2(size_w, height),
         );
+        let mut size_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(size_rect)
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        );
+        size_ui.add_space(8.0);
+        size_ui.label(egui::RichText::new(fmt_size(e.size)).size(12.5).color(weak));
     }
+
+    // Modified (right-aligned).
     if show_mtime {
-        ui.painter().text(
-            egui::pos2(rect.right() - 8.0, cy),
-            egui::Align2::RIGHT_CENTER,
-            e.mtime.clone(),
-            egui::FontId::proportional(12.5),
-            visuals.weak_text_color(),
+        let mtime_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.right() - mtime_w, rect.top()),
+            egui::vec2(mtime_w, height),
         );
+        let mut mtime_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(mtime_rect)
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        );
+        mtime_ui.add_space(8.0);
+        mtime_ui.label(egui::RichText::new(e.mtime.clone()).size(12.5).color(weak));
     }
 
     if resp.hovered() {
@@ -1419,6 +1514,11 @@ fn row(
                 ui.close();
                 *menu_item = Some("restore");
             }
+            ui.separator();
+            if ui.button("Delete permanently").clicked() {
+                ui.close();
+                *menu_item = Some("delete");
+            }
             return;
         }
         let sel = &app.cloud.sel;
@@ -1436,6 +1536,10 @@ fn row(
                 *menu_item = Some("uploadfolder");
             }
             ui.separator();
+            if ui.button("Select all").clicked() {
+                ui.close();
+                *menu_item = Some("selectall");
+            }
             if ui.button("Refresh").clicked() {
                 ui.close();
                 *menu_item = Some("refresh");
@@ -1458,6 +1562,15 @@ fn row(
                 if ui.button("Rename...").clicked() {
                     ui.close();
                     *menu_item = Some("rename");
+                }
+                if ui.button("Duplicate").clicked() {
+                    ui.close();
+                    *menu_item = Some("duplicate");
+                }
+                ui.separator();
+                if ui.button("Details").clicked() {
+                    ui.close();
+                    *menu_item = Some("details");
                 }
             }
             ui.separator();
@@ -1545,6 +1658,37 @@ fn apply_menu_item(app: &mut App, item: Option<&'static str>) {
         }
         Some("trash") => {
             app.dialog = Some(super::Dialog::ConfirmTrash { n: app.cloud.sel.len() });
+        }
+        Some("delete") => {
+            app.dialog = Some(super::Dialog::ConfirmDelete { n: app.cloud.sel.len() });
+        }
+        Some("emptytrash") => {
+            app.dialog = Some(super::Dialog::ConfirmEmptyTrash);
+        }
+        Some("duplicate") => action_duplicate(app),
+        Some("selectall") => {
+            app.cloud.sel = app
+                .cloud
+                .entries
+                .iter()
+                .map(|e| e.rel.clone())
+                .collect();
+        }
+        Some("details") => {
+            let rel = app.cloud.sel.first().cloned();
+            let it = rel.and_then(|r| app.cloud.entries.iter().find(|e| e.rel == r).cloned());
+            if let Some(it) = it {
+                let kind = if it.dir { "Folder" } else { "File" };
+                let size = if it.dir { "-".to_string() } else { fmt_size(it.size) };
+                let body = format!(
+                    "Name: {}\nType: {}\nSize: {}\nModified: {}\nLocation: /{}",
+                    it.name, kind, size, it.mtime, it.rel
+                );
+                app.dialog = Some(super::Dialog::Info {
+                    title: it.name.clone(),
+                    body,
+                });
+            }
         }
         Some("restore") => action_restore(app),
         Some("uploadfiles") => pick_upload_files(app),
