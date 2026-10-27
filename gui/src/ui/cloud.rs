@@ -16,7 +16,7 @@ use std::time::{Duration, SystemTime};
 
 /// Cache key of the flat trash listing (a NUL can't appear in a rel path).
 pub const TRASH_KEY: &str = "\u{0}trash";
-const CLOUD_CACHE_MAX: usize = 300;
+const CLOUD_CACHE_MAX: usize = 1000;
 /// How long a listing is trusted before it is re-fetched in the background.
 /// Within this window, navigating never spawns a CLI process (and never waits
 /// on the sync engine's lock), which is what made folder-to-folder browsing
@@ -843,6 +843,14 @@ pub fn seed_entries(snapshot: &Path, rel: &str) -> Option<Vec<cli::RemoteEntry>>
         format!("{rel}/")
     };
     let mut out: Vec<cli::RemoteEntry> = Vec::new();
+    // A folder that exists in the walk but has no direct children is a known
+    // empty folder: return an empty listing (not `None`) so the tree does not
+    // re-fetch it just to discover it is empty.
+    let known_empty = if rel.is_empty() {
+        !obj.is_empty()
+    } else {
+        obj.contains_key(rel)
+    };
     for (r, n) in obj {
         let rest = if rel.is_empty() {
             if r.contains('/') {
@@ -875,7 +883,7 @@ pub fn seed_entries(snapshot: &Path, rel: &str) -> Option<Vec<cli::RemoteEntry>>
         });
     }
     if out.is_empty() {
-        return None;
+        return known_empty.then_some(out);
     }
     out = sorted(&out, 0, false);
     Some(out)

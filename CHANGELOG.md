@@ -1,3 +1,22 @@
+## 3.16.37 — 2026-10-27
+
+- **Instant My files sidebar.** The sync engine now publishes its full remote
+  folder/metadata walk to `remote-snapshot.json` after every cycle. The GUI has
+  always read that file, but the Rust engine never wrote it - so the sidebar
+  (and the first paint of every folder) was falling back to live CLI calls. Now
+  the whole tree renders from the snapshot with no network call, and expanding
+  a folder is instant.
+- **Empty folders are remembered.** A folder known to have no children is
+  served from the snapshot as empty instead of being re-listed every time.
+- **The engine now actually upgrades.** If a new AppImage changes the sync
+  service's path, the app restarts the service. Before this, the service kept
+  running the old engine indefinitely (on this machine it was still 3.16.29).
+- Raised the persistent folder-listing cache from 300 to 1000 folders.
+- **Selective sync:** the snapshot is only written for an unfiltered walk,
+  because a filtered one would omit folders you can still browse in the cloud.
+  With selective sync, a folder is still listed only the first time you open it
+  (metadata only - file contents are unaffected), then served from the cache.
+
 ## 3.16.36 — 2026-10-27
 
 - **Removed the sidebar "+ New" button.** Creating a folder and uploading are

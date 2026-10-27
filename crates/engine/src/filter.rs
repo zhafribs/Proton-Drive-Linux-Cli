@@ -65,6 +65,24 @@ impl Filter {
             .any(|s| rel == s || rel.starts_with(&format!("{s}/")))
     }
 
+    /// True when nothing limits the walk (no selective sync, no excludes), so
+    /// a snapshot of it is a complete view of the remote tree.
+    pub fn is_unfiltered(&self) -> bool {
+        self.subfolders.is_empty() && self.exclude.is_empty()
+    }
+
+    /// Signature of the walk settings (mirrors `walk_signature` in `core`).
+    pub fn signature(&self, remote_root: &str) -> String {
+        let subs = self.subfolders.join(",");
+        let excl = self
+            .exclude
+            .iter()
+            .map(|p| p.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("{remote_root}|{subs}|{excl}")
+    }
+
     pub fn excluded(&self, rel: &str) -> bool {
         if self.exclude.is_empty() {
             return false;
@@ -112,6 +130,17 @@ mod tests {
         assert!(f.allowed_file("Photos/2026/b.jpg"));
         assert!(!f.allowed_file("Photos/2025/b.jpg"));
         assert!(!f.allowed_file("Videos/a.mp4"));
+    }
+
+    #[test]
+    fn unfiltered_walks_are_the_only_complete_snapshots() {
+        assert!(Filter::new("", "").is_unfiltered());
+        assert!(!Filter::new("Docs", "").is_unfiltered());
+        assert!(!Filter::new("", "*.tmp").is_unfiltered());
+        assert_eq!(
+            Filter::new("Docs,Photos", "").signature("/my-files"),
+            "/my-files|Docs,Photos|"
+        );
     }
 
     #[test]

@@ -454,7 +454,14 @@ impl App {
         // Keep the installed unit pointing at this copy (Qt parity).
         let appimage = paths.appimage.clone();
         std::thread::spawn(move || {
-            let _ = service::ensure_service_unit(appimage.as_deref(), false);
+            let unit = service::ensure_service_unit(appimage.as_deref(), false);
+            // After installing a new AppImage the unit now points at the new
+            // binary, but the running service still execs the old one. Restart
+            // it so the engine actually runs this build (and publishes a fresh
+            // remote snapshot for the instant folder tree).
+            if unit == "written" && service::is_active() {
+                let _ = service::restart();
+            }
         });
 
         // Login-enable state of the unit (slow systemctl call, off-thread).

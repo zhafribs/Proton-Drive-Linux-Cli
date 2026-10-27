@@ -170,6 +170,24 @@ pub fn run_once_cycle(cli: &Cli, local_root: &str, remote_root: &str, filter: &F
         remote.clone()
     };
 
+    // Publish the walk for the GUI's instant folder tree and first paint.
+    // Only a complete (unfiltered) walk is written: a selective-sync snapshot
+    // would omit folders the user can still browse in the cloud, and the GUI
+    // treats the snapshot as the whole folder list.
+    if filter.is_unfiltered() {
+        let snapshot = proton_core::snapshot::Snapshot {
+            sig: filter.signature(remote_root),
+            fp: Vec::new(),
+            ts: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs_f64())
+                .unwrap_or(0.0),
+            tree: remote2.clone(),
+        };
+        let _ =
+            proton_core::snapshot::write(&state_dir().join("remote-snapshot.json"), &snapshot);
+    }
+
     let acted: BTreeSet<String> = result.actions.iter().map(|a| a.rel().to_string()).collect();
     let options = RefreshOptions {
         propagate_deletes,
