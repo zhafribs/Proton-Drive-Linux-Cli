@@ -1598,6 +1598,14 @@ fn row(
             }
         }
     });
+
+    // Keep the pointer cursor over rows. egui's selectable labels otherwise
+    // flip to an I-beam on hover, which made the list feel like a text box.
+    // Drag-to-select still works - this only changes the cursor glyph. It is
+    // set after the labels so it wins over the cursor they set while drawing.
+    if ui.rect_contains_pointer(rect) {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
 }
 
 fn rows_pos(rows: &[cli::RemoteEntry], rel: &str) -> Option<usize> {
@@ -1730,15 +1738,35 @@ fn bottom_row(app: &mut App, ui: &mut egui::Ui) {
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // right_to_left: the first item sits at the row's right edge.
+            if trash_view {
+                // Trash only ever needs clean-up actions - no upload, no new
+                // folder, no download.
+                if ui
+                    .add_enabled(!busy, egui::Button::new("Empty trash"))
+                    .on_hover_text("Permanently delete everything in the trash")
+                    .clicked()
+                {
+                    app.dialog = Some(super::Dialog::ConfirmEmptyTrash);
+                }
+                if !sel.is_empty() {
+                    if widgets::danger_ghost_button(ui, "Delete permanently") {
+                        app.dialog = Some(super::Dialog::ConfirmDelete { n: sel.len() });
+                    }
+                    if ui.button("Restore").clicked() {
+                        action_restore(app);
+                    }
+                }
+                return;
+            }
             if ui
-                .add_enabled(!trash_view && !busy, egui::Button::new("\u{2191} Upload"))
+                .add_enabled(!busy, egui::Button::new("\u{2191} Upload"))
                 .on_hover_text("Upload files or a folder")
                 .clicked()
             {
                 pick_upload_files(app);
             }
             if ui
-                .add_enabled(!trash_view && !busy, egui::Button::new("New folder"))
+                .add_enabled(!busy, egui::Button::new("New folder"))
                 .clicked()
             {
                 app.input_buf.clear();

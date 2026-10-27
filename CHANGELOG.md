@@ -1,3 +1,12 @@
+## 3.16.33 — 2026-10-27
+
+- **Trash gets its own toolbar.** Upload, New folder and Download are gone while
+  browsing Trash. Instead there is an **Empty trash** button, plus **Restore**
+  and **Delete permanently** whenever items are selected.
+- **Rows keep the pointer cursor.** Hovering a file or folder name no longer
+  flips to a text-select (I-beam) cursor. Click-dragging a name still
+  highlights it for copying.
+
 ## 3.16.32 — 2026-10-27
 
 - **My files rebuilt.** The header and rows now share one column geometry and
