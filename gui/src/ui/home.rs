@@ -6,7 +6,7 @@ use eframe::egui;
 
 pub fn draw(app: &mut App, ui: &mut egui::Ui) {
     egui::ScrollArea::vertical().show(ui, |ui| {
-        let status = health::map_status(app.active, &app.health.status);
+        let status = app.ui_status();
         let (title, _) = health::status_text(status);
         let key = status.key();
         let logged_in = app.logged_in();
@@ -14,22 +14,24 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
         // in" but "signed in and now locked out" - it needs its own wording
         // and its own way out.
         let needs_login = status == health::UiStatus::NeedsLogin;
+        let signed_out = status == health::UiStatus::SignedOut;
+        let signing_in = status == health::UiStatus::SigningIn;
 
         // --- hero ---------------------------------------------------------
         ui.horizontal(|ui| {
             widgets::status_orb(ui, key);
             ui.add_space(26.0);
             ui.vertical(|ui| {
-                let t = if logged_in || needs_login {
-                    title
-                } else {
-                    "Welcome to Proton Drive"
-                };
+                let t = title;
                 ui.label(egui::RichText::new(t).strong().size(27.0));
                 ui.add_space(4.0);
 
                 let sub = if needs_login {
                     health::hero_sub(status, &app.health)
+                } else if signing_in {
+                    "Finish signing in in the terminal window.".to_string()
+                } else if app.identity.is_none() {
+                    "Checking your account...".to_string()
                 } else if !logged_in {
                     "Sign in to start - your files will appear here.".to_string()
                 } else if let Some((text, at)) = &app.sub_override {
@@ -80,20 +82,41 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                         if widgets::primary_button(ui, "  Sign in again") {
                             app.action_login();
                         }
+                    } else if signed_out {
+                        if widgets::primary_button(ui, "  Sign in") {
+                            app.action_login();
+                        }
+                    } else if signing_in {
+                        ui.label(
+                            egui::RichText::new("Waiting for the terminal sign-in...")
+                                .size(12.0)
+                                .weak(),
+                        );
                     } else {
                         if widgets::primary_button(ui, "  Open my folder") {
                             app.action_open_folder();
                         }
-                        if widgets::secondary_button(ui, "  Sync now") {
+                        if app.active && widgets::secondary_button(ui, "  Sync now") {
                             app.action_sync_now();
                         }
                     }
-                    let pause_label = if app.active { "Pause" } else { "Resume" };
-                    if widgets::secondary_button(ui, pause_label) {
-                        if app.active {
-                            app.dialog = Some(Dialog::PauseMenu);
+                    // Pause/resume only makes sense with an account. When the
+                    // engine simply is not running, the same button offers to
+                    // start it instead.
+                    if !signed_out && !signing_in && !needs_login {
+                        let pause_label = if app.active {
+                            "Pause"
+                        } else if app.paused_by_user {
+                            "Resume"
                         } else {
-                            app.action_resume();
+                            "Start syncing"
+                        };
+                        if widgets::secondary_button(ui, pause_label) {
+                            if app.active {
+                                app.dialog = Some(Dialog::PauseMenu);
+                            } else {
+                                app.action_resume();
+                            }
                         }
                     }
                 });

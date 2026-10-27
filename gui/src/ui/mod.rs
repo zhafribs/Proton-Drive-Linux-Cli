@@ -154,6 +154,11 @@ pub struct App {
     /// Re-probe sign-in after the engine reports a keyring problem: a locked
     /// keyring makes the CLI look "not signed in" until it is unlocked.
     pub identity_retry: Option<std::time::Instant>,
+    /// The user paused syncing (persisted across restarts via a marker file).
+    pub paused_by_user: bool,
+    pub paused_at: Option<std::time::Instant>,
+    /// Set when a sign-in terminal was opened, so the orb can show progress.
+    pub login_started: Option<std::time::Instant>,
     pub stats: Option<(u64, u64)>,
 
     pub draft: settings::Draft,
@@ -507,6 +512,7 @@ impl App {
         // System tray (Qt built it whenever a tray host existed).
         let tray = tray::spawn(tx.clone(), icon_rgba, icon_w);
 
+        let paused_by_user = paths.state_dir.join("paused").exists();
         Ok(Box::new(App {
             hide_on_start: prefs.start_in_tray(),
             prefs,
@@ -524,6 +530,9 @@ impl App {
 
             identity: None,
             identity_retry: None,
+            paused_by_user,
+            paused_at: paused_by_user.then(Instant::now),
+            login_started: None,
             stats: None,
             draft,
             changes: Vec::new(),
@@ -563,14 +572,31 @@ impl App {
         system_theme::resolve(&self.prefs.theme(), &self.system_theme)
     }
 
+    /// The rich status the Home orb and the sidebar share: engine liveness,
+    /// the engine's report, the account probe, and transient login/pause state.
+    pub fn ui_status(&self) -> health::UiStatus {
+        let signing_in = self
+            .login_started
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(300))
+            && !self.logged_in();
+        health::derive_status(
+            self.active,
+            &self.health.status,
+            self.identity.is_some(),
+            self.logged_in(),
+            signing_in,
+            self.paused_by_user,
+        )
+    }
+
     pub fn status_key(&self) -> &'static str {
-        health::map_status(self.active, &self.health.status).key()
+        self.ui_status().key()
     }
 
     /// Qt put the STATUS_TEXT title on the side status label and the tray
     /// tooltip ("You're up to date", not a short chip).
     pub fn side_label(&self) -> &'static str {
-        health::status_text(health::map_status(self.active, &self.health.status)).0
+        health::status_text(self.ui_status()).0
     }
 
     pub fn logged_in(&self) -> bool {
@@ -653,6 +679,7 @@ impl App {
         };
         match cli::find_terminal() {
             Some((exe, args)) => {
+                self.login_started = Some(Instant::now());
                 let script = cli::login_script(&cli);
                 let mut a: Vec<String> = args;
                 a.extend(["sh".into(), "-c".into(), script]);
@@ -693,13 +720,20 @@ impl App {
         });
     }
 
-    pub fn action_pause(&self, secs: Option<u64>) {
+    pub fn action_pause(&mut self, secs: Option<u64>) {
+        self.paused_by_user = true;
+        self.paused_at = Some(Instant::now());
+        let _ = std::fs::create_dir_all(&self.paths.state_dir);
+        let _ = std::fs::write(self.paths.state_dir.join("paused"), b"1");
         std::thread::spawn(move || {
             let _ = service::pause_for(secs);
         });
     }
 
-    pub fn action_resume(&self) {
+    pub fn action_resume(&mut self) {
+        self.paused_by_user = false;
+        self.paused_at = None;
+        let _ = std::fs::remove_file(self.paths.state_dir.join("paused"));
         let appimage = self.paths.appimage.clone();
         std::thread::spawn(move || {
             let _ = service::ensure_service_unit(appimage.as_deref(), false);
@@ -708,6 +742,9 @@ impl App {
     }
 
     pub fn action_restart_service(&mut self) {
+        self.paused_by_user = false;
+        self.paused_at = None;
+        let _ = std::fs::remove_file(self.paths.state_dir.join("paused"));
         let appimage = self.paths.appimage.clone();
         std::thread::spawn(move || {
             let _ = service::ensure_service_unit(appimage.as_deref(), false);
@@ -788,6 +825,9 @@ impl App {
                     self.tray_sync();
                 }
                 Back::Identity(id) => {
+                    if id.logged_in {
+                        self.login_started = None;
+                    }
                     self.identity = Some(id);
                 }
                 Back::Stats { files, bytes } => {
@@ -960,6 +1000,19 @@ impl App {
         self.health = health;
         self.active = active;
         self.enabled = enabled;
+        // A timed pause auto-resumes (or the user starts it elsewhere): clear
+        // the paused marker so a later crash reads as "engine stopped", not
+        // "paused". The 8 s grace avoids clearing while the stop is in flight.
+        if active
+            && self.paused_by_user
+            && self
+                .paused_at
+                .is_some_and(|t| t.elapsed() >= Duration::from_secs(8))
+        {
+            self.paused_by_user = false;
+            self.paused_at = None;
+            let _ = std::fs::remove_file(self.paths.state_dir.join("paused"));
+        }
     }
 
     fn on_journal(&mut self, lines: Vec<String>) {

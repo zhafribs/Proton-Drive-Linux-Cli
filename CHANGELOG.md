@@ -1,3 +1,16 @@
+## 3.16.39 — 2026-10-27
+
+- **More Home status-orb states.** The circle now has its own glyph and colour
+  for: signed out (sign-in arrow), signing in (pulsing key), session expired
+  (padlock), engine not running (power symbol), engine starting (clock), paused
+  (pause bars), syncing (animated), up to date (check) and errors (exclamation).
+- **The Home buttons follow the state:** "Sign in" / "Sign in again", a waiting
+  message while the terminal sign-in is open, and "Start syncing" when the
+  engine is stopped but the account is fine.
+- **Pausing is remembered across restarts** (a marker file), so a paused app
+  still reads as paused instead of "engine stopped". A timed pause clears the
+  marker once the service comes back.
+
 ## 3.16.38 — 2026-10-27
 
 - **In-app updates now update the sync engine too.** The updater replaces the

@@ -125,6 +125,29 @@ pub fn status_orb(ui: &mut egui::Ui, status: &str) {
         return;
     }
 
+    if status == "signing_in" {
+        // A pulsing key: the sign-in terminal is open.
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(60));
+        let t = ui.ctx().input(|i| i.time) as f32;
+        let pulse = 0.5 + 0.5 * ((t * 3.0).sin() + 1.0) / 2.0;
+        let w = egui::Stroke::new(3.0, egui::Color32::WHITE.gamma_multiply(pulse));
+        painter.circle_stroke(c + egui::vec2(-5.5, 0.0), 5.0, w);
+        painter.add(egui::Shape::line(
+            vec![c + egui::vec2(-0.5, 0.0), c + egui::vec2(10.0, 0.0)],
+            w,
+        ));
+        painter.add(egui::Shape::line(
+            vec![c + egui::vec2(6.0, 0.0), c + egui::vec2(6.0, 4.0)],
+            w,
+        ));
+        painter.add(egui::Shape::line(
+            vec![c + egui::vec2(9.5, 0.0), c + egui::vec2(9.5, 3.0)],
+            w,
+        ));
+        return;
+    }
+
     // Static glyph per state, painted white on the glass core.
     let white = egui::Color32::WHITE;
     match status {
@@ -153,6 +176,79 @@ pub fn status_orb(ui: &mut egui::Ui, status: &str) {
                 egui::Rect::from_center_size(c + egui::vec2(0.0, -3.0), egui::vec2(4.5, 14.0));
             painter.rect_filled(bar, egui::CornerRadius::same(2), white);
             painter.circle_filled(c + egui::vec2(0.0, 8.5), 2.6, white);
+        }
+        "signed_out" => {
+            // Sign-in arrow entering a door.
+            let w = egui::Stroke::new(3.2, white);
+            painter.add(egui::Shape::line(
+                vec![
+                    c + egui::vec2(4.0, -10.0),
+                    c + egui::vec2(10.0, -10.0),
+                    c + egui::vec2(10.0, 10.0),
+                    c + egui::vec2(4.0, 10.0),
+                ],
+                w,
+            ));
+            painter.add(egui::Shape::line(
+                vec![c + egui::vec2(-11.0, 0.0), c + egui::vec2(6.0, 0.0)],
+                w,
+            ));
+            painter.add(egui::Shape::line(
+                vec![
+                    c + egui::vec2(1.0, -5.0),
+                    c + egui::vec2(6.0, 0.0),
+                    c + egui::vec2(1.0, 5.0),
+                ],
+                w,
+            ));
+        }
+        "needs_login" => {
+            // Padlock: the session is locked out, not a fresh install.
+            let w = egui::Stroke::new(3.0, white);
+            // Shackle: a semicircle whose ends meet the body.
+            let arc_c = c + egui::vec2(0.0, -1.0);
+            let mut pts = Vec::new();
+            for i in 0..=16 {
+                let a = std::f32::consts::PI + (i as f32 / 16.0) * std::f32::consts::PI;
+                pts.push(arc_c + egui::vec2(a.cos(), a.sin()) * 6.0);
+            }
+            painter.add(egui::Shape::line(pts, w));
+            let body = egui::Rect::from_center_size(
+                c + egui::vec2(0.0, 5.0),
+                egui::vec2(18.0, 13.0),
+            );
+            painter.rect_filled(body, egui::CornerRadius::same(3), white);
+            painter.circle_filled(c + egui::vec2(0.0, 4.0), 2.4, theme::NAVY);
+        }
+        "engine_stopped" => {
+            // Power symbol: the engine is not running.
+            let w = egui::Stroke::new(3.4, white);
+            let start = -std::f32::consts::FRAC_PI_2 + 0.55;
+            let sweep = std::f32::consts::TAU - 1.1;
+            let pts: Vec<egui::Pos2> = (0..=32)
+                .map(|i| {
+                    let a = start + (i as f32 / 32.0) * sweep;
+                    c + egui::vec2(a.cos(), a.sin()) * 9.5
+                })
+                .collect();
+            painter.add(egui::Shape::line(pts, w));
+            painter.add(egui::Shape::line(
+                vec![c + egui::vec2(0.0, -11.0), c + egui::vec2(0.0, 0.5)],
+                w,
+            ));
+        }
+        "starting" => {
+            // Clock: waiting for the engine's first report.
+            let w = egui::Stroke::new(3.0, white);
+            painter.circle_stroke(c, 9.5, w);
+            painter.add(egui::Shape::line(
+                vec![c, c + egui::vec2(0.0, -6.0)],
+                egui::Stroke::new(2.6, white),
+            ));
+            painter.add(egui::Shape::line(
+                vec![c, c + egui::vec2(4.5, 2.5)],
+                egui::Stroke::new(2.6, white),
+            ));
         }
         _ => {
             // Unknown: a quiet white ring.

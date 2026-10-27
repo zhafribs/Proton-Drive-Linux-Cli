@@ -117,6 +117,12 @@ pub fn status_color(key: &str) -> egui::Color32 {
         "paused" => WARNING,
         // A lost session is recoverable - warn, do not alarm.
         "needs_login" => WARNING,
+        // No account yet: calm, not an error.
+        "signed_out" => INFO,
+        "signing_in" => ACCENT,
+        // The engine is not running - neutral grey, not a failure.
+        "engine_stopped" => MUTED,
+        "starting" => INFO,
         "error" => ERROR,
         _ => MUTED,
     }

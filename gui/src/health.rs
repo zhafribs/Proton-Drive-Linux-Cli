@@ -5,14 +5,23 @@ pub use proton_core::health::{read, Health};
 
 use crate::util::rel_time;
 
-/// The states the Home orb cycles through.
+/// The states the Home orb can show. Each has its own colour and glyph.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum UiStatus {
     Synced,
     Syncing,
+    /// The user paused syncing (a resume button is available).
     Paused,
     /// The stored session is gone - only a fresh sign-in brings syncing back.
     NeedsLogin,
+    /// Nobody is signed in (welcome screen).
+    SignedOut,
+    /// A sign-in is in progress (the external terminal is open).
+    SigningIn,
+    /// Signed in, but the sync service is not running (stopped/crashed).
+    EngineStopped,
+    /// The service is up but has not reported a cycle yet.
+    Starting,
     Error,
     Unknown,
 }
@@ -24,34 +33,79 @@ impl UiStatus {
             UiStatus::Syncing => "syncing",
             UiStatus::Paused => "paused",
             UiStatus::NeedsLogin => "needs_login",
+            UiStatus::SignedOut => "signed_out",
+            UiStatus::SigningIn => "signing_in",
+            UiStatus::EngineStopped => "engine_stopped",
+            UiStatus::Starting => "starting",
             UiStatus::Error => "error",
             UiStatus::Unknown => "unknown",
         }
     }
 }
 
-/// Service active + engine-reported status -> one UI status.
-pub fn map_status(active: bool, hstatus: &str) -> UiStatus {
-    if !active {
-        UiStatus::Paused
-    } else {
+/// The full status derivation: engine liveness, the engine's own report, the
+/// account probe and the app's transient login/pause state.
+pub fn derive_status(
+    active: bool,
+    hstatus: &str,
+    identity_known: bool,
+    logged_in: bool,
+    signing_in: bool,
+    paused_by_user: bool,
+) -> UiStatus {
+    // A fresh sign-in is more useful than "signed out" while it runs.
+    if signing_in && !logged_in {
+        return UiStatus::SigningIn;
+    }
+    // The engine says the keyring session is gone; that is not a fresh
+    // install, so it gets the "sign in again" treatment.
+    if hstatus == "needs_login" {
+        return UiStatus::NeedsLogin;
+    }
+    if !identity_known {
+        // Account probe still in flight - the engine is starting up too.
+        return UiStatus::Starting;
+    }
+    if !logged_in {
+        return UiStatus::SignedOut;
+    }
+    if active {
         match hstatus {
             "ok" => UiStatus::Synced,
             "syncing" => UiStatus::Syncing,
             "needs_login" => UiStatus::NeedsLogin,
             "error" => UiStatus::Error,
+            "" => UiStatus::Starting,
             _ => UiStatus::Unknown,
         }
+    } else if paused_by_user {
+        UiStatus::Paused
+    } else {
+        UiStatus::EngineStopped
     }
 }
 
-/// (title, subtitle-template) per status - verbatim PyQt strings.
+/// (title, subtitle-template) per status - verbatim PyQt strings where they
+/// exist, plain product wording for the states the Python app never had.
 pub fn status_text(status: UiStatus) -> (&'static str, &'static str) {
     match status {
         UiStatus::Synced => ("You're up to date", ""),
         UiStatus::Syncing => ("Syncing your files...", "Just a moment..."),
         UiStatus::Paused => ("Sync is paused", "Nothing is syncing. Your files are safe."),
         UiStatus::NeedsLogin => ("Your session expired", "Sign in again to resume syncing."),
+        UiStatus::SignedOut => (
+            "Welcome to Proton Drive",
+            "Sign in to start - your files will appear here.",
+        ),
+        UiStatus::SigningIn => (
+            "Signing in...",
+            "Finish signing in in the terminal window.",
+        ),
+        UiStatus::EngineStopped => (
+            "Sync engine isn't running",
+            "Start it to keep your files in sync.",
+        ),
+        UiStatus::Starting => ("Starting the sync engine...", "Just a moment..."),
         UiStatus::Error => ("Couldn't sync", "{error}"),
         UiStatus::Unknown => ("Checking your files...", ""),
     }
@@ -141,7 +195,10 @@ mod tests {
         assert_eq!(h.interval, Some(60));
         assert!(h.next_poll_dt().is_some());
         assert!(h.ts_dt().is_some());
-        assert_eq!(map_status(true, &h.status), UiStatus::Synced);
+        assert_eq!(
+            derive_status(true, &h.status, true, true, false, false),
+            UiStatus::Synced
+        );
     }
 
     /// Interval 0 is "Off": no scheduled check, so no countdown - but the
@@ -210,16 +267,66 @@ mod tests {
         assert!(synced_line(&queued).contains("background check running"));
     }
 
-    /// A lost keyring session is its own state: the engine is running fine,
+    /// A lost keyring session is its own state: the engine may be running fine,
     /// but nothing can be synced until the user signs in again.
     #[test]
     fn needs_login_is_its_own_status() {
-        assert_eq!(map_status(true, "needs_login"), UiStatus::NeedsLogin);
-        // a stopped service still reads as paused, not as a lost session
-        assert_eq!(map_status(false, "needs_login"), UiStatus::Paused);
+        assert_eq!(
+            derive_status(true, "needs_login", true, true, false, false),
+            UiStatus::NeedsLogin
+        );
+        // Even with the service stopped the session problem is the more
+        // actionable message.
+        assert_eq!(
+            derive_status(false, "needs_login", true, true, false, false),
+            UiStatus::NeedsLogin
+        );
         let (title, sub) = status_text(UiStatus::NeedsLogin);
         assert_eq!(title, "Your session expired");
         assert!(sub.contains("Sign in again"));
         assert_eq!(UiStatus::NeedsLogin.key(), "needs_login");
+    }
+
+    #[test]
+    fn derives_account_engine_and_pause_states() {
+        // Account probe still in flight (engine not confirmed either way).
+        assert_eq!(
+            derive_status(false, "", false, false, false, false),
+            UiStatus::Starting
+        );
+        // A sign-in is running in the terminal.
+        assert_eq!(
+            derive_status(true, "ok", true, false, true, false),
+            UiStatus::SigningIn
+        );
+        // Signed out, engine may be up.
+        assert_eq!(
+            derive_status(true, "ok", true, false, false, false),
+            UiStatus::SignedOut
+        );
+        // Signed in but the service is not running.
+        assert_eq!(
+            derive_status(false, "ok", true, true, false, false),
+            UiStatus::EngineStopped
+        );
+        // ...or the user explicitly paused it.
+        assert_eq!(
+            derive_status(false, "ok", true, true, false, true),
+            UiStatus::Paused
+        );
+        // Service up, no cycle reported yet.
+        assert_eq!(
+            derive_status(true, "", true, true, false, false),
+            UiStatus::Starting
+        );
+        // Normal running states.
+        assert_eq!(
+            derive_status(true, "ok", true, true, false, false),
+            UiStatus::Synced
+        );
+        assert_eq!(
+            derive_status(true, "syncing", true, true, false, false),
+            UiStatus::Syncing
+        );
     }
 }
