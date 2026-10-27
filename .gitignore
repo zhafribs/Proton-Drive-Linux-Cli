@@ -15,9 +15,6 @@ squashfs-root/
 .DS_Store
 *.swp
 
-# python bytecode (proton-sync.py)
-__pycache__/
-
 # Rust build artifacts
 gui/target/
 

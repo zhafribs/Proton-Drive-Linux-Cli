@@ -48,25 +48,18 @@ remove `src/protondrive-icon.svg` and rebuild.
 ## 3. What ships inside every release AppImage
 
 Release AppImages are self-contained: the host contributes nothing but a
-normal desktop (FUSE + OpenGL). Everything below is redistributed
-unmodified apart from trimming parts the app never loads (unused CPython
-modules and their runtime, debug symbols); the licence texts ship inside
-every AppImage under `usr/share/licenses/`.
+normal desktop (FUSE + OpenGL). Everything shipped is Rust: the upstream
+Proton CLI, this project's GUI, sync engine and `AppRun` launcher; the
+licence texts ship inside every AppImage under `usr/share/licenses/`.
 
-* **CPython 3.12** (portable build from
-  [astral-sh/python-build-standalone](https://github.com/astral-sh/python-build-standalone)) —
-  *Owner: Python Software Foundation*. Licence: **PSF-2.0** (text in
-  [`src/licenses/PSF-2.0.txt`](src/licenses/PSF-2.0.txt), installed at
-  `usr/share/licenses/PSF-2.0.txt`). This is the sync engine's runtime
-  (`proton-sync.py`, MIT, this repository) since the GUI stopped being
-  Python in 3.14.0. Version and SHA-256 are pinned in
-  [`scripts/fetch-desktop-deps.sh`](scripts/fetch-desktop-deps.sh) against
-  upstream's `SHA256SUMS`; the download is verified on every fetch.
-* **jeepney 0.9.0** (from the `jeepney` wheel) — *Owner: Thomas Kluyver and
-  contributors*. Licence: **MIT** (terms travel inside the wheel's
-  `jeepney-0.9.0.dist-info/`). Pure-Python D-Bus client; the sync engine's
-  real-time listener uses it to read the official CLI's session from the OS
-  Secret Service - which is what keeps that feature free of any host package.
+* **The upstream Proton Drive CLI** (`usr/bin/proton-drive`) — Proton AG's
+  official Rust CLI, redistributed unmodified under the MIT licence text
+  already shipped at `usr/share/licenses/proton-drive/LICENSE`.
+* **The Rust sync engine** (`usr/bin/proton-engine`) — this repository's own
+  code (MIT), built from [`crates/engine`](crates/engine).
+* **The Rust AppImage launcher** (`AppRun`) — this repository's own code
+  (MIT), built from [`crates/apprun`](crates/apprun); it dispatches to the
+  GUI, the engine or the upstream CLI.
 * **The Rust GUI** (`usr/bin/proton-drive-gui`) — this repository's own code
   (MIT) plus ~450 crates resolved from [crates.io](https://crates.io),
   nearly all permissively licensed (MIT, Apache-2.0, Zlib, BSD-family,
@@ -86,18 +79,12 @@ every AppImage under `usr/share/licenses/`.
     `gui/Cargo.lock`).
   The GUI binary's glibc floor is pinned to **2.28** at build time
   (cargo-zigbuild), older than every desktop currently supported.
-* Since 3.14.0 the AppImage carries **no Qt, no PyQt6 and no GPL/LGPL
-  component at all**; earlier versions bundled Qt 6 (LGPL-3.0-only) and
-  PyQt6 (GPL-3.0-only) and were consequently GPL-3.0-only distributions.
+* Since 3.14.0 the AppImage carries **no Qt, no PyQt6, no CPython and no
+  GPL/LGPL component at all**; earlier versions bundled Qt 6 (LGPL-3.0-only)
+  and PyQt6 (GPL-3.0-only) and were consequently GPL-3.0-only distributions.
   That no longer applies: this repository's own code is MIT throughout, and
   every dependency of the current AppImage is permissive or dual-licensed
   with its permissive option taken.
-* Downloaded by `scripts/fetch-desktop-deps.sh` (CPython, jeepney) for
-  **both** architectures, never executed at build time, never modified:
-  wheels are extracted verbatim into
-  `usr/lib/bundled-python/lib/python3.12/site-packages/`. The binaries live
-  only inside `download/` and the AppImage - never committed (see
-  `.gitignore`).
 
 ## 4. Build tooling (build time only, never redistributed here)
 
@@ -119,10 +106,9 @@ every AppImage under `usr/share/licenses/`.
 ## 5. What is *not* in this repository
 
 * No Proton binary is committed (see `.gitignore`: `download/`, `dist/`,
-  `tools/`, `build/` are excluded - the bundled CPython and jeepney wheel
-  land in `download/bundle/` too).
+  `tools/`, `build/` are excluded).
 * No Proton source code is copied in.
-* No third-party binary (CPython, the GUI's crate graph, jeepney) is
+* No third-party binary (the upstream Proton CLI or the Rust crate graph) is
   committed either - only the licence texts and the checksum-pinned fetch
   script.
 * No credentials, tokens or account data are handled by the build.

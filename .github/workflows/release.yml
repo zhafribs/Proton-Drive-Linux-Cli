@@ -61,8 +61,7 @@ jobs:
       # The GUI is a Rust binary; it cross-builds with cargo-zigbuild so its
       # glibc floor is pinned to 2.28 (Debian 10 era) instead of the runner's
       # own glibc. zig comes from ziglang.org directly: the PyPI ziglang
-      # package ships its entry point as python-zig, which cargo-zigbuild
-      # does not find on PATH.
+      # package's launcher is not on cargo-zigbuild's search path.
       - name: Install the Rust toolchain and zig (GUI builds)
         run: |
           rustup toolchain install stable --profile minimal \
@@ -88,17 +87,17 @@ jobs:
           restore-keys: |
             rust-v1-${{ runner.os }}-
 
-      - name: Cache Proton binaries, build tools and the desktop bundle
+      - name: Cache Proton binaries and build tools
         uses: actions/cache@v6
         with:
           path: |
             tools
             download
-          # v3: the bundle is engine-only now (portable CPython + jeepney -
-          # scripts/fetch-desktop-deps.sh pins them); the PyQt6/Qt6 wheels
-          # are gone since the GUI became a Rust binary (3.14.0).
-          key: build-v3-${{ runner.os }}-${{ hashFiles('upstream.lock', 'scripts/fetch-desktop-deps.sh') }}
+          # The payload is Rust-only (GUI + engine + Rust AppRun + the upstream
+          # Rust CLI). No Python/CPython bundle and no desktop wheels any more.
+          key: build-v4-${{ runner.os }}-${{ hashFiles('upstream.lock') }}
           restore-keys: |
+            build-v4-${{ runner.os }}-
             build-v3-${{ runner.os }}-
             build-v2-${{ runner.os }}-
             build-${{ runner.os }}-

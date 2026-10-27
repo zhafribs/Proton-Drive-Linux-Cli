@@ -1,8 +1,8 @@
 //! Rust sync engine.
 //!
-//! This crate is being built beside the Python engine, not instead of it yet:
-//! the pure scan/plan/state pieces land first so they can be diffed against
-//! `scripts/proton-sync.py` before anything is allowed to touch files.
+//! Pure scan/plan/state/execute pieces used by the background service. All
+//! Proton traffic still goes through the official CLI; this crate owns the
+//! local/remote tree reconciliation and the file operations.
 
 pub mod action;
 pub mod cli;

@@ -72,10 +72,8 @@ window (940×780 default, no page ever scrolls sideways, size remembered).*
   Drive both ways: local edits upload within seconds (inotify), cloud changes
   appear in ~10 s (Proton's own change events), and renames/moves are
   followed **server-side without re-uploading**. The engine is Rust
-  (`crates/engine`), kept byte-for-byte faithful to the original Python
-  reference (`scripts/proton-sync.py`, still shipped for the parity harness).
-  Install: `./scripts/install-sync.sh` (systemd *user* service, no sudo); log:
-  `journalctl --user -u proton-sync -f`.
+  (`crates/engine`). The app installs the systemd *user* service itself (no
+  sudo); log: `journalctl --user -u proton-sync -f`.
 * **My files** — a full cloud file manager: upload files/folders, download,
   rename, move, multi-select, sortable columns, back/forward + breadcrumbs,
   and a **Trash** view where restore is one click.
@@ -113,7 +111,7 @@ window (940×780 default, no page ever scrolls sideways, size remembered).*
 Tunables: `PROTON_SYNC_LOCAL/REMOTE/INTERVAL/FULL_EVERY/DELETES/WORKERS/
 SUBFOLDERS/EXCLUDE/INOTIFY/FAST_START/AUTO_WORKERS/TRANSFERS/AUDIT_EVERY/…` —
 settings live in `~/.config/proton-sync.conf` (edit by hand or in the app).
-Uninstall: `./scripts/install-sync.sh uninstall` (folder and state kept).
+Uninstall: `systemctl --user disable --now proton-sync` (folder and state kept).
 
 ### Fast first sync
 
@@ -155,8 +153,8 @@ engine honours `PROTON_SYNC_WORKERS`, `PROTON_SYNC_TRANSFERS` (default 8) and
 ./scripts/install-gui.sh remove   # undo
 ```
 
-The sync service is separate: `./scripts/install-sync.sh` installs it and
-`./scripts/install-sync.sh uninstall` removes it. No admin rights are needed.
+The sync service is installed by the app itself when it runs from the
+AppImage (`systemctl --user status proton-sync`). No admin rights are needed.
 Running the AppImage uses the binaries bundled in the file; a native source
 build runs the same Rust engine (a Rust toolchain is the only runtime needed).
 
@@ -170,7 +168,7 @@ present, then install the build packages (Debian/Ubuntu names; Fedora and Arch
 equivalents are in the full guide):
 
 ```bash
-sudo apt install build-essential wget curl python3 \
+sudo apt install build-essential wget curl \
   librsvg2-bin file desktop-file-utils appstream
 ```
 
@@ -213,9 +211,12 @@ uninstall, and troubleshooting:
   **aborts** if the downloaded binary doesn't match, so you never trust a
   number typed by hand.
 * Build deps (the build itself needs no root and installs nothing
-  system-wide): `bash`, `wget`, `python3`, `rsvg-convert`
+  system-wide): `bash`, `wget`, `rsvg-convert`
   (`librsvg2-bin` / `librsvg`), optionally `desktop-file-validate` and
   `appstreamcli`. First run fetches `appimagetool` into `tools/`.
+* The shipped payload is Rust-only: the upstream Proton CLI is Rust, and this
+  project's GUI, sync engine and AppImage `AppRun` launcher are Rust. The only
+  non-Rust pieces are the external build tools used to package the AppImage.
 * GUI glibc floor is pinned at build time via `cargo-zigbuild` (glibc 2.28);
   a plain `cargo build` is the local-dev fallback.
 
@@ -245,17 +246,14 @@ docs/INSTALL-FROM-SOURCE.md  source (tar.gz) build and native install guide
 upstream.lock          CLI version + Proton's SHA-512s (written by check-upstream.sh only)
 scripts/check-upstream.sh   refresh upstream.lock from proton.me (CI runs this)
 scripts/release-notes.sh    render release-notes.md.tmpl for the built artifacts
-scripts/proton-sync.py      original Python sync engine (reference for the parity harness)
-scripts/install-sync.sh     install/uninstall the sync as a systemd user service
 scripts/install-gui.sh      menu entry + icon for a source checkout
 crates/core/                shared config/state/health/snapshot types
 crates/engine/              the Rust sync engine that ships and runs
-tests/parity/               Python-vs-Rust plan/refresh parity harness
+crates/apprun/              Rust AppImage entry point (replaces the old shell AppRun)
 scripts/gen-licenses.sh     regenerate aggregated crate licence texts (cargo-about)
 gui/                   Rust desktop app (egui): Home, My files, Activity, tray, updater
-src/AppRun             AppImage entry point (argv pass-through)
 src/*.desktop, src/*.appdata.xml   desktop entry + AppStream metadata
-src/licenses/          Proton's MIT notice + bundled runtime licences (ship inside every build)
+src/licenses/          Proton's MIT notice + Rust crate licence texts (ship inside every build)
 release-notes.md.tmpl  release notes template (hashes filled in at build time)
 .github/workflows/release.yml  scheduled upstream check + build + publish
 install-command.sh     symlink the AppImage into ~/.local/bin as proton-drive

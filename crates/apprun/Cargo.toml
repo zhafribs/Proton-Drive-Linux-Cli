@@ -1,0 +1,10 @@
+[package]
+name = "proton-drive-apprun"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "AppImage entry point for Proton Drive for Linux (Rust launcher)."
+
+[[bin]]
+name = "proton-drive-apprun"
+path = "src/main.rs"

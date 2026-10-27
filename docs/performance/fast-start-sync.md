@@ -1,6 +1,11 @@
 # Fast-start sync: measurements, acceptance, and rollback
 
-Status: implemented on the `feat/fast-start-sync` branch (GUI 3.16.16).
+Status: historical measurement notes from the original Python reference
+(GUI 3.16.16). The shipped engine is the Rust port in `crates/engine`; the
+measurements below are kept for context. Reproduce with
+`cargo run -p proton-engine -- --loop` / `--once` instead of the old
+`python3 scripts/proton-sync.py` commands.
+
 Measured on the existing account on 2026-10-24: 1,230 remote/local entries,
 213 remote folders, official Proton Drive CLI 0.9.0, Linux x86_64.
 
@@ -67,7 +72,7 @@ cp -a ~/.local/state/proton-sync /tmp/proton-sync-warm
 XDG_STATE_HOME=/tmp/proton-sync-warm \
 PROTON_SYNC_LOCAL="$HOME/ProtonDrive" PROTON_SYNC_REMOTE=/my-files \
 PROTON_SYNC_INTERVAL=0 PROTON_SYNC_PUSH=0 PROTON_SYNC_INOTIFY=0 \
-PROTON_SYNC_FAST_START=1 python3 scripts/proton-sync.py --loop
+PROTON_SYNC_FAST_START=1 cargo run -p proton-engine -- --loop
 # watch health.json: status=ok, mode=fast; then stop the test process
 ```
 
@@ -76,7 +81,7 @@ Old path (rollback verification):
 ```bash
 XDG_STATE_HOME=/tmp/proton-sync-warm \
 PROTON_SYNC_LOCAL="$HOME/ProtonDrive" PROTON_SYNC_REMOTE=/my-files \
-PROTON_SYNC_FAST_START=0 python3 scripts/proton-sync.py --once
+PROTON_SYNC_FAST_START=0 cargo run -p proton-engine -- --once
 ```
 
 First-ever scan: run the same command with an empty state directory and no
@@ -90,7 +95,7 @@ Transfer benchmark: create a disposable remote root for each run, put 64 ×
 XDG_STATE_HOME=/tmp/bench-state \
 PROTON_SYNC_LOCAL=/tmp/bench-local PROTON_SYNC_REMOTE=/my-files/.bench \
 PROTON_SYNC_FAST_START=0 PROTON_SYNC_WORKERS=12 \
-PROTON_SYNC_TRANSFERS="$n" python3 scripts/proton-sync.py --once
+PROTON_SYNC_TRANSFERS="$n" cargo run -p proton-engine -- --once
 ```
 
 then move the disposable remote root to Proton trash. Do not benchmark against

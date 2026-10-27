@@ -141,6 +141,33 @@ build_gui() {
     GUI_BIN="$bin_dir/proton-drive-gui"
 }
 
+# Build the tiny Rust AppImage entry point that replaces the old shell
+# `src/AppRun`. It only dispatches to the GUI / engine / upstream CLI.
+build_apprun() {
+    local arch="$1" target bin_dir
+    [ "$arch" = "x86_64" ] || die "no AppRun target for ${arch} - releases are x86_64-only"
+    if command -v cargo-zigbuild >/dev/null 2>&1; then
+        target="x86_64-unknown-linux-gnu.2.28"
+        log "building AppRun launcher (${target}, zigbuild)"
+        ( cd "$ROOT" && cargo zigbuild --release -p proton-drive-apprun --target "$target" ) \
+            || die "AppRun build failed"
+        for bin_dir in "$ROOT/gui/target/$target/release" \
+                       "$ROOT/gui/target/x86_64-unknown-linux-gnu/release"; do
+            [ -x "$bin_dir/proton-drive-apprun" ] && break
+        done
+    elif [ "$(uname -m)" = "$arch" ]; then
+        log "building AppRun launcher (native)"
+        ( cd "$ROOT" && cargo build --release -p proton-drive-apprun ) \
+            || die "AppRun build failed"
+        bin_dir="$ROOT/gui/target/release"
+    else
+        die "cargo-zigbuild not found and this host is not ${arch} - cannot build the AppRun"
+    fi
+    [ -x "$bin_dir/proton-drive-apprun" ] \
+        || die "AppRun binary missing at $bin_dir/proton-drive-apprun"
+    APPRUN_BIN="$bin_dir/proton-drive-apprun"
+}
+
 render_icon() {
     # original cloud-upload glyph (src/protondrive-icon.svg), Proton-purple
     # gradient baked into the SVG - rendered straight to PNG for the AppDir
@@ -163,7 +190,7 @@ make_appdir() {
              "$appdir/usr/share/metainfo" \
              "$appdir/usr/share/licenses/proton-drive"
 
-    install -m 0755 "$SRC/AppRun" "$appdir/AppRun"
+    install -m 0755 "$APPRUN_BIN" "$appdir/AppRun"
     install -m 0755 "$payload"    "$appdir/usr/bin/proton-drive"
     # GUI: Rust binary
     install -m 0755 "$GUI_BIN" "$appdir/usr/bin/proton-drive-gui"
@@ -189,13 +216,9 @@ make_appdir() {
     # every copy of the Proton payload, so it ships inside the AppImage too.
     install -m 0644 "$SRC/licenses/Proton-Drive-SDK-MIT.txt" \
         "$appdir/usr/share/licenses/proton-drive/LICENSE"
-    # The bundled runtime is CPython (PSF-2.0), whose licence must accompany
-    # the binary, and jeepney (MIT) for the engine's Secret Service reads -
-    # jeepney's own licence travels inside its wheel's dist-info. The GUI
-    # brings no copyleft of its own: Qt/PyQt6 are gone since 3.14.0. The
-    # aggregated texts of the GUI's crate graph (generated from Cargo.lock
-    # by scripts/gen-licenses.sh) travel next to it.
-    install -m 0644 "$SRC/licenses/PSF-2.0.txt" "$appdir/usr/share/licenses/PSF-2.0.txt"
+    # This app is Rust-only: no CPython, no Python engine, no jeepney. The
+    # aggregated texts of the GUI's crate graph (generated from Cargo.lock by
+    # scripts/gen-licenses.sh) travel next to it.
     [ -f "$SRC/licenses/proton-drive-gui-THIRD-PARTY.txt" ] \
         || die "missing $SRC/licenses/proton-drive-gui-THIRD-PARTY.txt - run scripts/gen-licenses.sh"
     install -m 0644 "$SRC/licenses/proton-drive-gui-THIRD-PARTY.txt" \
@@ -207,56 +230,9 @@ make_appdir() {
     ln -sfn proton-drive.png "$appdir/.DirIcon"
 }
 
-# Assemble the portable runtime - CPython plus the engine's wheels (jeepney,
-# for the Secret Service session reads) - into the AppDir so the AppImage
-# needs nothing installed on the host. The GUI has not been Python since
-# 3.14.0 (it is a self-contained Rust binary). This only extracts and copies -
-# no target-architecture binary is ever executed. Trimmed: Python pieces a
-# sync client never imports (tcl/tk, idle, 2to3, pip). Licence texts are
-# kept - they are the compliance obligation.
-bundle_python() {
-    local arch="$1" appdir="$2"
-    local bdir="$ROOT/download/bundle/$arch"
-    local py_file dest sp whl
-    [ "${BUNDLE_PYTHON:-0}" = "0" ] && { BUNDLE_PY=0; return 0; }
-    py_file="$(ls -1 "$bdir"/cpython-*-install_only.tar.gz 2>/dev/null | head -1 || true)"
-    [ -n "$py_file" ] || die "portable CPython missing for ${arch} - run scripts/fetch-desktop-deps.sh ${arch}"
-    ls -1 "$bdir"/wheels/*.whl >/dev/null 2>&1 || die "engine wheels missing for ${arch} - run scripts/fetch-desktop-deps.sh ${arch}"
-
-    dest="$appdir/usr/lib/bundled-python"
-    log "bundling portable CPython (${arch})"
-    rm -rf "$dest"
-    mkdir -p "$dest"
-    tar -xzf "$py_file" -C "$dest" --strip-components=1
-    sp="$dest/lib/python3.12/site-packages"
-    mkdir -p "$sp"
-    for whl in "$bdir"/wheels/*.whl; do
-        python3 -m zipfile -e "$whl" "$sp"
-    done
-    # What a sync client never touches: tcl/tk (and its whole runtime - the
-    # trimmed tkinter module leaves the shared libraries behind), pip, idle,
-    # 2to3, pydoc, the dev configs and the test suite.
-    rm -rf "$dest/lib/python3.12/idlelib" \
-           "$dest/lib/python3.12/lib2to3" \
-           "$dest/lib/python3.12/turtledemo" \
-           "$dest/lib/python3.12/tkinter" \
-           "$dest/lib/python3.12/test" \
-           "$dest/lib/python3.12/ensurepip" \
-           "$dest/lib/python3.12/site-packages/pip" \
-           "$dest"/lib/python3.12/site-packages/pip-*.dist-info \
-           "$dest"/lib/itcl* "$dest"/lib/tcl9* "$dest"/lib/tk9* \
-           "$dest"/lib/thread3* "$dest"/lib/libtcl* "$dest"/lib/libtk* \
-           "$dest"/lib/pkgconfig "$dest"/lib/python3.12/lib-dynload/_tkinter* \
-           "$dest"/bin/2to3* "$dest"/bin/idle* "$dest"/bin/pip* \
-           "$dest"/bin/pydoc* "$dest"/bin/python*-config
-    # Strip debug symbols from libpython (114 MB unstripped; distro packages
-    # strip theirs too). The interpreter BINARY is deliberately NOT stripped:
-    # python-build-standalone's link layout puts .dynstr outside its segment,
-    # and strip corrupts it - verified: the stripped binary dies with
-    # "undefined symbol: , version" at first run.
-    strip --strip-unneeded "$dest"/lib/libpython3.12.so.1.0 \
-        || die "stripping the bundled libpython failed"
-}
+# Assemble the AppDir. This app is Rust-only: the upstream Proton CLI is Rust,
+# this project's GUI and sync engine are Rust, and the AppRun entry point is a
+# compiled Rust launcher. There is no Python runtime to bundle.
 
 validate() {
     local appdir="$1"
@@ -280,14 +256,8 @@ build_one() {
 
     fetch_payload "$platform"
     build_gui "$arch"
+    build_apprun "$arch"
     make_appdir "$platform" "$appdir"
-    # The sync engine is Rust; the portable CPython runtime is only needed for
-    # the legacy Python-engine fallback, which ships only when explicitly
-    # requested (BUNDLE_PYTHON=1).
-    if [ "${BUNDLE_PYTHON:-0}" = "1" ]; then
-        "$ROOT/scripts/fetch-desktop-deps.sh" "$arch"
-        bundle_python "$arch" "$appdir"
-    fi
     validate "$appdir"
 
     mkdir -p "$DIST"

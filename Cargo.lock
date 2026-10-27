@@ -3007,6 +3007,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "proton-drive-apprun"
+version = "0.1.0"
+
+[[package]]
 name = "proton-drive-gui"
 version = "0.1.0"
 dependencies = [

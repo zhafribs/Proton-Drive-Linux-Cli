@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["gui", "crates/core", "crates/engine"]
+members = ["crates/apprun", "crates/core", "crates/engine", "gui"]
 
 # The binary ships inside the AppImage - size matters (this replaced a
 # bundled Qt6 stack, the whole point being a smaller app).

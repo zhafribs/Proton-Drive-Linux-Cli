@@ -1,3 +1,14 @@
+## 3.16.40 — 2026-10-28
+
+- **The project is now Rust-only.** Removed the legacy Python sync engine, its
+  parity tests, the Python bytecode ignores, the PSF licence and the CPython
+  bundling path from `build.sh`.
+- **The AppImage entry point is Rust.** A new `crates/apprun` binary replaces
+  the old `src/AppRun` shell script and dispatches to the GUI, the sync engine
+  or the upstream Proton CLI. The packaged payload now contains only Rust
+  binaries: the upstream Rust CLI, the GUI, the engine and the launcher.
+- Updated the README, source-build guide and third-party notices to match.
+
 ## 3.16.39 — 2026-10-27
 
 - **More Home status-orb states.** The circle now has its own glyph and colour
