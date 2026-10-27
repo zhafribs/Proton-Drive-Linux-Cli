@@ -1064,7 +1064,7 @@ impl App {
             egui::Frame::new()
                 .fill(fill)
                 .stroke(stroke)
-                .corner_radius(egui::CornerRadius::same(10))
+                .corner_radius(egui::CornerRadius::same(12))
                 .inner_margin(egui::Margin::symmetric(12, 9))
                 .show(ui, |ui| {
                     ui.set_min_width(ui.available_width());

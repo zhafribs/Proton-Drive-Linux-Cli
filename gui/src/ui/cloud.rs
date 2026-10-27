@@ -1022,7 +1022,7 @@ fn header_cell(ui: &mut egui::Ui, label: &str, col: usize, width: f32, app: &mut
         ""
     };
     let (rect, resp) =
-        ui.allocate_exact_size(egui::vec2(width, 20.0), egui::Sense::click());
+        ui.allocate_exact_size(egui::vec2(width, 22.0), egui::Sense::click());
     // Uppercase, tightly-set labels read as a real data-table header (Proton's
     // own list uses the same treatment), while the sort arrow stays lowercase
     // glyphs so the label never looks like shouting.
@@ -1037,7 +1037,7 @@ fn header_cell(ui: &mut egui::Ui, label: &str, col: usize, width: f32, app: &mut
     // right-aligned values end.
     let (anchor, align) = if col == 0 {
         (
-            rect.left_center() + egui::vec2(28.0, 0.0),
+            rect.left_center() + egui::vec2(32.0, 0.0),
             egui::Align2::LEFT_CENTER,
         )
     } else {
@@ -1075,11 +1075,12 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
     // The list sits in a white card with a quiet header, like Proton Drive's
     // file list; the action/status row below gets its space reserved so the
     // card can never push it out of the panel.
-    let fill = theme::surface(ui.visuals());
-    egui::Frame::group(ui.style())
-        .fill(fill)
-        .corner_radius(egui::CornerRadius::same(12))
-        .inner_margin(egui::Margin::symmetric(14, 10))
+    egui::Frame::new()
+        .fill(theme::surface(ui.visuals()))
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .corner_radius(egui::CornerRadius::same(14))
+        .shadow(theme::card_shadow(ui.visuals()))
+        .inner_margin(egui::Margin::symmetric(16, 12))
         .show(ui, |ui| {
             let col_size_w = 96.0f32;
             let col_mtime_w = 132.0f32;
@@ -1122,8 +1123,8 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
                 (c.trash_view, c.busy, c.sort_col, c.sort_desc)
             };
             let rows = sorted(&app.cloud.entries, sort_col, sort_desc);
-            // Frame margin (10) + gap (6) + the action row (~36).
-            let max_h = (ui.available_height() - 52.0).max(120.0);
+            // Frame margin (24) + gap (6) + the action row (~36).
+            let max_h = (ui.available_height() - 66.0).max(120.0);
 
             let mut open_rel: Option<String> = None;
             let mut menu_item: Option<&'static str> = None;
@@ -1150,19 +1151,36 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
                     if rows.is_empty() && !busy {
                         ui.add_space(26.0);
                         ui.vertical_centered(|ui| {
-                            ui.label(egui::RichText::new("\u{1f4c1}").size(38.0));
-                            ui.add_space(6.0);
+                            // Folder glyph on a soft accent disc - a designed
+                            // empty state instead of a lone emoji.
+                            let (r, _) = ui.allocate_exact_size(
+                                egui::vec2(64.0, 64.0),
+                                egui::Sense::hover(),
+                            );
+                            ui.painter().circle_filled(
+                                r.center(),
+                                32.0,
+                                theme::accent(ui.visuals()).gamma_multiply(0.12),
+                            );
+                            ui.painter().text(
+                                r.center(),
+                                egui::Align2::CENTER_CENTER,
+                                "\u{1f4c1}",
+                                egui::FontId::proportional(28.0),
+                                egui::Color32::WHITE,
+                            );
+                            ui.add_space(10.0);
                             let msg = if trash_view {
                                 "Your trash is empty"
                             } else {
                                 "This folder is empty"
                             };
-                            ui.label(egui::RichText::new(msg).size(13.5).weak());
+                            ui.label(egui::RichText::new(msg).strong().size(15.0));
                             ui.add_space(2.0);
                             if !trash_view {
                                 ui.label(
                                     egui::RichText::new("Drop files here or use \u{201c}+ New\u{201d}")
-                                        .size(12.0)
+                                        .size(12.5)
                                         .weak(),
                                 );
                             }
@@ -1265,7 +1283,7 @@ fn row(
     open_rel: &mut Option<String>,
     menu_item: &mut Option<&'static str>,
 ) {
-    let height = 28.0;
+    let height = 32.0;
     let (rect, resp) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), height),
         egui::Sense::click_and_drag(),
@@ -1291,7 +1309,7 @@ fn row(
     } else {
         visuals.weak_text_color()
     };
-    let (ix, iy) = (rect.left() + 8.0, cy - 5.0);
+    let (ix, iy) = (rect.left() + 10.0, cy - 5.0);
     if e.dir {
         // Folder: body + tab.
         ui.painter().rect_filled(
@@ -1315,9 +1333,9 @@ fn row(
     // File names stop before the Size column - a fixed character count
     // painted over the values once the sidebar was widened.
     let name_font = egui::FontId::proportional(14.0);
-    let name_text = elide_fit(ui, &e.name, name_font.clone(), (name_w - 36.0).max(24.0));
+    let name_text = elide_fit(ui, &e.name, name_font.clone(), (name_w - 40.0).max(24.0));
     ui.painter().text(
-        egui::pos2(rect.left() + 28.0, cy),
+        egui::pos2(rect.left() + 32.0, cy),
         egui::Align2::LEFT_CENTER,
         name_text,
         name_font,

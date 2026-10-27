@@ -6,19 +6,16 @@ use crate::theme;
 use eframe::egui;
 
 /// Card container (title optional) - the PyQt `card()` helper, on the Proton
-/// Drive web look: white surface + hairline border on the lavender page.
+/// Drive web look: white surface + hairline border + soft shadow on the
+/// lavender page.
 pub fn card(ui: &mut egui::Ui, title: Option<&str>, add: impl FnOnce(&mut egui::Ui)) {
-    let fill = theme::surface(ui.visuals());
-    let frame = egui::Frame::group(ui.style())
-        .fill(fill)
-        .corner_radius(egui::CornerRadius::same(12))
-        .inner_margin(egui::Margin::symmetric(18, 16));
+    let frame = theme::card_frame(ui);
     frame.show(ui, |ui| {
         // Proton's cards always span the content column.
         ui.set_min_width(ui.available_width());
         if let Some(t) = title {
             ui.label(egui::RichText::new(t).strong().size(15.0));
-            ui.add_space(8.0);
+            ui.add_space(10.0);
         }
         add(ui);
     });
@@ -318,10 +315,12 @@ pub fn nav_icon(painter: &egui::Painter, r: egui::Rect, kind: NavIcon, c: egui::
 
 /// Full-width nav row painted directly (egui 0.37 dropped the widget form of
 /// `SelectableLabel`): soft-purple active pill + purple icon/text, like the
-/// Proton Drive sidebar; otherwise plain text with a tinted hover.
+/// Proton Drive sidebar; otherwise plain text with a tinted hover. The active
+/// row also draws a small accent bar on its left edge - the "you are here"
+/// cue that holds even in monochrome.
 pub fn nav_row(ui: &mut egui::Ui, icon: NavIcon, label: &str, selected: bool) -> bool {
     let (rect, resp) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 36.0), egui::Sense::click());
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 38.0), egui::Sense::click());
     let fill = if selected {
         theme::accent_soft(ui.visuals())
     } else if resp.hovered() {
@@ -331,11 +330,19 @@ pub fn nav_row(ui: &mut egui::Ui, icon: NavIcon, label: &str, selected: bool) ->
     };
     ui.painter().rect(
         rect,
-        egui::CornerRadius::same(9),
+        egui::CornerRadius::same(10),
         fill,
         egui::Stroke::NONE,
         egui::StrokeKind::Inside,
     );
+    if selected {
+        let bar = egui::Rect::from_min_size(
+            egui::pos2(rect.left() + 1.0, rect.top() + 9.0),
+            egui::vec2(3.0, rect.height() - 18.0),
+        );
+        ui.painter()
+            .rect_filled(bar, egui::CornerRadius::same(2), theme::accent(ui.visuals()));
+    }
     let color = if selected {
         theme::accent(ui.visuals())
     } else {

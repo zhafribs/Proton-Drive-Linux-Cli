@@ -1,3 +1,10 @@
+## 3.16.31 — 2026-10-27
+
+- **Deeper visual refresh.** Cards now float on a soft drop shadow with a
+  larger radius, the active sidebar row carries a purple accent bar, file rows
+  are taller with more padding, and the empty-folder state is a designed disc
+  with a message instead of a bare emoji.
+
 ## 3.16.30 — 2026-10-27
 
 - **Polished My files.** Column headers are now the small uppercase, muted
