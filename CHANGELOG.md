@@ -1,3 +1,16 @@
+## 3.16.35 — 2026-10-27
+
+- **Faster My files browsing.** Opening a folder you have already visited, and
+  going back/forward, now serves the cached listing for 30 seconds instead of
+  spawning a fresh `proton-drive fs list` against the cloud on every click. The
+  first visit to a folder still lists it live; Refresh always re-lists.
+- **Removed two UI-thread stalls.** The engine's snapshot is no longer
+  deep-copied for every folder and sidebar lookup, and the on-disk cache is
+  written at most once a second instead of re-serialising the whole cache after
+  every listing.
+- **Refresh in Trash** now re-lists the Trash instead of jumping back to the
+  last files folder.
+
 ## 3.16.34 — 2026-10-27
 
 - **Clicking a file or folder name now selects it.** The name text is still

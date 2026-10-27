@@ -11,12 +11,17 @@ use crate::{cli, exec, notify, portal, theme};
 use eframe::egui;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 /// Cache key of the flat trash listing (a NUL can't appear in a rel path).
 pub const TRASH_KEY: &str = "\u{0}trash";
 const CLOUD_CACHE_MAX: usize = 300;
+/// How long a listing is trusted before it is re-fetched in the background.
+/// Within this window, navigating never spawns a CLI process (and never waits
+/// on the sync engine's lock), which is what made folder-to-folder browsing
+/// feel slow.
+const LIST_TTL: f64 = 30.0;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DiskEntry {
@@ -44,6 +49,10 @@ pub struct CloudState {
     pub entries: Vec<cli::RemoteEntry>,
     pub session: HashMap<String, Vec<cli::RemoteEntry>>,
     pub disk: HashMap<String, DiskEntry>,
+    /// epoch seconds of the last successful listing, per cache key
+    pub fetched: HashMap<String, f64>,
+    /// last time the disk cache was written (debounce)
+    pub last_save: f64,
     pub disk_loaded: bool,
     pub opened: bool, // first render triggered the initial listing
     pub sort_col: usize, // 0 name, 1 size, 2 mtime
@@ -87,6 +96,21 @@ pub fn on_shown(app: &mut App) {
 }
 
 pub fn load(app: &mut App, rel: String, push: bool, announce: bool, paint: bool) {
+    load_inner(app, rel, push, announce, paint, false);
+}
+
+/// Force a fresh listing, ignoring the cache TTL (Refresh, or after a
+/// mutation). Used for both the files view and Trash.
+pub fn reload(app: &mut App) {
+    if app.cloud.trash_view {
+        load_trash(app, false);
+    } else {
+        let rel = app.cloud.rel.clone();
+        load_inner(app, rel, false, true, true, true);
+    }
+}
+
+fn load_inner(app: &mut App, rel: String, push: bool, announce: bool, paint: bool, force: bool) {
     if push {
         // Navigation: reveal the folder in the sidebar tree. Nothing is
         // forced open afterwards, so every branch can still be collapsed.
@@ -107,18 +131,41 @@ pub fn load(app: &mut App, rel: String, push: bool, announce: bool, paint: bool)
             c.status_tip.clear();
         }
     }
-    if paint {
-        let src = app
-            .cloud
-            .session
-            .get(&rel)
-            .cloned()
-            .or_else(|| app.cloud.disk.get(&rel).map(|d| d.entries.clone()))
-            .or_else(|| seed_entries(&app.paths.snapshot_file, &rel));
-        if let Some(src) = src {
-            fill(app, src);
-        }
+
+    // Paint instantly from whatever we already know: this session's listing,
+    // the persisted disk cache, or the engine's last full walk.
+    let cached = app
+        .cloud
+        .session
+        .get(&rel)
+        .cloned()
+        .or_else(|| app.cloud.disk.get(&rel).map(|d| d.entries.clone()))
+        .or_else(|| seed_entries(&app.paths.snapshot_file, &rel));
+    let have_cached = cached.is_some();
+    if paint && let Some(src) = cached {
+        fill(app, src);
     }
+
+    // Recently listed? Serve it and skip the CLI entirely. This is the normal
+    // path while browsing, and it cannot queue behind the sync engine.
+    let fresh = !force
+        && have_cached
+        && app
+            .cloud
+            .fetched
+            .get(&rel)
+            .is_some_and(|t| epoch_now() - *t < LIST_TTL);
+    if fresh {
+        if announce && (app.cloud.status == "Opening..." || app.cloud.status.is_empty()) {
+            app.cloud.status = if app.cloud.entries.is_empty() {
+                "This folder is empty.".to_string()
+            } else {
+                String::new()
+            };
+        }
+        return;
+    }
+
     let root = remote_root(&app.conf);
     let serial = app.cloud.serial;
     let tx = app.tx.clone();
@@ -208,10 +255,11 @@ pub fn on_entries(
             let was = app.cloud.status.clone();
             app.cloud.session.insert(key.clone(), entries.clone());
             app.cloud.disk.insert(
-                key,
+                key.clone(),
                 DiskEntry { ts: epoch_now(), entries: entries.clone() },
             );
-            save_disk_cache(&app.paths.cloud_cache_file, &app.cloud.disk);
+            app.cloud.fetched.insert(key, epoch_now());
+            persist_cache(app);
             fill(app, entries);
             // "Opening..." is cleared; a finished action's message stays.
             if was == "Opening..." || was.is_empty() {
@@ -239,11 +287,12 @@ pub fn on_tree_entries(
     app.cloud.tree_loading.remove(&key);
     if let Ok(entries) = result {
         app.cloud.session.insert(key.clone(), entries.clone());
+        app.cloud.fetched.insert(key.clone(), epoch_now());
         app.cloud.disk.insert(
             key,
             DiskEntry { ts: epoch_now(), entries: entries.clone() },
         );
-        save_disk_cache(&app.paths.cloud_cache_file, &app.cloud.disk);
+        persist_cache(app);
     }
 }
 
@@ -323,6 +372,7 @@ fn refresh_current(app: &mut App) {
     };
     app.cloud.session.remove(&key);
     app.cloud.disk.remove(&key);
+    app.cloud.fetched.remove(&key);
     save_disk_cache(&app.paths.cloud_cache_file, &app.cloud.disk);
     if app.cloud.trash_view {
         app.cloud.serial += 1;
@@ -334,7 +384,7 @@ fn refresh_current(app: &mut App) {
         });
     } else {
         let rel = app.cloud.rel.clone();
-        load(app, rel, false, false, false);
+        load_inner(app, rel, false, false, false, true);
     }
 }
 
@@ -758,11 +808,13 @@ pub fn on_picker_folders(app: &mut App, parent: String, folders: Vec<(String, St
 
 // --------------------------------------------------------- instant-paint seed
 
-static SNAP: Mutex<(Option<SystemTime>, Option<serde_json::Value>)> =
+static SNAP: Mutex<(Option<SystemTime>, Option<Arc<serde_json::Value>>)> =
     Mutex::new((None, None));
 
-/// The engine's walk as the tree object, parsed once per file change.
-fn snapshot_tree(path: &Path) -> serde_json::Value {
+/// The engine's walk as the tree object, parsed once per file change. Returned
+/// behind an `Arc` so the (potentially large) tree is not deep-cloned for every
+/// folder lookup or sidebar node on every frame.
+fn snapshot_tree(path: &Path) -> Arc<serde_json::Value> {
     let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
     let mut guard = SNAP.lock().unwrap();
     if guard.0 != mtime {
@@ -770,10 +822,14 @@ fn snapshot_tree(path: &Path) -> serde_json::Value {
             .ok()
             .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
             .and_then(|v| v.get("tree").cloned())
-            .filter(|v| v.is_object());
+            .filter(|v| v.is_object())
+            .map(Arc::new);
         *guard = (mtime, tree);
     }
-    guard.1.clone().unwrap_or(serde_json::Value::Object(Default::default()))
+    guard
+        .1
+        .clone()
+        .unwrap_or_else(|| Arc::new(serde_json::Value::Object(Default::default())))
 }
 
 /// A folder listing straight from the engine's walk - instant paint for any
@@ -835,17 +891,20 @@ pub fn load_disk_cache(path: &Path) -> HashMap<String, DiskEntry> {
 }
 
 pub fn save_disk_cache(path: &Path, cache: &HashMap<String, DiskEntry>) {
-    let mut cache = cache.clone();
-    if cache.len() > CLOUD_CACHE_MAX {
+    let json = if cache.len() > CLOUD_CACHE_MAX {
+        let mut pruned = cache.clone();
         let mut keys: Vec<(String, f64)> =
-            cache.iter().map(|(k, v)| (k.clone(), v.ts)).collect();
+            pruned.iter().map(|(k, v)| (k.clone(), v.ts)).collect();
         keys.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        let drop_n = cache.len() - CLOUD_CACHE_MAX;
+        let drop_n = pruned.len() - CLOUD_CACHE_MAX;
         for (k, _) in keys.iter().take(drop_n) {
-            cache.remove(k);
+            pruned.remove(k);
         }
-    }
-    if let Ok(json) = serde_json::to_string(&cache) {
+        serde_json::to_string(&pruned)
+    } else {
+        serde_json::to_string(cache)
+    };
+    if let Ok(json) = json {
         let tmp = path.with_file_name(format!(
             "{}.{}.tmp",
             path.file_name().unwrap_or_default().to_string_lossy(),
@@ -854,6 +913,17 @@ pub fn save_disk_cache(path: &Path, cache: &HashMap<String, DiskEntry>) {
         let _ = std::fs::write(&tmp, &json);
         let _ = std::fs::rename(&tmp, path);
     }
+}
+
+/// Persist the disk cache, debounced so rapid browsing does not re-serialise
+/// the whole cache (up to 300 folders) on the UI thread for every listing.
+fn persist_cache(app: &mut App) {
+    let now = epoch_now();
+    if now - app.cloud.last_save < 1.0 {
+        return;
+    }
+    app.cloud.last_save = now;
+    save_disk_cache(&app.paths.cloud_cache_file, &app.cloud.disk);
 }
 
 // ------------------------------------------------------------------ sorting
@@ -979,8 +1049,7 @@ fn top_row(app: &mut App, ui: &mut egui::Ui) {
         // Icon-only toolbar: Refresh first, then back/forward - all drawn
         // in the nav-icon line style, the words live on hover.
         if top_icon_button(ui, widgets::TopIcon::Refresh, true, "Refresh") {
-            let rel = app.cloud.rel.clone();
-            load(app, rel, false, true, true);
+            reload(app);
         }
         if top_icon_button(ui, widgets::TopIcon::ArrowLeft, has_back && !busy, "Go back") {
             go_back(app);
@@ -1720,10 +1789,7 @@ fn apply_menu_item(app: &mut App, item: Option<&'static str>) {
         Some("restore") => action_restore(app),
         Some("uploadfiles") => pick_upload_files(app),
         Some("uploadfolder") => pick_upload_folder(app),
-        Some("refresh") => {
-            let rel = app.cloud.rel.clone();
-            load(app, rel, false, true, true);
-        }
+        Some("refresh") => reload(app),
         _ => {}
     }
 }
