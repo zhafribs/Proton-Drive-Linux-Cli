@@ -1,3 +1,12 @@
+## 3.16.34 — 2026-10-27
+
+- **Clicking a file or folder name now selects it.** The name text is still
+  selectable for copying (drag across it), but a plain click no longer lands
+  only on the text - the row underneath selects, so you no longer have to hunt
+  for empty space. Double-clicking a name opens it.
+- Right-clicking the name, size or date now opens the same context menu as the
+  row background.
+
 ## 3.16.33 — 2026-10-27
 
 - **Trash gets its own toolbar.** Upload, New folder and Download are gone while

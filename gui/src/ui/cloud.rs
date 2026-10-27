@@ -1427,7 +1427,9 @@ fn row(
             .max_rect(name_rect)
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
-    name_ui.label(egui::RichText::new(name_text).size(14.0).color(name_color));
+    let name_resp =
+        name_ui.label(egui::RichText::new(name_text).size(14.0).color(name_color));
+    name_resp.context_menu(|ui| row_menu_body(app, ui, menu_item));
 
     // Size (right-aligned, files only).
     if show_size && !e.dir {
@@ -1441,7 +1443,9 @@ fn row(
                 .layout(egui::Layout::right_to_left(egui::Align::Center)),
         );
         size_ui.add_space(8.0);
-        size_ui.label(egui::RichText::new(fmt_size(e.size)).size(12.5).color(weak));
+        let size_resp =
+            size_ui.label(egui::RichText::new(fmt_size(e.size)).size(12.5).color(weak));
+        size_resp.context_menu(|ui| row_menu_body(app, ui, menu_item));
     }
 
     // Modified (right-aligned).
@@ -1456,16 +1460,27 @@ fn row(
                 .layout(egui::Layout::right_to_left(egui::Align::Center)),
         );
         mtime_ui.add_space(8.0);
-        mtime_ui.label(egui::RichText::new(e.mtime.clone()).size(12.5).color(weak));
+        let mtime_resp =
+            mtime_ui.label(egui::RichText::new(e.mtime.clone()).size(12.5).color(weak));
+        mtime_resp.context_menu(|ui| row_menu_body(app, ui, menu_item));
     }
 
     if resp.hovered() {
         resp.clone().on_hover_text(e.name.clone());
     }
 
+    // The name/size/date cells are selectable labels, and egui hands the click
+    // to the topmost widget - the label - so a click on the text never reached
+    // the row. Detect a raw primary click over the row so clicking a name
+    // selects the item, while drag-to-select-text still works.
+    let pointer_over_row = ui.rect_contains_pointer(rect);
+    let raw_click = pointer_over_row && ui.input(|i| i.pointer.primary_clicked());
+    let raw_double = pointer_over_row
+        && ui.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary));
+
     // Selection: plain click replaces, ctrl toggles, shift ranges; Qt also
     // moved the current item when right-clicking outside the selection.
-    if resp.clicked() {
+    if resp.clicked() || raw_click {
         let mods = ui.input(|i| i.modifiers);
         let sel = &mut app.cloud.sel;
         if mods.ctrl || mods.command {
@@ -1504,100 +1519,11 @@ fn row(
         }
     }
 
-    if resp.double_clicked() {
+    if resp.double_clicked() || raw_double {
         *open_rel = Some(e.rel.clone());
     }
 
-    resp.context_menu(|ui| {
-        if app.cloud.trash_view {
-            if ui.button("Restore").clicked() {
-                ui.close();
-                *menu_item = Some("restore");
-            }
-            ui.separator();
-            if ui.button("Delete permanently").clicked() {
-                ui.close();
-                *menu_item = Some("delete");
-            }
-            return;
-        }
-        let sel = &app.cloud.sel;
-        if sel.is_empty() {
-            if ui.button("New folder...").clicked() {
-                ui.close();
-                *menu_item = Some("newfolder");
-            }
-            if ui.button("Upload files...").clicked() {
-                ui.close();
-                *menu_item = Some("uploadfiles");
-            }
-            if ui.button("Upload folder...").clicked() {
-                ui.close();
-                *menu_item = Some("uploadfolder");
-            }
-            ui.separator();
-            if ui.button("Select all").clicked() {
-                ui.close();
-                *menu_item = Some("selectall");
-            }
-            if ui.button("Refresh").clicked() {
-                ui.close();
-                *menu_item = Some("refresh");
-            }
-        } else if sel.len() == 1 {
-            let entry = app
-                .cloud
-                .entries
-                .iter()
-                .find(|x| x.rel == sel[0])
-                .cloned();
-            if let Some(it) = entry {
-                if it.dir && ui.button("Open").clicked() {
-                    ui.close();
-                    *menu_item = Some("open");
-                } else if !it.dir && !it.doc && ui.button("Download").clicked() {
-                    ui.close();
-                    *menu_item = Some("download");
-                }
-                if ui.button("Rename...").clicked() {
-                    ui.close();
-                    *menu_item = Some("rename");
-                }
-                if ui.button("Duplicate").clicked() {
-                    ui.close();
-                    *menu_item = Some("duplicate");
-                }
-                ui.separator();
-                if ui.button("Details").clicked() {
-                    ui.close();
-                    *menu_item = Some("details");
-                }
-            }
-            ui.separator();
-            if ui.button("Move to...").clicked() {
-                ui.close();
-                *menu_item = Some("move");
-            }
-            if ui.button("Move to trash").clicked() {
-                ui.close();
-                *menu_item = Some("trash");
-            }
-        } else {
-            if ui.button(format!("Download ({} items)", sel.len())).clicked() {
-                ui.close();
-                *menu_item = Some("download");
-            }
-            ui.separator();
-            if ui.button("Move to...").clicked() {
-                ui.close();
-                *menu_item = Some("move");
-            }
-            if ui.button("Move to trash").clicked() {
-                ui.close();
-                *menu_item = Some("trash");
-            }
-        }
-    });
+    resp.context_menu(|ui| row_menu_body(app, ui, menu_item));
 
     // Keep the pointer cursor over rows. egui's selectable labels otherwise
     // flip to an I-beam on hover, which made the list feel like a text box.
@@ -1605,6 +1531,99 @@ fn row(
     // set after the labels so it wins over the cursor they set while drawing.
     if ui.rect_contains_pointer(rect) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+}
+
+/// The context menu shared by a row and each of its cells, so right-clicking
+/// the name (or the size/date text) opens the same menu as the row background.
+fn row_menu_body(app: &mut App, ui: &mut egui::Ui, menu_item: &mut Option<&'static str>) {
+    if app.cloud.trash_view {
+        if ui.button("Restore").clicked() {
+            ui.close();
+            *menu_item = Some("restore");
+        }
+        ui.separator();
+        if ui.button("Delete permanently").clicked() {
+            ui.close();
+            *menu_item = Some("delete");
+        }
+        return;
+    }
+    let sel = &app.cloud.sel;
+    if sel.is_empty() {
+        if ui.button("New folder...").clicked() {
+            ui.close();
+            *menu_item = Some("newfolder");
+        }
+        if ui.button("Upload files...").clicked() {
+            ui.close();
+            *menu_item = Some("uploadfiles");
+        }
+        if ui.button("Upload folder...").clicked() {
+            ui.close();
+            *menu_item = Some("uploadfolder");
+        }
+        ui.separator();
+        if ui.button("Select all").clicked() {
+            ui.close();
+            *menu_item = Some("selectall");
+        }
+        if ui.button("Refresh").clicked() {
+            ui.close();
+            *menu_item = Some("refresh");
+        }
+    } else if sel.len() == 1 {
+        let entry = app
+            .cloud
+            .entries
+            .iter()
+            .find(|x| x.rel == sel[0])
+            .cloned();
+        if let Some(it) = entry {
+            if it.dir && ui.button("Open").clicked() {
+                ui.close();
+                *menu_item = Some("open");
+            } else if !it.dir && !it.doc && ui.button("Download").clicked() {
+                ui.close();
+                *menu_item = Some("download");
+            }
+            if ui.button("Rename...").clicked() {
+                ui.close();
+                *menu_item = Some("rename");
+            }
+            if ui.button("Duplicate").clicked() {
+                ui.close();
+                *menu_item = Some("duplicate");
+            }
+            ui.separator();
+            if ui.button("Details").clicked() {
+                ui.close();
+                *menu_item = Some("details");
+            }
+        }
+        ui.separator();
+        if ui.button("Move to...").clicked() {
+            ui.close();
+            *menu_item = Some("move");
+        }
+        if ui.button("Move to trash").clicked() {
+            ui.close();
+            *menu_item = Some("trash");
+        }
+    } else {
+        if ui.button(format!("Download ({} items)", sel.len())).clicked() {
+            ui.close();
+            *menu_item = Some("download");
+        }
+        ui.separator();
+        if ui.button("Move to...").clicked() {
+            ui.close();
+            *menu_item = Some("move");
+        }
+        if ui.button("Move to trash").clicked() {
+            ui.close();
+            *menu_item = Some("trash");
+        }
     }
 }
 
