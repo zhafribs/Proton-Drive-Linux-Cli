@@ -116,7 +116,7 @@ fn refresh_cmd(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn dry_run_cmd(args: &[String]) -> Result<()> {
+fn dry_run_cmd(_args: &[String]) -> Result<()> {
     let home = dirs::home_dir().unwrap_or_else(|| Path::new("/").to_path_buf());
     let config_dir = dirs::config_dir().unwrap_or_else(|| home.join(".config"));
     let state_home = std::env::var_os("XDG_STATE_HOME")

@@ -29,7 +29,7 @@ use eframe::egui;
 use std::path::{Path, PathBuf};
 
 /// The GUI's own version (the release tag is `v<CLI>-gui<GUI>`).
-pub const GUI_VERSION: &str = "3.16.29";
+pub const GUI_VERSION: &str = "3.16.30";
 
 /// The systemd user unit path (shared with `service.rs`).
 pub fn service_unit_path() -> PathBuf {
@@ -73,6 +73,7 @@ fn main() -> eframe::Result<()> {
     use fs2::FileExt;
     let lock = match std::fs::OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(&p.lock_file)

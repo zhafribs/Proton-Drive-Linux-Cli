@@ -13,11 +13,10 @@ impl Cooldowns {
     /// True when `key` hasn't fired within `seconds`; records it either way.
     pub fn cool_ok(&mut self, key: &str, seconds: u64) -> bool {
         let now = Instant::now();
-        if let Some(last) = self.map.get(key) {
-            if now.duration_since(*last) < Duration::from_secs(seconds) {
+        if let Some(last) = self.map.get(key)
+            && now.duration_since(*last) < Duration::from_secs(seconds) {
                 return false;
             }
-        }
         self.map.insert(key.to_string(), now);
         true
     }

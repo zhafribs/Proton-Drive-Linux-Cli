@@ -2,8 +2,6 @@
 
 use proton_core::health::Health;
 use std::fs;
-use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn state_dir() -> std::path::PathBuf {
     if let Some(xdg) = std::env::var_os("XDG_STATE_HOME") {

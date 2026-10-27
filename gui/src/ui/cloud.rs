@@ -812,13 +812,13 @@ pub fn sorted(rows: &[cli::RemoteEntry], col: usize, desc: bool) -> Vec<cli::Rem
     let rev = |o: Ordering| if desc { o.reverse() } else { o };
     let lower = |s: &str| s.to_lowercase();
     let mut rows: Vec<cli::RemoteEntry> = rows.to_vec();
-    rows.sort_by(|a, b| lower(&a.name).cmp(&lower(&b.name)));
+    rows.sort_by_key(|a| lower(&a.name));
     match col {
         1 => rows.sort_by(|a, b| rev(a.size.cmp(&b.size))),
         2 => rows.sort_by(|a, b| rev(a.mtime.cmp(&b.mtime))),
         _ => rows.sort_by(|a, b| rev(lower(&a.name).cmp(&lower(&b.name)))),
     }
-    rows.sort_by(|a, b| b.dir.cmp(&a.dir)); // folders first (stable: keeps column order)
+    rows.sort_by_key(|a| !a.dir); // folders first (stable: keeps column order)
     rows
 }
 
@@ -862,7 +862,7 @@ fn top_icon_button(ui: &mut egui::Ui, kind: widgets::TopIcon, enabled: bool, hov
     } else {
         ui.visuals().weak_text_color()
     };
-    widgets::top_icon(&ui.painter(), resp.rect, kind, color);
+    widgets::top_icon(ui.painter(), resp.rect, kind, color);
     resp.clicked()
 }
 
@@ -1023,7 +1023,10 @@ fn header_cell(ui: &mut egui::Ui, label: &str, col: usize, width: f32, app: &mut
     };
     let (rect, resp) =
         ui.allocate_exact_size(egui::vec2(width, 20.0), egui::Sense::click());
-    let text = format!("{label}{arrow}");
+    // Uppercase, tightly-set labels read as a real data-table header (Proton's
+    // own list uses the same treatment), while the sort arrow stays lowercase
+    // glyphs so the label never looks like shouting.
+    let text = format!("{}{}", label.to_uppercase(), arrow);
     let color = if active {
         ui.visuals().strong_text_color()
     } else {
@@ -1047,7 +1050,7 @@ fn header_cell(ui: &mut egui::Ui, label: &str, col: usize, width: f32, app: &mut
         anchor,
         align,
         text,
-        egui::FontId::proportional(13.0),
+        egui::FontId::proportional(11.5),
         color,
     );
     if resp.hovered() {
@@ -1142,6 +1145,30 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
                             &mut menu_item,
                         );
                     }
+                    // A folder with nothing in it gets a friendly, centred
+                    // empty state instead of a blank card.
+                    if rows.is_empty() && !busy {
+                        ui.add_space(26.0);
+                        ui.vertical_centered(|ui| {
+                            ui.label(egui::RichText::new("\u{1f4c1}").size(38.0));
+                            ui.add_space(6.0);
+                            let msg = if trash_view {
+                                "Your trash is empty"
+                            } else {
+                                "This folder is empty"
+                            };
+                            ui.label(egui::RichText::new(msg).size(13.5).weak());
+                            ui.add_space(2.0);
+                            if !trash_view {
+                                ui.label(
+                                    egui::RichText::new("Drop files here or use \u{201c}+ New\u{201d}")
+                                        .size(12.0)
+                                        .weak(),
+                                );
+                            }
+                        });
+                        ui.add_space(18.0);
+                    }
                     // Empty area: click clears the selection, right-click offers the
                     // folder-level menu (Qt's empty-item context menu).
                     let h = (ui.available_height()).max(24.0);
@@ -1223,6 +1250,10 @@ fn elide_fit(ui: &egui::Ui, text: &str, font: egui::FontId, max_w: f32) -> Strin
     s
 }
 
+/// One file-list row. The column widths, selection state and menu plumbing are
+/// all call-site locals; grouping them would scatter the layout math, so the
+/// parameter count is the honest shape here.
+#[allow(clippy::too_many_arguments)]
 fn row(
     app: &mut App,
     ui: &mut egui::Ui,
@@ -1253,8 +1284,12 @@ fn row(
     let cy = rect.center().y;
     let icon_color = if selected {
         visuals.selection.stroke.color
+    } else if e.dir {
+        // Folders wear the Proton purple, files stay a quiet neutral - the
+        // one thing that makes a file list look "Proton Drive" at a glance.
+        theme::accent(ui.visuals())
     } else {
-        visuals.text_color()
+        visuals.weak_text_color()
     };
     let (ix, iy) = (rect.left() + 8.0, cy - 5.0);
     if e.dir {
@@ -1627,8 +1662,13 @@ fn expand_path(app: &mut App, rel: &str) {
 /// and uploading into the files view.
 pub fn new_button(app: &mut App, ui: &mut egui::Ui) {
     let resp = ui.add_sized(
-        egui::vec2(ui.available_width(), 32.0),
-        egui::Button::new(egui::RichText::new("+ New").strong()),
+        egui::vec2(ui.available_width(), 34.0),
+        egui::Button::new(
+            egui::RichText::new("+  New").strong().color(egui::Color32::WHITE),
+        )
+        .fill(theme::accent(ui.visuals()))
+        .stroke(egui::Stroke::NONE)
+        .corner_radius(theme::pill()),
     );
     let _ = egui::Popup::menu(&resp).show(|ui| {
         if ui.button("New folder...").clicked() {
@@ -1753,7 +1793,7 @@ fn my_files_row(app: &mut App, ui: &mut egui::Ui, root_open: bool) {
         egui::pos2(rect.left() + 22.0, rect.center().y),
         egui::vec2(17.0, 17.0),
     );
-    widgets::nav_icon(&ui.painter(), icon_rect, widgets::NavIcon::Folder, color);
+    widgets::nav_icon(ui.painter(), icon_rect, widgets::NavIcon::Folder, color);
     ui.painter().text(
         rect.left_center() + egui::vec2(42.0, 0.0),
         egui::Align2::LEFT_CENTER,
@@ -1770,15 +1810,14 @@ fn my_files_row(app: &mut App, ui: &mut egui::Ui, root_open: bool) {
         egui::FontId::proportional(11.0),
         color,
     );
-    if resp.clicked() {
-        if let Some(pos) = resp.interact_pointer_pos() {
+    if resp.clicked()
+        && let Some(pos) = resp.interact_pointer_pos() {
             if pos.x >= rect.right() - 26.0 {
                 toggle_tree(app, "");
             } else {
                 go(app, String::new());
             }
         }
-    }
 }
 
 /// One level of the folder tree: indented rows with a left caret; the open
@@ -1793,7 +1832,7 @@ fn tree_rows(app: &mut App, ui: &mut egui::Ui, parent: &str, depth: usize) {
         return;
     };
     let mut dirs: Vec<cli::RemoteEntry> = kids.into_iter().filter(|e| e.dir).collect();
-    dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    dirs.sort_by_key(|a| a.name.to_lowercase());
     let in_files = app.page == super::Page::Cloud && !app.cloud.trash_view;
     for e in &dirs {
         let r = e.rel.trim_end_matches('/').to_string();
@@ -1831,7 +1870,7 @@ fn tree_rows(app: &mut App, ui: &mut egui::Ui, parent: &str, depth: usize) {
             egui::pos2(rect.left() + indent + 24.0, rect.center().y),
             egui::vec2(14.0, 14.0),
         );
-        widgets::nav_icon(&ui.painter(), icon_rect, widgets::NavIcon::Folder, color);
+        widgets::nav_icon(ui.painter(), icon_rect, widgets::NavIcon::Folder, color);
         ui.painter().text(
             rect.left_center() + egui::vec2(indent + 36.0, 0.0),
             egui::Align2::LEFT_CENTER,
@@ -1839,15 +1878,14 @@ fn tree_rows(app: &mut App, ui: &mut egui::Ui, parent: &str, depth: usize) {
             egui::FontId::proportional(13.5),
             color,
         );
-        if resp.clicked() {
-            if let Some(pos) = resp.interact_pointer_pos() {
+        if resp.clicked()
+            && let Some(pos) = resp.interact_pointer_pos() {
                 if pos.x < rect.left() + indent + 16.0 {
                     toggle_tree(app, &r);
                 } else {
                     go(app, r.clone());
                 }
             }
-        }
         if open {
             if children(app, &r).is_none() {
                 ensure_children(app, &r); // expanded node: fetch its listing once

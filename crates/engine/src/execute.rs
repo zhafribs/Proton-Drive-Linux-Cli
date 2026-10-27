@@ -18,31 +18,6 @@ fn state_dir() -> std::path::PathBuf {
     }
 }
 
-fn local_root_default() -> std::path::PathBuf {
-    let home = dirs::home_dir().unwrap_or_else(|| std::path::Path::new("/").to_path_buf());
-    let config_dir = dirs::config_dir().unwrap_or_else(|| home.join(".config"));
-    let cfg = proton_core::conf::read(&config_dir.join("proton-sync.conf"));
-    if let Some(v) = cfg.get("PROTON_SYNC_LOCAL") {
-        return std::path::PathBuf::from(v).expanduser();
-    }
-    home.join("ProtonDrive")
-}
-
-trait ExpandUser {
-    fn expanduser(&self) -> std::path::PathBuf;
-}
-impl ExpandUser for std::path::PathBuf {
-    fn expanduser(&self) -> std::path::PathBuf {
-        let s = self.to_string_lossy();
-        if s.starts_with("~/") {
-            if let Some(home) = dirs::home_dir() {
-                return home.join(&s[2..]);
-            }
-        }
-        self.clone()
-    }
-}
-
 fn parent_of(rel: &str) -> String {
     if let Some(pos) = rel.rfind('/') {
         rel[..pos].to_string()
@@ -96,10 +71,10 @@ fn trash_local_path(rel: &str, local_root: &Path) -> Result<()> {
 pub fn execute(
     actions: &[Action],
     remote: &RemoteTree,
-    local: &LocalTree,
+    _local: &LocalTree,
     remote_root: &str,
     local_root: &Path,
-    filter: &Filter,
+    _filter: &Filter,
 ) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
     let cli = Cli::new()?;
     let mut tree: RemoteTree = remote.clone();
@@ -131,7 +106,7 @@ pub fn execute(
                 }
             }
             Action::TrashLocal { rel, .. } => {
-                if let Err(_) = trash_local_path(rel, local_root) {
+                if trash_local_path(rel, local_root).is_err() {
                     failed.insert(rel.clone());
                 }
             }

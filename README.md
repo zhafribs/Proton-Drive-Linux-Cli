@@ -8,25 +8,26 @@
 One double-clickable file that gives Linux what Proton doesn't ship: an
 **unofficial desktop app** for Proton Drive — two-way folder sync, a cloud file
 manager, tray, notifications and in-app updates — built on Proton's
-**official, unmodified Drive CLI**. Nothing to install: no AUR, no Python
-setup, no Qt — the app and its sync runtime travel inside the AppImage.
+**official, unmodified Drive CLI**. The GUI and the sync engine are both Rust:
+nothing to install, no AUR, no Python, no Qt — the app and its sync runtime
+travel inside the AppImage.
 
 > Unofficial. Not affiliated with, endorsed by, sponsored or supported by
 > Proton AG. "Proton Drive" is a trademark of Proton AG.
 
-**Get it:** [`ProtonDrive-CLI-0.9.0-GUI-3.16.16-x86_64.AppImage`](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/latest)
-(≈80 MB · x86_64 · [all releases](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases))
+**Get it:** [`ProtonDrive-CLI-0.9.0-GUI-3.16.30-x86_64.AppImage`](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/latest)
+(≈47 MB · x86_64 · [all releases](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases))
 
 | Inside the file | Version |
 | --- | --- |
 | Proton Drive CLI — official, unmodified, SHA-512-verified at build | **0.9.0** (2026-10-05) |
-| Desktop app + folder-sync engine (this repo) | **3.16.16** |
+| Desktop app + Rust sync engine (this repo) | **3.16.30** |
 
 ## Start here
 
 1. Download the AppImage and make it executable once:
    ```bash
-   chmod +x ProtonDrive-CLI-0.9.0-GUI-3.16.16-x86_64.AppImage
+   chmod +x ProtonDrive-CLI-0.9.0-GUI-3.16.30-x86_64.AppImage
    ```
 2. Double-click it. Click **Sign in** — Proton's official login opens in a
    terminal (that's how their CLI does 2FA); the app picks the session up.
@@ -47,9 +48,9 @@ Fedora 32 era or newer). If it won't start you're missing FUSE — Arch
 The upstream CLI is untouched — arguments pass straight through:
 
 ```bash
-./ProtonDrive-CLI-0.9.0-GUI-3.16.16-x86_64.AppImage --help
-./ProtonDrive-CLI-0.9.0-GUI-3.16.16-x86_64.AppImage auth login   # the app's sign-in
-./ProtonDrive-CLI-0.9.0-GUI-3.16.16-x86_64.AppImage filesystem list /
+./ProtonDrive-CLI-0.9.0-GUI-3.16.30-x86_64.AppImage --help
+./ProtonDrive-CLI-0.9.0-GUI-3.16.30-x86_64.AppImage auth login   # the app's sign-in
+./ProtonDrive-CLI-0.9.0-GUI-3.16.30-x86_64.AppImage filesystem list /
 ```
 
 `auth login`, `filesystem …`, `sharing …`, `photo timeline`, `takeout run …` —
@@ -70,10 +71,11 @@ window (940×780 default, no page ever scrolls sideways, size remembered).*
 * **Folder sync** — `~/ProtonDrive` mirrors the `/my-files` section of your
   Drive both ways: local edits upload within seconds (inotify), cloud changes
   appear in ~10 s (Proton's own change events), and renames/moves are
-  followed **server-side without re-uploading**. Install:
-  `./scripts/install-sync.sh` (systemd *user* service, no sudo); log:
-  `journalctl --user -u proton-sync -f`; try it first with
-  `python3 scripts/proton-sync.py --dry-run`.
+  followed **server-side without re-uploading**. The engine is Rust
+  (`crates/engine`), kept byte-for-byte faithful to the original Python
+  reference (`scripts/proton-sync.py`, still shipped for the parity harness).
+  Install: `./scripts/install-sync.sh` (systemd *user* service, no sudo); log:
+  `journalctl --user -u proton-sync -f`.
 * **My files** — a full cloud file manager: upload files/folders, download,
   rename, move, multi-select, sortable columns, back/forward + breadcrumbs,
   and a **Trash** view where restore is one click.
@@ -113,23 +115,18 @@ SUBFOLDERS/EXCLUDE/INOTIFY/FAST_START/AUTO_WORKERS/TRANSFERS/AUDIT_EVERY/…` �
 settings live in `~/.config/proton-sync.conf` (edit by hand or in the app).
 Uninstall: `./scripts/install-sync.sh uninstall` (folder and state kept).
 
-### Fast start
+### Fast first sync
 
-On a warm start the engine reads the last remote metadata snapshot, shows
-**Ready from cache** in about 0.1 s, and keeps syncing while a chunked
-background audit checks the cloud. Deletes and edits to existing files are
-held for that audit; new files still upload. When the audit finishes, held
-paths are reconciled and deletes resume. The first-ever start still has to
-walk the remote tree (≈90 s for 1,230 entries); the audit and progress make
-that visible, and a persistent metadata helper is the future fix if needed.
+The Rust engine lists the cloud tree in parallel (`PROTON_SYNC_WORKERS`,
+default 12, ceiling 16) and hands each folder to the transfer pool the moment
+it is listed — the first file lands within seconds, downloads run while the
+walk continues, and a download-only cycle never re-walks the cloud. A full
+scan of a 1,230-entry account is ~80 s; a large first sync is then bounded by
+transfer speed, not by the walk.
 
-**Settings → Performance** controls fast start, adaptive concurrency,
-transfer concurrency, **Run full check now**, and **Clear snapshot cache**.
-Defaults: 12 scan workers (RAM/rate-limited, ceiling 16), transfer concurrency
-4 (allowed 1–10), audit every 30 min, and no periodic audits when scheduled
-checks are Off. Benchmarks and the one-key rollback
-(`PROTON_SYNC_FAST_START=0`) are in
-[docs/performance/fast-start-sync.md](docs/performance/fast-start-sync.md).
+**Settings → Performance** controls worker and transfer concurrency; the
+engine honours `PROTON_SYNC_WORKERS`, `PROTON_SYNC_TRANSFERS` (default 8) and
+`PROTON_SYNC_RETRIES` from `~/.config/proton-sync.conf`.
 
 ### Good-to-know settings
 
@@ -160,8 +157,8 @@ checks are Off. Benchmarks and the one-key rollback
 
 The sync service is separate: `./scripts/install-sync.sh` installs it and
 `./scripts/install-sync.sh uninstall` removes it. No admin rights are needed.
-Running the AppImage uses the runtime bundled in the file; a native source
-build uses your distro's `python3` for the sync engine.
+Running the AppImage uses the binaries bundled in the file; a native source
+build runs the same Rust engine (a Rust toolchain is the only runtime needed).
 
 ## Install from source (tar.gz)
 
@@ -173,7 +170,7 @@ present, then install the build packages (Debian/Ubuntu names; Fedora and Arch
 equivalents are in the full guide):
 
 ```bash
-sudo apt install build-essential wget curl python3 python3-pip \
+sudo apt install build-essential wget curl python3 \
   librsvg2-bin file desktop-file-utils appstream
 ```
 
@@ -196,10 +193,10 @@ Install FUSE if the AppImage asks for it: `libfuse2t64` on Ubuntu 24.04+ or
 with `APPIMAGE_EXTRACT_AND_RUN=1`.
 
 `build.sh` downloads Proton's official CLI and verifies its SHA-512, builds the
-Rust GUI, and bundles a portable Python runtime — the result is the same
-self-contained AppImage as the release. The guide also covers a **native
-install without an AppImage**, per-distro prerequisites, updating, uninstall,
-and troubleshooting:
+Rust GUI and the Rust sync engine, and packages the whole thing — the result
+is the same self-contained AppImage as the release. The guide also covers a
+**native install without an AppImage**, per-distro prerequisites, updating,
+uninstall, and troubleshooting:
 
 **[Install from source (tar.gz) →](docs/INSTALL-FROM-SOURCE.md)**
 
@@ -216,10 +213,9 @@ and troubleshooting:
   **aborts** if the downloaded binary doesn't match, so you never trust a
   number typed by hand.
 * Build deps (the build itself needs no root and installs nothing
-  system-wide): `bash`, `wget`, `python3` with pip (used only to *download*
-  wheels), `rsvg-convert` (`librsvg2-bin` / `librsvg`), optionally
-  `desktop-file-validate` and `appstreamcli`. First run fetches
-  `appimagetool` into `tools/`.
+  system-wide): `bash`, `wget`, `python3`, `rsvg-convert`
+  (`librsvg2-bin` / `librsvg`), optionally `desktop-file-validate` and
+  `appstreamcli`. First run fetches `appimagetool` into `tools/`.
 * GUI glibc floor is pinned at build time via `cargo-zigbuild` (glibc 2.28);
   a plain `cargo build` is the local-dev fallback.
 
@@ -249,10 +245,12 @@ docs/INSTALL-FROM-SOURCE.md  source (tar.gz) build and native install guide
 upstream.lock          CLI version + Proton's SHA-512s (written by check-upstream.sh only)
 scripts/check-upstream.sh   refresh upstream.lock from proton.me (CI runs this)
 scripts/release-notes.sh    render release-notes.md.tmpl for the built artifacts
-scripts/proton-sync.py      two-way sync engine (stdlib only, runs on python3)
+scripts/proton-sync.py      original Python sync engine (reference for the parity harness)
 scripts/install-sync.sh     install/uninstall the sync as a systemd user service
 scripts/install-gui.sh      menu entry + icon for a source checkout
-scripts/fetch-desktop-deps.sh  pinned CPython + jeepney wheels for the AppImage
+crates/core/                shared config/state/health/snapshot types
+crates/engine/              the Rust sync engine that ships and runs
+tests/parity/               Python-vs-Rust plan/refresh parity harness
 scripts/gen-licenses.sh     regenerate aggregated crate licence texts (cargo-about)
 gui/                   Rust desktop app (egui): Home, My files, Activity, tray, updater
 src/AppRun             AppImage entry point (argv pass-through)
@@ -271,8 +269,8 @@ git-ignored — the repo contains only scripts that fetch upstream bits from
 
 ## License and legal
 
-* **This repo's own code** (Rust GUI, build scripts, sync engine, metadata,
-  icon) is **MIT** — see [`LICENSE`](LICENSE).
+* **This repo's own code** (Rust GUI, Rust sync engine, build scripts,
+  metadata, icon) is **MIT** — see [`LICENSE`](LICENSE).
 * **The payload** (the Proton Drive CLI binary inside each AppImage) belongs
   to Proton AG and is **MIT, © 2025-2026 Proton AG**; its source is the SDK
   Proton publishes at <https://github.com/ProtonDriveApps/sdk>. MIT's notice
@@ -280,13 +278,12 @@ git-ignored — the repo contains only scripts that fetch upstream bits from
   [`src/licenses/Proton-Drive-SDK-MIT.txt`](src/licenses/Proton-Drive-SDK-MIT.txt),
   which `build.sh` installs into every AppImage at
   `usr/share/licenses/proton-drive/LICENSE`.
-* **Bundled runtime** — portable CPython (**PSF-2.0**) for the sync engine
-  and jeepney (**MIT**), plus the GUI binary's crate graph (~450 crates,
-  permissive licences) with every licence text generated from
+* **Bundled runtime** — the Rust GUI and sync engine's crate graph
+  (~450 crates, permissive licences) with every licence text generated from
   `gui/Cargo.lock` (`scripts/gen-licenses.sh`). All texts ship inside every
   AppImage at `usr/share/licenses/`; inventory:
-  [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). No copyleft: since
-  GUI 3.14.0 the AppImage carries no Qt, no PyQt6 and no GPL-3.0-only
+  [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). No copyleft: the
+  AppImage carries no Qt, no PyQt6, no CPython and no GPL-3.0-only
   component.
 * **Binary integrity** — payloads are byte-identical to Proton's downloads
   (`build.sh` aborts on SHA-512 mismatch); nothing is patched or re-signed.

@@ -57,11 +57,10 @@ pub fn read(path: &Path) -> BTreeMap<String, String> {
     if let Ok(text) = std::fs::read_to_string(path) {
         for line in text.lines() {
             let line = line.trim();
-            if !line.is_empty() && !line.starts_with('#') {
-                if let Some((k, v)) = line.split_once('=') {
+            if !line.is_empty() && !line.starts_with('#')
+                && let Some((k, v)) = line.split_once('=') {
                     values.insert(k.trim().to_string(), v.trim().to_string());
                 }
-            }
         }
     }
     values
@@ -77,11 +76,10 @@ pub fn read_extras(path: &Path) -> Vec<String> {
             if s.is_empty() || s.starts_with('#') {
                 continue;
             }
-            if let Some((k, _)) = s.split_once('=') {
-                if !CONF_KEYS.contains(&k.trim()) {
+            if let Some((k, _)) = s.split_once('=')
+                && !CONF_KEYS.contains(&k.trim()) {
                     out.push(s.to_string());
                 }
-            }
         }
     }
     out

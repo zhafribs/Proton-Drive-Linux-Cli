@@ -143,6 +143,7 @@ fn strip_trailing_annotation(rest: &str) -> String {
 ///   `TRASH remote personel/x`, `TRASH local  x`, `MKDIR  remote x`;
 /// * a trailing `/` on whole-subtree downloads (which used to leave the
 ///   name empty and made Activity render just "/").
+///
 /// A conflict's `: remote kept as ...` tail is cut at the exact phrase.
 /// Root files genuinely named `dir x.md` lose their first word - the same
 /// trade-off Qt made - paths never begin with those words plus a space in

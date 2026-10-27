@@ -115,7 +115,7 @@ pub fn run_loop() -> Result<()> {
 pub fn run_once_cycle(cli: &Cli, local_root: &str, remote_root: &str, filter: &Filter, propagate_deletes: bool) -> Result<()> {
     let t0 = SystemTime::now();
     let started = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
-    let _ = crate::health::write_health(&Health {
+    crate::health::write_health(&Health {
         status: "syncing".to_string(),
         started: Some(chrono::DateTime::<chrono::Utc>::from_timestamp(started, 0).unwrap_or_default().to_rfc3339()),
         ..Default::default()
@@ -183,7 +183,7 @@ pub fn run_once_cycle(cli: &Cli, local_root: &str, remote_root: &str, filter: &F
     let _ = state::write(&state_path, &saved);
 
     let secs = t0.elapsed().unwrap_or_default().as_secs_f64();
-    let _ = crate::health::write_health(&Health {
+    crate::health::write_health(&Health {
         status: "ok".to_string(),
         cycle_seconds: Some(secs),
         actions: result.actions.len() as u64,

@@ -5,11 +5,8 @@
 //! same time. Mirrors `cli_lock` in Python and `clilock` in the GUI.
 
 use anyhow::{anyhow, bail, Context, Result};
-use std::collections::HashMap;
 use std::env;
-use std::ffi::OsString;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 
@@ -92,18 +89,12 @@ pub fn bin() -> Option<PathBuf> {
 #[derive(Debug, Clone)]
 pub struct Cli {
     bin: PathBuf,
-    transfer_timeout: u64,
-    meta_timeout: u64,
 }
 
 impl Cli {
     pub fn new() -> Result<Self> {
         let bin = bin().ok_or_else(|| anyhow!("proton-drive not found (set PROTON_DRIVE_BIN or put it on PATH)"))?;
-        Ok(Self {
-            bin,
-            transfer_timeout: 3600,
-            meta_timeout: 120,
-        })
+        Ok(Self { bin })
     }
 
     pub fn run(&self, args: &[&str], json: bool, _timeout: Option<u64>, locked: bool) -> Result<String> {

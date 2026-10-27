@@ -1,3 +1,13 @@
+## 3.16.30 — 2026-10-27
+
+- **Polished My files.** Column headers are now the small uppercase, muted
+  labels of a real data table; folders wear the Proton purple; the sidebar's
+  "+ New" is a filled primary button; and an empty folder shows a friendly
+  centred message instead of a blank card.
+- **Code cleanup.** Removed dead imports, unused fields and helpers across the
+  engine and GUI; a folder chooser loop that never looped is now a single
+  block; the poll message boxes its health payload; clippy is clean.
+
 ## 3.16.29 — 2026-10-27
 
 - **The first download starts while the cloud is still being read.** A fresh

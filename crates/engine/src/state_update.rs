@@ -102,13 +102,12 @@ pub fn refresh_state(
 
         let mut entry = StateEntry::default();
         let mut has_entry = false;
-        if let Some(local_node) = local_node {
-            if local_node.is_file() {
+        if let Some(local_node) = local_node
+            && local_node.is_file() {
                 entry.l_mtime_ns = local_node.mtime_ns();
                 entry.l_size = local_node.size();
                 has_entry = true;
             }
-        }
         if let Some(remote_node) = remote_node {
             entry.r_mtime = remote_node.mtime.clone();
             entry.r_uid = remote_node.uid.clone();

@@ -105,26 +105,6 @@ pub fn force(ctx: &egui::Context, theme: &Theme) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn force_flips_the_active_theme() {
-        let ctx = egui::Context::default();
-        force(&ctx, &Theme::Dark);
-        assert_eq!(ctx.theme(), egui::Theme::Dark);
-        force(&ctx, &Theme::Light);
-        assert_eq!(ctx.theme(), egui::Theme::Light);
-        // The original bug: `System` was a no-op, so the forced Light stayed.
-        force(&ctx, &Theme::System);
-        assert_eq!(
-            ctx.options(|o| o.theme_preference),
-            egui::ThemePreference::System
-        );
-    }
-}
-
 /// Apply the palettes + widget styling to the context, for both themes (so
 /// an OS theme flip mid-session keeps the accent and the pill controls).
 ///
@@ -224,5 +204,25 @@ pub fn apply(ctx: &egui::Context, _theme: &Theme) {
         let mut style = base.clone();
         style.visuals = visuals;
         ctx.set_style_of(t, style);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn force_flips_the_active_theme() {
+        let ctx = egui::Context::default();
+        force(&ctx, &Theme::Dark);
+        assert_eq!(ctx.theme(), egui::Theme::Dark);
+        force(&ctx, &Theme::Light);
+        assert_eq!(ctx.theme(), egui::Theme::Light);
+        // The original bug: `System` was a no-op, so the forced Light stayed.
+        force(&ctx, &Theme::System);
+        assert_eq!(
+            ctx.options(|o| o.theme_preference),
+            egui::ThemePreference::System
+        );
     }
 }

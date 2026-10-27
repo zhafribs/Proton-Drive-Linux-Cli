@@ -97,6 +97,9 @@ pub fn remote_changed(remote: &RemoteEntry, state: &StateEntry) -> bool {
     }
 }
 
+/// A rename as `(old_rel, new_rel)`.
+pub type MovePair = (String, String);
+
 /// rclone `--track-renames` equivalent. Returns `(local_moves, remote_moves)`,
 /// each a list of `(old_rel, new_rel)`.
 ///
@@ -110,7 +113,7 @@ pub fn detect_moves(
     local: &LocalTree,
     state: &State,
     busy: &BTreeSet<String>,
-) -> (Vec<(String, String)>, Vec<(String, String)>) {
+) -> (Vec<MovePair>, Vec<MovePair>) {
     let mut remote_moves = Vec::new();
     let mut local_moves = Vec::new();
 
@@ -240,7 +243,7 @@ pub fn detect_moves(
         .collect();
 
     for old_dir in old_dirs {
-        for new_dir in new_dirs.iter().copied() {
+        for new_dir in new_dirs.iter() {
             if consumed.contains(old_dir.as_str()) || consumed.contains(new_dir.as_str()) {
                 continue;
             }
@@ -361,12 +364,11 @@ pub fn plan_cycle(
         let l = local.get(rel);
         let s = state.get(rel);
 
-        if let Some(r) = r {
-            if r.doc {
+        if let Some(r) = r
+            && r.doc {
                 holds += 1; // Proton Doc/Sheet: the CLI cannot download it
                 continue;
             }
-        }
 
         // ---- only on the remote side ----
         if let (Some(r), None) = (r, l) {

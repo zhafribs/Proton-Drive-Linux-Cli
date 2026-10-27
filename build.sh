@@ -4,10 +4,9 @@
 #
 # Downloads the official Proton Drive CLI binaries, verifies them against the
 # SHA-512 checksums published by Proton, builds this project's Rust GUI
-# (gui/), adds the sync-engine script plus a portable CPython runtime
-# (scripts/fetch-desktop-deps.sh), wraps it all in an AppDir and produces
-# portable AppImages with appimagetool. The result needs nothing installed on
-# the host beyond a normal desktop.
+# (gui/) and Rust sync engine (crates/engine), wraps it all in an AppDir and
+# produces portable AppImages with appimagetool. The result needs nothing
+# installed on the host beyond a normal desktop.
 #
 # Usage:
 #   ./build.sh                   # build both architectures
@@ -282,8 +281,13 @@ build_one() {
     fetch_payload "$platform"
     build_gui "$arch"
     make_appdir "$platform" "$appdir"
-    "$ROOT/scripts/fetch-desktop-deps.sh" "$arch"
-    BUNDLE_PYTHON=${BUNDLE_PYTHON:-0} bundle_python "$arch" "$appdir"
+    # The sync engine is Rust; the portable CPython runtime is only needed for
+    # the legacy Python-engine fallback, which ships only when explicitly
+    # requested (BUNDLE_PYTHON=1).
+    if [ "${BUNDLE_PYTHON:-0}" = "1" ]; then
+        "$ROOT/scripts/fetch-desktop-deps.sh" "$arch"
+        bundle_python "$arch" "$appdir"
+    fi
     validate "$appdir"
 
     mkdir -p "$DIST"

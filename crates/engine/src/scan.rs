@@ -77,61 +77,6 @@ fn mtime_ns(meta: &fs::Metadata) -> i64 {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::os::unix::fs::symlink;
-
-    fn tmp(name: &str) -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(format!("pdscan-{}-{name}", std::process::id()));
-        fs::remove_dir_all(&p).ok();
-        fs::create_dir_all(&p).unwrap();
-        p
-    }
-
-    #[test]
-    fn scans_files_dirs_and_applies_filters() {
-        let root = tmp("basic");
-        fs::create_dir_all(root.join("Docs/Sub")).unwrap();
-        fs::create_dir_all(root.join("Videos")).unwrap();
-        fs::write(root.join("Docs/a.txt"), b"abc").unwrap();
-        fs::write(root.join("Docs/Sub/b.tmp"), b"x").unwrap();
-        fs::write(root.join("Videos/c.mp4"), b"x").unwrap();
-        fs::write(root.join(".DS_Store"), b"x").unwrap();
-
-        let all = scan_local(&root, &Filter::new("", ""));
-        assert_eq!(all["Docs"], LocalEntry::Dir);
-        assert_eq!(all["Docs/Sub"], LocalEntry::Dir);
-        assert_eq!(all["Docs/a.txt"].size(), Some(3));
-        assert!(all.contains_key("Videos/c.mp4"));
-        assert!(!all.contains_key(".DS_Store"));
-
-        let filtered = scan_local(&root, &Filter::new("Docs", "*.tmp"));
-        assert!(filtered.contains_key("Docs/a.txt"));
-        assert!(!filtered.contains_key("Docs/Sub/b.tmp"));
-        assert!(!filtered.contains_key("Videos"));
-        assert!(!filtered.contains_key("Videos/c.mp4"));
-        fs::remove_dir_all(&root).ok();
-    }
-
-    #[test]
-    fn symlinked_dirs_are_listed_but_not_descended_and_file_links_skipped() {
-        let root = tmp("links");
-        let outside = tmp("outside");
-        fs::write(outside.join("inside.txt"), b"x").unwrap();
-        symlink(&outside, root.join("linked-dir")).unwrap();
-        symlink(outside.join("inside.txt"), root.join("linked-file")).unwrap();
-
-        let tree = scan_local(&root, &Filter::new("", ""));
-        assert_eq!(tree["linked-dir"], LocalEntry::Dir);
-        assert!(!tree.contains_key("linked-dir/inside.txt"));
-        assert!(!tree.contains_key("linked-file"));
-        fs::remove_dir_all(&root).ok();
-        fs::remove_dir_all(&outside).ok();
-    }
-}
-
-
 /// Remote tree scan using the official CLI (`fs list --json`).
 use crate::cli::{self, Cli};
 use anyhow::Result;
@@ -219,4 +164,58 @@ pub fn scan_remote(cli: &Cli, remote_root: &str, filter: &Filter) -> Result<Remo
         }
         Ok(tree)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    fn tmp(name: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("pdscan-{}-{name}", std::process::id()));
+        fs::remove_dir_all(&p).ok();
+        fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn scans_files_dirs_and_applies_filters() {
+        let root = tmp("basic");
+        fs::create_dir_all(root.join("Docs/Sub")).unwrap();
+        fs::create_dir_all(root.join("Videos")).unwrap();
+        fs::write(root.join("Docs/a.txt"), b"abc").unwrap();
+        fs::write(root.join("Docs/Sub/b.tmp"), b"x").unwrap();
+        fs::write(root.join("Videos/c.mp4"), b"x").unwrap();
+        fs::write(root.join(".DS_Store"), b"x").unwrap();
+
+        let all = scan_local(&root, &Filter::new("", ""));
+        assert_eq!(all["Docs"], LocalEntry::Dir);
+        assert_eq!(all["Docs/Sub"], LocalEntry::Dir);
+        assert_eq!(all["Docs/a.txt"].size(), Some(3));
+        assert!(all.contains_key("Videos/c.mp4"));
+        assert!(!all.contains_key(".DS_Store"));
+
+        let filtered = scan_local(&root, &Filter::new("Docs", "*.tmp"));
+        assert!(filtered.contains_key("Docs/a.txt"));
+        assert!(!filtered.contains_key("Docs/Sub/b.tmp"));
+        assert!(!filtered.contains_key("Videos"));
+        assert!(!filtered.contains_key("Videos/c.mp4"));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn symlinked_dirs_are_listed_but_not_descended_and_file_links_skipped() {
+        let root = tmp("links");
+        let outside = tmp("outside");
+        fs::write(outside.join("inside.txt"), b"x").unwrap();
+        symlink(&outside, root.join("linked-dir")).unwrap();
+        symlink(outside.join("inside.txt"), root.join("linked-file")).unwrap();
+
+        let tree = scan_local(&root, &Filter::new("", ""));
+        assert_eq!(tree["linked-dir"], LocalEntry::Dir);
+        assert!(!tree.contains_key("linked-dir/inside.txt"));
+        assert!(!tree.contains_key("linked-file"));
+        fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&outside).ok();
+    }
 }

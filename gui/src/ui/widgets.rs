@@ -345,7 +345,7 @@ pub fn nav_row(ui: &mut egui::Ui, icon: NavIcon, label: &str, selected: bool) ->
         egui::pos2(rect.left() + 22.0, rect.center().y),
         egui::vec2(17.0, 17.0),
     );
-    nav_icon(&ui.painter(), icon_rect, icon, color);
+    nav_icon(ui.painter(), icon_rect, icon, color);
     ui.painter().text(
         rect.left_center() + egui::vec2(42.0, 0.0),
         egui::Align2::LEFT_CENTER,

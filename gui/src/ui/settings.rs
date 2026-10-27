@@ -926,7 +926,7 @@ fn sel_tree(app: &mut App, ui: &mut egui::Ui, parent: &str) {
         return;
     }
     for (_name, rel) in &kids {
-        sel_row(app, ui, rel, &_name);
+        sel_row(app, ui, rel, _name);
         if app.draft.expanded.contains(rel) {
             let rel2 = rel.clone();
             ui.indent(("sel", rel2.clone()), |ui| {

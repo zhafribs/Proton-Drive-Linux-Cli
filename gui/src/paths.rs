@@ -87,13 +87,12 @@ pub fn find_icon_svg() -> Option<PathBuf> {
     if let Ok(lib) = std::env::var("APPDIR") {
         cands.push(PathBuf::from(lib).join("usr/lib/proton-sync/protondrive-icon.svg"));
     }
-    if let Some(exe) = std::env::current_exe().ok() {
-        if let Some(dir) = exe.parent() {
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent() {
             cands.push(dir.join("../usr/lib/proton-sync/protondrive-icon.svg"));
             cands.push(dir.join("../src/protondrive-icon.svg"));
             cands.push(dir.join("protondrive-icon.svg"));
         }
-    }
     if let Some(home) = dirs::home_dir() {
         cands.push(home.join(".local/share/icons/hicolor/scalable/apps/proton-drive-gui.svg"));
     }

@@ -32,7 +32,7 @@ pub fn uri_to_path(uri: &str) -> Option<PathBuf> {
 enum Portal {
     Done(Vec<PathBuf>),
     Cancel,
-    NoPortal,
+    Unavailable,
 }
 
 /// One portal round-trip: subscribe to the Request's Response signal first
@@ -44,10 +44,10 @@ fn portal(
     title: &str,
     extra: Vec<(&'static str, Value<'static>)>,
 ) -> Portal {
-    let Ok(conn) = Connection::session() else { return Portal::NoPortal };
+    let Ok(conn) = Connection::session() else { return Portal::Unavailable };
     static N: AtomicU64 = AtomicU64::new(0);
     let token = format!("pd_{}_{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed));
-    let Some(unique) = conn.unique_name() else { return Portal::NoPortal };
+    let Some(unique) = conn.unique_name() else { return Portal::Unavailable };
     let owner = unique.as_str().trim_start_matches(':').replace('.', "_");
     let req_path =
         format!("/org/freedesktop/portal/desktop/request/{owner}/{token}");
@@ -64,10 +64,10 @@ fn portal(
         req_path.as_str(),
         "org.freedesktop.portal.Request",
     ) else {
-        return Portal::NoPortal;
+        return Portal::Unavailable;
     };
     let Ok(mut signals) = proxy.receive_signal("Response") else {
-        return Portal::NoPortal;
+        return Portal::Unavailable;
     };
 
     let msg = match conn.call_method(
@@ -78,38 +78,41 @@ fn portal(
         &("", title, &options),
     ) {
         Ok(m) => m,
-        Err(_) => return Portal::NoPortal,
+        Err(_) => return Portal::Unavailable,
     };
     let Ok(_handle) = msg.body().deserialize::<zbus::zvariant::OwnedObjectPath>() else {
-        return Portal::NoPortal;
+        return Portal::Unavailable;
     };
 
-    for resp in &mut signals {
-        let body = resp.body();
-        let Ok((code, results)) =
-            body.deserialize::<(u32, HashMap<String, Value>)>()
-        else {
-            return Portal::NoPortal;
-        };
-        if code != 0 {
-            return Portal::Cancel; // the user cancelled
-        }
-        let Some(uris) = results.get("uris") else { return Portal::Cancel };
-        let inner = match uris {
-            Value::Value(b) => &**b,
-            other => other,
-        };
-        let Value::Array(arr) = inner else { return Portal::Cancel };
-        let paths: Vec<PathBuf> = arr
-            .iter()
-            .filter_map(|v| match v {
-                Value::Str(s) => uri_to_path(s.as_str()),
-                _ => None,
-            })
-            .collect();
-        return if paths.is_empty() { Portal::Cancel } else { Portal::Done(paths) };
+    // Exactly one Response signal is expected for the request; block on it.
+    let Some(resp) = signals.next() else {
+        return Portal::Unavailable;
+    };
+    let body = resp.body();
+    let Ok((code, results)) = body.deserialize::<(u32, HashMap<String, Value>)>() else {
+        return Portal::Unavailable;
+    };
+    if code != 0 {
+        return Portal::Cancel; // the user cancelled
     }
-    Portal::Cancel
+    let Some(uris) = results.get("uris") else { return Portal::Cancel };
+    let inner = match uris {
+        Value::Value(b) => &**b,
+        other => other,
+    };
+    let Value::Array(arr) = inner else { return Portal::Cancel };
+    let paths: Vec<PathBuf> = arr
+        .iter()
+        .filter_map(|v| match v {
+            Value::Str(s) => uri_to_path(s.as_str()),
+            _ => None,
+        })
+        .collect();
+    if paths.is_empty() {
+        Portal::Cancel
+    } else {
+        Portal::Done(paths)
+    }
 }
 
 fn run_dialog(exe: &str, args: Vec<String>) -> Vec<PathBuf> {
@@ -136,7 +139,7 @@ pub fn open_files() -> Vec<PathBuf> {
     ) {
         Portal::Done(p) => p,
         Portal::Cancel => Vec::new(),
-        Portal::NoPortal => run_dialog(
+        Portal::Unavailable => run_dialog(
             "zenity",
             vec![
                 "--file-selection".into(),
@@ -158,7 +161,7 @@ pub fn open_dir(title: &str) -> Option<PathBuf> {
     match portal("OpenFile", title, vec![("directory", Value::from(true))]) {
         Portal::Done(p) => p.into_iter().next(),
         Portal::Cancel => None,
-        Portal::NoPortal => run_dialog("zenity", vec!["--file-selection".into(), "--directory".into()])
+        Portal::Unavailable => run_dialog("zenity", vec!["--file-selection".into(), "--directory".into()])
             .into_iter()
             .next()
             .or_else(|| {
@@ -178,7 +181,7 @@ pub fn save_file(name: &str) -> Option<PathBuf> {
     ) {
         Portal::Done(p) => p.into_iter().next(),
         Portal::Cancel => None,
-        Portal::NoPortal => run_dialog(
+        Portal::Unavailable => run_dialog(
             "zenity",
             vec!["--file-selection".into(), "--save".into(), "--confirm-overwrite".into(), format!("--filename={name}")],
         )

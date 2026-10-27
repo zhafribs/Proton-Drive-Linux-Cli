@@ -8,7 +8,7 @@ pub use proton_core::time::parse_iso;
 pub fn rel_time(dt: Option<DateTime<FixedOffset>>) -> String {
     let Some(dt) = dt else { return String::new() };
     let now = Utc::now().with_timezone(&dt.timezone());
-    let secs = (now - dt).num_seconds().max(0) as i64;
+    let secs = (now - dt).num_seconds().max(0);
     if secs < 45 {
         "just now".into()
     } else if secs < 3600 {

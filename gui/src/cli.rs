@@ -15,19 +15,17 @@ pub fn resolve_cli() -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("APPDIR") {
         cands.push(PathBuf::from(dir).join("usr/bin/proton-drive"));
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent() {
             cands.push(dir.join("../usr/bin/proton-drive"));
-            if let Ok(ver) = std::env::var("VERSION") {
-                if let Ok(plat) = std::env::var("PLATFORM") {
+            if let Ok(ver) = std::env::var("VERSION")
+                && let Ok(plat) = std::env::var("PLATFORM") {
                     cands.push(
                         dir.join(format!("../download/proton-drive-{ver}-{plat}")),
                     );
                 }
-            }
             cands.push(dir.join("proton-drive"));
         }
-    }
     if let Some(home) = dirs::home_dir() {
         cands.push(home.join(".local/bin/proton-drive"));
     }
@@ -72,7 +70,7 @@ fn run_cli_unlocked(cli: &Path, args: &[&str], timeout: Duration) -> Result<exec
 }
 
 /// First line of `proton-drive --version` ("" on failure).
-pub fn cli_version(cli: &PathBuf) -> String {
+pub fn cli_version(cli: &Path) -> String {
     let out = run_cli_unlocked(cli, &["--version"], Duration::from_secs(60));
     match out {
         Ok(o) => o
@@ -108,7 +106,7 @@ struct OwnedBy {
 
 /// Version + who is signed in (`fs list` of the root returns `ownedBy`).
 /// Independent of the engine: the update check must not wait on this.
-pub fn fetch_identity(cli: &PathBuf) -> Identity {
+pub fn fetch_identity(cli: &Path) -> Identity {
     let mut out = Identity { version: "?".into(), ..Default::default() };
     let v = cli_version(cli);
     out.version = if v.is_empty() { "?".into() } else { v };
@@ -131,7 +129,7 @@ pub fn fetch_identity(cli: &PathBuf) -> Identity {
     out
 }
 
-pub fn logout(cli: &PathBuf) {
+pub fn logout(cli: &Path) {
     let _ = run_cli(cli, &["auth", "logout"], Duration::from_secs(120));
 }
 
@@ -190,7 +188,7 @@ fn parse_folder_list(json: &str, rel_path: &str) -> Vec<(String, String)> {
         };
         out.push((name.to_string(), rel));
     }
-    out.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+    out.sort_by_key(|a| a.0.to_lowercase());
     out
 }
 
@@ -264,9 +262,7 @@ fn parse_entries(json: &str, rel_path: &str, trash: bool) -> Result<Vec<RemoteEn
             .chars()
             .take(16)
             .collect();
-        let rel = if trash {
-            name.to_string()
-        } else if rel_path.is_empty() {
+        let rel = if trash || rel_path.is_empty() {
             name.to_string()
         } else {
             format!("{rel_path}/{name}")
@@ -350,7 +346,7 @@ pub fn find_terminal() -> Option<(String, Vec<String>)> {
 
 /// The command string PyQt ran inside the terminal, unchanged:
 /// `<cli> auth login; echo; echo "You can close this window now."`
-pub fn login_script(cli: &PathBuf) -> String {
+pub fn login_script(cli: &Path) -> String {
     let q = shell_quote(&cli.to_string_lossy());
     // `auth login` writes the keyring session, so it takes the same
     // app-wide lock as every other CLI call - otherwise a sign-in that

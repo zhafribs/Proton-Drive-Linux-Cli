@@ -128,15 +128,14 @@ pub fn set_menu(paths: &Paths, on: bool) {
         let _ = std::fs::remove_file(&paths.menu_desktop_file);
         let _ = std::fs::remove_file(&paths.menu_icon_file);
     }
-    if let Some(exe) = which("update-desktop-database") {
-        if let Some(dir) = paths.menu_desktop_file.parent() {
+    if let Some(exe) = which("update-desktop-database")
+        && let Some(dir) = paths.menu_desktop_file.parent() {
             let _ = exec::run_ok(
                 &exe,
                 &[&dir.to_string_lossy()],
                 std::time::Duration::from_secs(15),
             );
         }
-    }
 }
 
 fn which(name: &str) -> Option<String> {

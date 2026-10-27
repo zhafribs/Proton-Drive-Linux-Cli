@@ -33,7 +33,7 @@ pub enum Page {
 /// Messages from the poller/worker threads to the UI.
 #[derive(Clone)]
 pub enum Back {
-    Poll { health: health::Health, active: bool, enabled: bool },
+    Poll { health: Box<health::Health>, active: bool, enabled: bool },
     Journal(Vec<String>),
     Identity(cli::Identity),
     Stats { files: u64, bytes: u64 },
@@ -196,11 +196,10 @@ pub fn expand_user(s: &str) -> PathBuf {
     if s == "~" {
         return dirs::home_dir().unwrap_or_else(|| "/".into());
     }
-    if let Some(rest) = s.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
+    if let Some(rest) = s.strip_prefix("~/")
+        && let Some(home) = dirs::home_dir() {
             return home.join(rest);
         }
-    }
     PathBuf::from(s)
 }
 
@@ -219,7 +218,7 @@ pub fn decode_png(bytes: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
         }
         png::ColorType::Rgb => {
             let mut out = Vec::with_capacity(w * h * 4);
-            for px in buf[..w * h * 3].chunks_exact(3) {
+            for px in buf[..w * h * 3].as_chunks::<3>().0 {
                 out.extend_from_slice(&[px[0], px[1], px[2], 255]);
             }
             out
@@ -325,7 +324,7 @@ fn spawn_poller(tx: mpsc::Sender<Back>, paths: Paths, activity_open: Arc<AtomicB
             let repaint_due = last_poll.is_none_or(|t| t.elapsed() >= POLL_MIN_GAP);
             let heartbeat_due = last_poll.is_none_or(|t| t.elapsed() >= HEARTBEAT);
             if (dirty && repaint_due) || heartbeat_due {
-                if tx.send(Back::Poll { health: h.clone(), active, enabled }).is_err() {
+                if tx.send(Back::Poll { health: Box::new(h.clone()), active, enabled }).is_err() {
                     break;
                 }
                 last_poll = Some(Instant::now());
@@ -373,6 +372,9 @@ fn spawn_poller(tx: mpsc::Sender<Back>, paths: Paths, activity_open: Arc<AtomicB
 }
 
 impl App {
+    /// eframe's `AppCreator` returns a boxed app, not `Self` - hence the
+    /// `new` name without a `Self` return.
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         lock: std::fs::File,
@@ -759,7 +761,7 @@ impl App {
         while let Ok(back) = self.rx.try_recv() {
             match back {
                 Back::Poll { health, active, enabled } => {
-                    self.on_poll(health, active, enabled);
+                    self.on_poll(*health, active, enabled);
                     self.tray_sync();
                 }
                 Back::Journal(lines) => {
@@ -1246,11 +1248,10 @@ impl App {
                         );
                         ui.add_space(6.0);
                         egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
-                            if let Some(parent) = cwd.parent() {
-                                if ui.button("\u{2191}  Go up").clicked() {
+                            if let Some(parent) = cwd.parent()
+                                && ui.button("\u{2191}  Go up").clicked() {
                                     act = Some(DlgAct::BrowseGo(parent.to_path_buf()));
                                 }
-                            }
                             let mut dirs: Vec<String> = std::fs::read_dir(&cwd)
                                 .map(|it| {
                                     it.flatten()
@@ -1538,8 +1539,8 @@ impl eframe::App for App {
         self.drain_theme(ctx);
 
         // Re-probe sign-in after a keyring-lock report (see on_poll).
-        if let Some(t) = self.identity_retry {
-            if Instant::now() >= t {
+        if let Some(t) = self.identity_retry
+            && Instant::now() >= t {
                 self.identity_retry = None;
                 let tx = self.tx.clone();
                 std::thread::spawn(move || {
@@ -1548,7 +1549,6 @@ impl eframe::App for App {
                     }
                 });
             }
-        }
 
         // Cloud: ensure the initial listing even if the page was reached
         // without a nav click (e.g. it becomes the startup page one day).
@@ -1559,22 +1559,20 @@ impl eframe::App for App {
 
         // Updates: automatic check 5s after start, then every 6h (Qt's
         // updates_timer); the ETag cache keeps this free of rate limits.
-        if let Some(t) = self.upd.next_check {
-            if std::time::Instant::now() >= t {
+        if let Some(t) = self.upd.next_check
+            && std::time::Instant::now() >= t {
                 self.upd.next_check =
                     Some(std::time::Instant::now() + Duration::from_secs(6 * 3600));
                 if self.prefs.updates_auto() {
                     self.action_check_updates();
                 }
             }
-        }
         // After an update swap: quit once the status label has been seen.
-        if let Some(t) = self.upd.quit_at {
-            if std::time::Instant::now() >= t {
+        if let Some(t) = self.upd.quit_at
+            && std::time::Instant::now() >= t {
                 self.upd.quit_at = None;
                 self.quit(ctx);
             }
-        }
 
         if self.hide_on_start {
             self.hide_on_start = false;

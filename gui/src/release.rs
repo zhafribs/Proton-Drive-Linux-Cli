@@ -422,11 +422,10 @@ pub fn update_confirm_health(paths: &crate::paths::Paths) {
         return;
     };
     let _ = std::fs::remove_file(&paths.update_mark_file);
-    if let Ok(v) = serde_json::from_str::<Value>(&text) {
-        if let Some(old) = v.get("old").and_then(Value::as_str) {
+    if let Ok(v) = serde_json::from_str::<Value>(&text)
+        && let Some(old) = v.get("old").and_then(Value::as_str) {
             let _ = std::fs::remove_file(old);
         }
-    }
 }
 
 /// Swap the running AppImage for the freshly downloaded one, then return
