@@ -1,3 +1,9 @@
+## 3.16.36 — 2026-10-27
+
+- **Removed the sidebar "+ New" button.** Creating a folder and uploading are
+  already available in the My files toolbar and the right-click menu, so the
+  leftover pill only added clutter.
+
 ## 3.16.35 — 2026-10-27
 
 - **Faster My files browsing.** Opening a folder you have already visited, and

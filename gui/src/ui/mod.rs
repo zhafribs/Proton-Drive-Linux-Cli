@@ -1047,10 +1047,6 @@ impl App {
         });
         ui.add_space(14.0);
 
-        // Proton's sidebar button: "+ New" opens the create/upload menu.
-        cloud::new_button(self, ui);
-        ui.add_space(10.0);
-
         // Home, Activity, My files (expandable folder tree), Settings,
         // Trash, About; long trees scroll while the footer stays anchored
         // at the bottom.

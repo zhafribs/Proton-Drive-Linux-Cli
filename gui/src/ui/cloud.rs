@@ -1933,51 +1933,6 @@ fn expand_path(app: &mut App, rel: &str) {
     }
 }
 
-/// The pane's "+ New" pill (Proton's sidebar button): a menu for creating
-/// and uploading into the files view.
-pub fn new_button(app: &mut App, ui: &mut egui::Ui) {
-    let resp = ui.add_sized(
-        egui::vec2(ui.available_width(), 34.0),
-        egui::Button::new(
-            egui::RichText::new("+  New").strong().color(egui::Color32::WHITE),
-        )
-        .fill(theme::accent(ui.visuals()))
-        .stroke(egui::Stroke::NONE)
-        .corner_radius(theme::pill()),
-    );
-    let _ = egui::Popup::menu(&resp).show(|ui| {
-        if ui.button("New folder...").clicked() {
-            ui.close();
-            ensure_files_view(app);
-            apply_menu_item(app, Some("newfolder"));
-        }
-        if ui.button("Upload files...").clicked() {
-            ui.close();
-            ensure_files_view(app);
-            apply_menu_item(app, Some("uploadfiles"));
-        }
-        if ui.button("Upload folder...").clicked() {
-            ui.close();
-            ensure_files_view(app);
-            apply_menu_item(app, Some("uploadfolder"));
-        }
-    });
-}
-
-/// The pane's actions may be used while another page (or the trash) is
-/// showing: land in the files view first, like the empty-area menu does.
-fn ensure_files_view(app: &mut App) {
-    app.page = super::Page::Cloud;
-    let was_trash = app.cloud.trash_view;
-    app.cloud.trash_view = false;
-    if !app.cloud.opened {
-        on_shown(app);
-    } else if was_trash {
-        let rel = app.cloud.rel.clone();
-        load(app, rel, false, true, true);
-    }
-}
-
 /// Browser-style navigation from the pane: history push + fresh listing.
 fn go(app: &mut App, rel: String) {
     app.page = super::Page::Cloud;
