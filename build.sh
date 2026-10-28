@@ -32,8 +32,8 @@ APPIMAGE_NAME="ProtonDrive-CLI"
 # "<desktop-basename>.appdata.xml", and appstreamcli requires that basename to
 # equal the component id - so the desktop file, metainfo file and component id
 # all share this value.
-DESKTOP_ID="io.github.zhafrisbs.ProtonDriveCLI.desktop"
-METAINFO_ID="io.github.zhafrisbs.ProtonDriveCLI.appdata.xml"
+DESKTOP_ID="io.github.zhafrisbs.protondrivecli.desktop"
+METAINFO_ID="io.github.zhafrisbs.protondrivecli.appdata.xml"
 
 # upstream platform -> AppImage architecture, output suffix
 declare -A APPIMAGE_ARCH=(
@@ -120,7 +120,7 @@ build_gui() {
     local arch="$1" target bin_dir
     [ "$arch" = "x86_64" ] || die "no GUI target for ${arch} - releases are x86_64-only"
     target="x86_64-unknown-linux-gnu.2.28"
-    if command -v cargo-zigbuild >/dev/null 2>&1; then
+    if command -v cargo-zigbuild >/dev/null 2>&1 && command -v zig >/dev/null 2>&1; then
         log "building GUI (${target}, zigbuild)"
         ( cd "$ROOT/gui" && cargo zigbuild --release --target "$target" )
         # cargo-zigbuild strips the glibc suffix before invoking cargo, so the
@@ -146,7 +146,7 @@ build_gui() {
 build_apprun() {
     local arch="$1" target bin_dir
     [ "$arch" = "x86_64" ] || die "no AppRun target for ${arch} - releases are x86_64-only"
-    if command -v cargo-zigbuild >/dev/null 2>&1; then
+    if command -v cargo-zigbuild >/dev/null 2>&1 && command -v zig >/dev/null 2>&1; then
         target="x86_64-unknown-linux-gnu.2.28"
         log "building AppRun launcher (${target}, zigbuild)"
         ( cd "$ROOT" && cargo zigbuild --release -p proton-drive-apprun --target "$target" ) \
@@ -196,7 +196,7 @@ make_appdir() {
     install -m 0755 "$GUI_BIN" "$appdir/usr/bin/proton-drive-gui"
     # Build and ship Rust engine only
     if command -v cargo >/dev/null 2>&1; then
-        if command -v cargo-zigbuild >/dev/null 2>&1 && [ -n "${target:-}" ]; then
+        if command -v cargo-zigbuild >/dev/null 2>&1 && command -v zig >/dev/null 2>&1 && [ -n "${target:-}" ]; then
             ( cd "$ROOT" && cargo zigbuild --release -p proton-engine --target "$target" ) || die "proton-engine build failed"
         elif [ "$(uname -m)" = "$arch" ]; then
             ( cd "$ROOT" && cargo build --release -p proton-engine ) || die "proton-engine build failed"

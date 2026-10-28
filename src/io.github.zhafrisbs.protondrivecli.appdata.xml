@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.zhafrisbs.ProtonDriveCLI</id>
+  <id>io.github.zhafrisbs.protondrivecli</id>
   <name>Proton Drive</name>
   <summary>Sync and manage your Proton Drive - unofficial AppImage with the official CLI inside</summary>
   <metadata_license>CC0-1.0</metadata_license>
@@ -35,7 +35,7 @@
       next to this file.
     </p>
   </description>
-  <launchable type="desktop-id">io.github.zhafrisbs.ProtonDriveCLI.desktop</launchable>
+  <launchable type="desktop-id">io.github.zhafrisbs.protondrivecli.desktop</launchable>
   <provides>
     <binary>proton-drive</binary>
   </provides>

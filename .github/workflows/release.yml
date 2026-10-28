@@ -73,7 +73,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             gui/target
-          key: rust-v2-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          key: rust-v2-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}-czb0.24.0
           restore-keys: |
             rust-v2-${{ runner.os }}-
 
@@ -102,7 +102,13 @@ jobs:
             tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$HOME/zig" --strip-components=1
           fi
           echo "$HOME/zig" >> "$GITHUB_PATH"
-          command -v cargo-zigbuild >/dev/null || cargo install cargo-zigbuild --locked
+          # 0.24.0 contains the fix that drops rustc's deprecated -Wl,-O1
+          # before Zig's linker; a stale 0.23.x cached binary would warn.
+          CZB_VERSION=0.24.0
+          if ! command -v cargo-zigbuild >/dev/null 2>&1 \
+             || ! cargo-zigbuild --version 2>/dev/null | grep -q "$CZB_VERSION"; then
+            cargo install cargo-zigbuild --version "$CZB_VERSION" --locked --force
+          fi
 
       - name: Cache Proton binaries and build tools
         uses: actions/cache@v6

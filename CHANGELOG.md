@@ -1,3 +1,14 @@
+## 3.16.42 — 2026-10-28
+
+- **AppStream metadata is fully clean.** Lowercased the component/desktop IDs
+  (`io.github.zhafrisbs.protondrivecli`), so `appstreamcli validate --pedantic`
+  reports zero issues.
+- **Removed the linker-warning suppression.** The GUI and AppRun now build
+  with `cargo-zigbuild 0.24.0`, which drops the deprecated `-Wl,-O1`; CI pins
+  and verifies that version instead of relying on
+  `#![allow(linker_messages)]`. The cache key includes the cargo-zigbuild
+  version so a stale 0.23.x cannot come back.
+
 ## 3.16.41 — 2026-10-28
 
 - **Clean CI logs.** Silenced Zig's known `linker_messages` false positive
