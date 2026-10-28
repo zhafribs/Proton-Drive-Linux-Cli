@@ -1,3 +1,11 @@
+## 3.16.45 — 2026-10-28
+
+- **Smaller dependency tree.** Removed direct dependencies nothing referenced:
+  GUI `anyhow` and `tokio`; engine `reqwest`, `ureq` and `urlencoding`. The
+  workspace graph drops 227 nodes and the lockfile 73 packages. No runtime
+  behaviour changes; builds and tests are the same code paths as before.
+- Added `AGENTS.md` with the YAGNI/“smallest complete change” rules used here.
+
 ## 3.16.44 — 2026-10-28
 
 - **No more "Checking your account..." under the Home buttons.** The account

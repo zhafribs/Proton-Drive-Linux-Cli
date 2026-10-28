@@ -14,8 +14,5 @@ glob = "0.3.2"
 libc = "0.2"
 proton-core = { path = "../core" }
 regex = "1.13.1"
-reqwest = { version = "0.12", features = ["blocking", "json"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-ureq = { version = "2.10", features = ["json"] }
-urlencoding = "2.1"
