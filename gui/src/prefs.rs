@@ -96,14 +96,17 @@ impl Prefs {
             .and_then(|s| s.split_once('x'))
             .and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?)))
             // Qt: a remembered size counts from 700x480, then gets floored to
-            // the no-scroll layout so old saves never come back clipped.
+            // the layout-safe minimum so old saves never come back clipped.
+            // 720x540 is the same floor the viewport enforces and every page
+            // now fits it, so a compact window is remembered instead of being
+            // silently grown back to 920x780 on the next start.
             .filter(|(w, h)| *w >= 700 && *h >= 480)
             .unwrap_or((940, 780));
         Prefs {
             file: file.to_path_buf(),
             values,
-            window_w: window_w.max(920),
-            window_h: window_h.max(780),
+            window_w: window_w.max(720),
+            window_h: window_h.max(540),
         }
     }
 
@@ -192,8 +195,8 @@ mod tests {
         assert_eq!(pr.theme(), Theme::Dark);
         assert!(pr.start_in_tray());
         assert!(!pr.close_to_tray());
-        // 1000x700 accepted, height floored to the no-scroll layout
-        assert_eq!((pr.window_w, pr.window_h), (1000, 780));
+        // 1000x700 is accepted as-is; it is above the 720x540 floor.
+        assert_eq!((pr.window_w, pr.window_h), (1000, 700));
         pr.set_bool("notify_complete", true);
         let text = std::fs::read_to_string(&p).unwrap();
         assert!(text.starts_with("[General]\n"));
@@ -211,10 +214,17 @@ mod tests {
         assert_eq!((pr.window_w, pr.window_h), (940, 780));
         assert!(pr.close_to_tray());
         assert_eq!(pr.theme(), Theme::System);
-        // a small-but-accepted size gets floored to the no-scroll layout
+        // a small-but-accepted size is kept, down to the layout floor
         std::fs::write(&p, "[General]\nwindow_size=1000x700\n").unwrap();
         let pr = Prefs::load(&p);
-        assert_eq!((pr.window_w, pr.window_h), (1000, 780));
+        assert_eq!((pr.window_w, pr.window_h), (1000, 700));
+        std::fs::write(&p, "[General]\nwindow_size=720x540\n").unwrap();
+        let pr = Prefs::load(&p);
+        assert_eq!((pr.window_w, pr.window_h), (720, 540));
+        // Below the floor still clamps up, so old tiny saves stay usable.
+        std::fs::write(&p, "[General]\nwindow_size=710x500\n").unwrap();
+        let pr = Prefs::load(&p);
+        assert_eq!((pr.window_w, pr.window_h), (720, 540));
         std::fs::remove_file(&p).ok();
     }
 

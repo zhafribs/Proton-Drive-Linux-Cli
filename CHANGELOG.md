@@ -1,3 +1,14 @@
+## 3.16.52 — 2026-10-29
+
+- **Compact window sizes are remembered.** The startup floor was still
+  920×780, so a window resized to the 720×540 minimum was silently grown
+  again on the next launch. The floor now matches the viewport (720×540), so
+  the window reopens at the size you left it — the same layout-safe minimum
+  behaviour Task Manager OG uses.
+- No resize animation was added: TMOG's fluid look comes from native layout
+  reflow, not a transition. egui already relayouts every frame; the visible
+  clipping was the row/column overflow fixed in 3.16.51.
+
 ## 3.16.51 — 2026-10-29
 
 - **Settings cards stay inside a narrow window.** The two nested control
