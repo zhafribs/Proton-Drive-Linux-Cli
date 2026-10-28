@@ -549,13 +549,21 @@ fn number_options(range: std::ops::RangeInclusive<i32>) -> Vec<i32> {
     range.collect()
 }
 
-/// A label and its control as one wrapped item: `horizontal_wrapped` may move
-/// the whole pair to the next line, but never the label away from its input.
+/// A label and its control, kept together. Below 220px there is no room for
+/// both on one line, so the label sits directly above the control instead of
+/// leaving the label on a line of its own.
 fn labeled_control(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
-    ui.horizontal(|ui| {
-        ui.label(label);
-        add(ui);
-    });
+    if ui.available_width() < 220.0 {
+        ui.vertical(|ui| {
+            ui.label(label);
+            add(ui);
+        });
+    } else {
+        ui.horizontal(|ui| {
+            ui.label(label);
+            add(ui);
+        });
+    }
 }
 
 fn number_combo(
@@ -605,26 +613,27 @@ fn performance_card(app: &mut App, ui: &mut egui::Ui) {
         {
             app.draft.auto_workers = auto;
         }
-        ui.horizontal_wrapped(|ui| {
-            labeled_control(ui, "Scan workers", |ui| {
-                number_combo(
-                    ui,
-                    "scan-workers",
-                    &mut app.draft.workers,
-                    WORKERS_RANGE,
-                    "Upper limit for parallel scans. Adaptive scans may use fewer under memory pressure.",
-                );
-            });
-            ui.add_space(24.0);
-            labeled_control(ui, "Transfer concurrency", |ui| {
-                number_combo(
-                    ui,
-                    "transfer-concurrency",
-                    &mut app.draft.transfers,
-                    TRANSFERS_RANGE,
-                    "Independent parent folders transferred at the same time.",
-                );
-            });
+        // Each label+dropdown is its own row: putting two nested rows inside
+        // horizontal_wrapped made the pair too wide to wrap, which widened
+        // the whole Settings pane on a narrow window.
+        labeled_control(ui, "Scan workers", |ui| {
+            number_combo(
+                ui,
+                "scan-workers",
+                &mut app.draft.workers,
+                WORKERS_RANGE,
+                "Upper limit for parallel scans. Adaptive scans may use fewer under memory pressure.",
+            );
+        });
+        ui.add_space(8.0);
+        labeled_control(ui, "Transfer concurrency", |ui| {
+            number_combo(
+                ui,
+                "transfer-concurrency",
+                &mut app.draft.transfers,
+                TRANSFERS_RANGE,
+                "Independent parent folders transferred at the same time.",
+            );
         });
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
@@ -853,21 +862,19 @@ fn install_card(app: &mut App, ui: &mut egui::Ui) {
 
 fn fine_tuning_card(app: &mut App, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Fine-tuning"), |ui| {
-        ui.horizontal_wrapped(|ui| {
-            labeled_control(ui, "Parallel connections", |ui| {
-                number_combo(
-                    ui,
-                    "parallel-connections",
-                    &mut app.draft.workers,
-                    WORKERS_RANGE,
-                    "Upper limit for parallel CLI calls. Adaptive scans may use fewer \
-                     automatically when memory is tight.",
-                );
-            });
-            ui.add_space(24.0);
-            labeled_control(ui, "Retries per folder", |ui| {
-                number_combo(ui, "retries-per-folder", &mut app.draft.retries, RETRIES_RANGE, "");
-            });
+        labeled_control(ui, "Parallel connections", |ui| {
+            number_combo(
+                ui,
+                "parallel-connections",
+                &mut app.draft.workers,
+                WORKERS_RANGE,
+                "Upper limit for parallel CLI calls. Adaptive scans may use fewer \
+                 automatically when memory is tight.",
+            );
+        });
+        ui.add_space(8.0);
+        labeled_control(ui, "Retries per folder", |ui| {
+            number_combo(ui, "retries-per-folder", &mut app.draft.retries, RETRIES_RANGE, "");
         });
     });
 }

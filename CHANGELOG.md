@@ -1,3 +1,12 @@
+## 3.16.51 — 2026-10-29
+
+- **Settings cards stay inside a narrow window.** The two nested control
+  groups in Performance (and Fine-tuning) made that row wider than the card,
+  which widened the whole Settings scroll content and pushed every card past
+  the right edge. Each label + dropdown is now its own row; the label stays
+  with its input, and below 220px it stacks directly above it instead of
+  splitting across lines.
+
 ## 3.16.50 — 2026-10-29
 
 - **My files keeps the Modified column** at the narrowest window with the
