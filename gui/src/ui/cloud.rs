@@ -1969,15 +1969,6 @@ pub fn nav_ui(app: &mut App, ui: &mut egui::Ui) {
     if widgets::nav_row(ui, widgets::NavIcon::Home, "Home", app.page == super::Page::Home) {
         app.page = super::Page::Home;
     }
-    ui.add_space(6.0);
-    if widgets::nav_row(
-        ui,
-        widgets::NavIcon::Activity,
-        "Activity",
-        app.page == super::Page::Activity,
-    ) {
-        app.page = super::Page::Activity;
-    }
     ui.add_space(8.0);
     // Proton's sidebar shows "My files" open by default once its folders are
     // known; an explicit toggle wins. Navigation inserts itself into

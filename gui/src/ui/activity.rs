@@ -15,10 +15,10 @@ pub struct ActivityState {
 
 const KINDS: [&str; 4] = ["Everything", "Uploaded", "Downloaded", "Other"];
 
-pub fn draw(app: &mut App, ui: &mut egui::Ui) {
+pub fn draw(app: &mut App, ui: &mut egui::Ui, title: &str) {
     // Header row: title + segment switch (Qt's rounded segmented control).
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("Activity").strong().size(24.0));
+        ui.label(egui::RichText::new(title).strong().size(18.0));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // Pill track with a solid purple active segment (Proton's
             // segmented control).
@@ -41,7 +41,8 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                 });
         });
     });
-    ui.add_space(12.0);
+    // Sit the section label right on top of its card.
+    ui.add_space(2.0);
 
     if app.act.seg == 0 {
         files_tab(app, ui);
@@ -54,13 +55,14 @@ fn files_tab(app: &mut App, ui: &mut egui::Ui) {
     // Search + list live on a white card; the count line stays inside it,
     // with the scroll height reserved so it can never be pushed out.
     widgets::card(ui, None, |ui| {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             // Bounded widths: a greedy INFINITY search field would push the
-            // filter combo past the card's right edge.
+            // filter combo past the card's right edge. When the card is very
+            // narrow the combo wraps instead of widening the card.
             ui.add(
                 egui::TextEdit::singleline(&mut app.act.query)
                     .hint_text("Search file names...")
-                    .desired_width((ui.available_width() - 152.0).max(140.0)),
+                    .desired_width((ui.available_width() - 150.0).max(100.0)),
             );
             egui::ComboBox::from_id_salt("act-kind")
                 .selected_text(KINDS[app.act.kind])
@@ -132,11 +134,11 @@ fn files_tab(app: &mut App, ui: &mut egui::Ui) {
 fn log_tab(app: &mut App, ui: &mut egui::Ui) {
     let query = app.act.log_query.trim().to_lowercase();
     widgets::card(ui, None, |ui| {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut app.act.log_query)
                     .hint_text("Filter log lines...")
-                    .desired_width((ui.available_width() - 100.0).max(140.0)),
+                    .desired_width((ui.available_width() - 110.0).max(100.0)),
             );
             if ui.button("Copy log").clicked() {
                 let text: Vec<&str> = app

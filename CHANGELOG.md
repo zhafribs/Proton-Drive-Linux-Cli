@@ -1,3 +1,95 @@
+## 3.16.67 — 2026-10-29
+
+- The **Recent activity** label now sits directly on top of its card (2px
+  gap instead of 12px).
+
+## 3.16.66 — 2026-10-29
+
+- **Hero buttons are back under the subtitle** where they were before
+  3.16.65. Only that row's padding/spacing is compacted, so Open my folder,
+  Sync now and Pause stay on one line at the minimum width without changing
+  position as the window grows.
+- The activity timestamp reserves a small right margin so the list scrollbar
+  never covers it.
+
+## 3.16.65 — 2026-10-29
+
+- **Activity rows never overlap.** Each row reserves a fixed time column and
+  truncates the name/path to the remaining width, so long paths cannot paint
+  over the timestamp or widen the card past the window. The search/filter row
+  wraps too.
+- **Hero actions stay on one line.** Open my folder, Sync now and Pause share
+  a single full-width row (indented under the hero text on wide windows).
+
+## 3.16.64 — 2026-10-29
+
+- **Home is the activity feed.** The separate Activity tab is gone; Home keeps
+  the status hero and shows the Files moved / Technical log feed.
+- Removed the Home account, folder and recently-synced cards.
+- **Sign out / Sign in** now lives in a click menu on the sidebar email row.
+- The `1037 files · 1.1 GB` line moved to the sidebar footer, above the
+  “Unofficial community app” box.
+
+## 3.16.63 — 2026-10-29
+
+- The Home folder card drops the local path, which is already shown under
+  Settings → Where your files live. The file count/size stays centered against
+  the folder icon; both cards keep the same height.
+
+## 3.16.62 — 2026-10-29
+
+- The compact red **Sign out** box is taller (24px). The account avatar and
+  folder icon grow to 50px with it, so both two-row cards stay the same height
+  without a hardcoded card box.
+
+## 3.16.61 — 2026-10-29
+
+- **Two content-driven rows.** The account card is email + `Signed in` with a
+  compact red-outline **Sign out** on the status line. The folder card is
+  stats + path. No third row, no tag, and no hardcoded card height: the 44px
+  avatar/folder icon sets the height, so both cards stay equal.
+
+## 3.16.60 — 2026-10-29
+
+- Removed the **Open folder** button again. The folder card keeps a matching
+  third row with a quiet, non-clickable **Local folder** tag, so both cards
+  stay equal height without a hardcoded card box. The red **Sign out** box is
+  retained under the email.
+
+## 3.16.59 — 2026-10-29
+
+- **Red Sign out box restored**, under the email. No more hardcoded card
+  height: both cards now use the same three-row structure — email / status /
+  action, and stats / path / Open folder — so their heights match naturally.
+
+## 3.16.58 — 2026-10-29
+
+- The quiet account action follows the card's own state: while the card says
+  `Signed in`, it offers **Sign out** even if the identity probe is still
+  waiting on the CLI lock.
+
+## 3.16.57 — 2026-10-29
+
+- **Quiet account action.** The outlined red Sign out button is gone. The
+  account card now reads `Signed in · Sign out` on one line; the action is
+  muted until hovered, then turns red with a pointer and underline. Both Home
+  cards keep the same height and the folder card uses the file count/size as
+  its main line.
+
+## 3.16.56 — 2026-10-29
+
+- **Home card alignment.** The Sign out button now sits under the email instead
+  of overlapping it. The folder card drops the redundant “ProtonDrive” label
+  and uses `1037 files · 1.1 GB` as its main line, with the path underneath.
+  Both cards share a minimum content height, so they stay the same size.
+
+## 3.16.55 — 2026-10-29
+
+- **Home folder card tightened.** Removed the "Your folder on this computer"
+  heading, moved the file count/size onto the same line as the folder name,
+  and matched the folder icon to the account avatar height so the two cards
+  line up evenly.
+
 ## 3.16.54 — 2026-10-29
 
 - **Less explanatory clutter.** Removed the long muted notes under How often,

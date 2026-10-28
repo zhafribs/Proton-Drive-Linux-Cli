@@ -25,7 +25,6 @@ use std::time::{Duration, Instant};
 pub enum Page {
     Home,
     Cloud,
-    Activity,
     Settings,
     About,
 }
@@ -1173,7 +1172,7 @@ impl App {
         egui::ScrollArea::vertical()
             .id_salt("nav-scroll")
             .auto_shrink([false, false])
-            .max_height((ui.available_height() - 124.0).max(140.0))
+            .max_height((ui.available_height() - 150.0).max(130.0))
             .show(ui, |ui| cloud::nav_ui(self, ui));
 
         ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
@@ -1200,6 +1199,17 @@ impl App {
                     ui.add_space(2.0);
                     ui.label(egui::RichText::new("Unofficial community app").size(11.5).weak());
                 });
+            ui.add_space(6.0);
+            if let Some((files, bytes)) = self.stats {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{files} files \u{b7} {}",
+                        service::human_size(bytes)
+                    ))
+                    .size(12.0)
+                    .weak(),
+                );
+            }
         });
     }
 
@@ -1207,14 +1217,28 @@ impl App {
     /// identity at the very bottom; the pages themselves live as rows in the
     /// nav list above.
     fn account_row(&mut self, ui: &mut egui::Ui) {
-        let email = self.identity.as_ref().and_then(|i| i.email.clone());
-        let label = match (&self.identity, &email) {
-            (None, _) => "Checking your account...",
-            (Some(_), Some(e)) => e.as_str(),
-            (Some(_), None) => "You're not signed in yet",
+        let email = self
+            .identity
+            .as_ref()
+            .and_then(|i| i.email.clone())
+            .or_else(|| self.last_email.clone());
+        let label = if let Some(email) = email.as_deref() {
+            email
+        } else if self.identity.is_some() {
+            "You're not signed in yet"
+        } else {
+            "Checking your account..."
         };
-        let (rect, _resp) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::hover());
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
+        if response.hovered() {
+            ui.painter().rect_filled(
+                rect.shrink(2.0),
+                egui::CornerRadius::same(8),
+                ui.visuals().widgets.hovered.weak_bg_fill,
+            );
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
         // Accent initial circle, like Home's account card.
         let c = egui::pos2(rect.left() + 14.0, rect.center().y);
         ui.painter().circle_filled(c, 11.0, theme::ACCENT.gamma_multiply(0.25));
@@ -1237,6 +1261,42 @@ impl App {
             egui::FontId::proportional(13.0),
             ui.visuals().text_color(),
         );
+        ui.painter().text(
+            rect.right_center() + egui::vec2(-10.0, 0.0),
+            egui::Align2::RIGHT_CENTER,
+            "\u{22ef}",
+            egui::FontId::proportional(15.0),
+            ui.visuals().weak_text_color(),
+        );
+
+        let signed_in = self.logged_in()
+            || (self.last_email.is_some()
+                && !matches!(
+                    self.ui_status(),
+                    health::UiStatus::SignedOut
+                        | health::UiStatus::NeedsLogin
+                        | health::UiStatus::SigningIn
+                ));
+        egui::Popup::menu(&response).show(|ui| {
+            ui.set_min_width(140.0);
+            if signed_in {
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new("Sign out").color(theme::ERROR),
+                        )
+                        .frame(false),
+                    )
+                    .clicked()
+                {
+                    self.dialog = Some(Dialog::ConfirmLogout);
+                    ui.close();
+                }
+            } else if ui.button("Sign in").clicked() {
+                self.action_login();
+                ui.close();
+            }
+        });
     }
 
     fn central(&mut self, ui: &mut egui::Ui) {
@@ -1248,7 +1308,6 @@ impl App {
             .show(ui, |ui| match self.page {
                 Page::Home => home::draw(self, ui),
                 Page::Cloud => cloud::draw(self, ui),
-                Page::Activity => activity::draw(self, ui),
                 Page::Settings => settings::draw(self, ui),
                 Page::About => about::draw(self, ui),
             });
@@ -1708,7 +1767,7 @@ impl eframe::App for App {
     /// the window is closed to the background.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.activity_open
-            .store(self.page == Page::Activity && !self.hidden, Ordering::Relaxed);
+            .store(self.page == Page::Home && !self.hidden, Ordering::Relaxed);
         self.drain(ctx);
         self.drain_theme(ctx);
 

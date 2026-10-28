@@ -257,25 +257,6 @@ pub fn status_orb(ui: &mut egui::Ui, status: &str) {
     }
 }
 
-/// Account avatar: initial of the e-mail (or "?" when signed out).
-pub fn avatar(ui: &mut egui::Ui, email: Option<&str>) {
-    let s = 44.0;
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(s, s), egui::Sense::hover());
-    let painter = ui.painter();
-    painter.circle_filled(rect.center(), s / 2.0, theme::ACCENT.gamma_multiply(0.25));
-    let ch = email
-        .and_then(|e| e.chars().next())
-        .map(|c| c.to_uppercase().to_string())
-        .unwrap_or_else(|| "?".into());
-    painter.text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        ch,
-        egui::FontId::proportional(20.0),
-        theme::ACCENT,
-    );
-}
-
 fn dir_color(dir: Dir) -> egui::Color32 {
     match dir {
         Dir::Up => theme::SUCCESS,
@@ -288,20 +269,49 @@ fn dir_color(dir: Dir) -> egui::Color32 {
 /// One activity/recent row: colored glyph, name, parent path, label, time.
 pub fn move_row(ui: &mut egui::Ui, row: &ChangeRow, parent: &str, when: &str) {
     let color = dir_color(row.dir());
-    ui.horizontal(|ui| {
-        let g = ui.label(egui::RichText::new(row.glyph()).strong().size(15.0).color(color));
-        g.on_hover_text(row.rel.clone());
-        ui.vertical(|ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(row.name.clone()).strong().size(14.0));
-                ui.label(egui::RichText::new(row.label()).size(12.0).weak());
+    // Reserve a fixed time column, then give the text the rest of the row.
+    // Both text lines truncate, so a long name or path can never paint over
+    // the timestamp or widen the activity card past the window.
+    let gap = 8.0;
+    let glyph_w = 20.0;
+    let time_w = 64.0;
+    let content_w = (ui.available_width() - glyph_w - time_w - 2.0 * gap).max(40.0);
+
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.horizontal(|ui| {
+            let g = ui.label(egui::RichText::new(row.glyph()).strong().size(15.0).color(color));
+            g.on_hover_text(row.rel.clone());
+            ui.add_space(gap);
+            ui.allocate_ui_with_layout(
+                egui::vec2(content_w, 0.0),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    ui.set_max_width(content_w);
+                    let name = ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(row.name.clone()).strong().size(14.0),
+                        )
+                        .truncate(),
+                    );
+                    name.on_hover_text(row.rel.clone());
+                    let mut meta = row.label().to_string();
+                    if !parent.is_empty() {
+                        meta.push_str(" \u{b7} ");
+                        meta.push_str(parent);
+                    }
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(meta).size(12.0).weak())
+                            .truncate(),
+                    );
+                },
+            );
+            ui.add_space(gap);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Keep the timestamp clear of the activity list's scrollbar.
+                ui.add_space(12.0);
+                ui.label(egui::RichText::new(when).size(12.0).weak());
             });
-            if !parent.is_empty() {
-                ui.label(egui::RichText::new(parent).size(12.0).weak());
-            }
-        });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new(when).size(12.0).weak());
         });
     });
     ui.add_space(2.0);
@@ -311,7 +321,6 @@ pub fn move_row(ui: &mut egui::Ui, row: &ChangeRow, parent: &str, when: &str) {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum NavIcon {
     Home,
-    Activity,
     Folder,
     Settings,
     Trash,
@@ -337,20 +346,6 @@ pub fn nav_icon(painter: &egui::Painter, r: egui::Rect, kind: NavIcon, c: egui::
             ));
             painter.add(egui::Shape::line(
                 vec![p(0.41, 0.88), p(0.41, 0.64), p(0.59, 0.64), p(0.59, 0.88)],
-                stroke,
-            ));
-        }
-        NavIcon::Activity => {
-            // Pulse line - the activity feed's heartbeat.
-            painter.add(egui::Shape::line(
-                vec![
-                    p(0.06, 0.56),
-                    p(0.30, 0.56),
-                    p(0.42, 0.24),
-                    p(0.56, 0.76),
-                    p(0.66, 0.50),
-                    p(0.94, 0.50),
-                ],
                 stroke,
             ));
         }
