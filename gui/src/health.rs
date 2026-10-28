@@ -1,7 +1,7 @@
 //! Status mapping for the engine's health snapshot - the struct itself lives
 //! in `proton-core` so the GUI and the engine share one schema.
 
-pub use proton_core::health::{read, Health};
+pub use proton_core::health::{Health, is_login_error, read};
 
 use crate::util::rel_time;
 
@@ -45,37 +45,62 @@ impl UiStatus {
 
 /// The full status derivation: engine liveness, the engine's own report, the
 /// account probe and the app's transient login/pause state.
+///
+/// Engine activity wins over the account probe: if the service is already
+/// checking/syncing, the Home must say so immediately, even while the identity
+/// probe is still in flight.
 pub fn derive_status(
     active: bool,
     hstatus: &str,
-    identity_known: bool,
-    logged_in: bool,
+    identity: Option<bool>,
     signing_in: bool,
     paused_by_user: bool,
+    has_last_email: bool,
+    session_error: bool,
 ) -> UiStatus {
-    // A fresh sign-in is more useful than "signed out" while it runs.
+    // `None` = the account probe has not returned yet; `Some(false)` = probed
+    // and signed out; `Some(true)` = signed in.
+    let identity_known = identity.is_some();
+    let logged_in = identity == Some(true);
+    // The engine is already working: show that, not a generic "Starting".
+    if active && hstatus == "syncing" {
+        return UiStatus::Syncing;
+    }
+    // The sign-in terminal is open; this outranks a stale needs-login state.
     if signing_in && !logged_in {
         return UiStatus::SigningIn;
     }
-    // The engine says the keyring session is gone; that is not a fresh
-    // install, so it gets the "sign in again" treatment.
-    if hstatus == "needs_login" {
-        return UiStatus::NeedsLogin;
+    // A lost session is only "expired" if this account was signed in before.
+    // A fresh install (no last email) gets the welcome screen instead.
+    if (hstatus == "needs_login" || session_error) && !logged_in {
+        return if has_last_email {
+            UiStatus::NeedsLogin
+        } else {
+            UiStatus::SignedOut
+        };
+    }
+    if active && hstatus == "error" {
+        return UiStatus::Error;
+    }
+    if identity_known && !logged_in {
+        return UiStatus::SignedOut;
     }
     if !identity_known {
-        // Account probe still in flight - the engine is starting up too.
-        return UiStatus::Starting;
-    }
-    if !logged_in {
-        return UiStatus::SignedOut;
+        // The account probe is still running. If the engine already finished a
+        // cycle, show its result; otherwise the engine is starting.
+        return if active && hstatus == "ok" {
+            UiStatus::Synced
+        } else {
+            UiStatus::Starting
+        };
     }
     if active {
         match hstatus {
             "ok" => UiStatus::Synced,
-            "syncing" => UiStatus::Syncing,
-            "needs_login" => UiStatus::NeedsLogin,
-            "error" => UiStatus::Error,
             "" => UiStatus::Starting,
+            // A stale needs-login from before a fresh sign-in: the wake cycle
+            // will replace it with "syncing" immediately.
+            "needs_login" => UiStatus::Starting,
             _ => UiStatus::Unknown,
         }
     } else if paused_by_user {
@@ -196,7 +221,7 @@ mod tests {
         assert!(h.next_poll_dt().is_some());
         assert!(h.ts_dt().is_some());
         assert_eq!(
-            derive_status(true, &h.status, true, true, false, false),
+            derive_status(true, &h.status, Some(true), false, false, false, false),
             UiStatus::Synced
         );
     }
@@ -267,18 +292,18 @@ mod tests {
         assert!(synced_line(&queued).contains("background check running"));
     }
 
-    /// A lost keyring session is its own state: the engine may be running fine,
-    /// but nothing can be synced until the user signs in again.
+    /// A lost keyring session is its own state when this account was signed in
+    /// before; a fresh install still gets the welcome screen.
     #[test]
     fn needs_login_is_its_own_status() {
         assert_eq!(
-            derive_status(true, "needs_login", true, true, false, false),
+            derive_status(true, "needs_login", Some(false), false, false, true, false),
             UiStatus::NeedsLogin
         );
         // Even with the service stopped the session problem is the more
         // actionable message.
         assert_eq!(
-            derive_status(false, "needs_login", true, true, false, false),
+            derive_status(false, "needs_login", Some(false), false, false, true, false),
             UiStatus::NeedsLogin
         );
         let (title, sub) = status_text(UiStatus::NeedsLogin);
@@ -291,42 +316,104 @@ mod tests {
     fn derives_account_engine_and_pause_states() {
         // Account probe still in flight (engine not confirmed either way).
         assert_eq!(
-            derive_status(false, "", false, false, false, false),
+            derive_status(false, "", None, false, false, false, false),
             UiStatus::Starting
         );
         // A sign-in is running in the terminal.
         assert_eq!(
-            derive_status(true, "ok", true, false, true, false),
+            derive_status(true, "ok", Some(false), true, false, false, false),
             UiStatus::SigningIn
         );
         // Signed out, engine may be up.
         assert_eq!(
-            derive_status(true, "ok", true, false, false, false),
+            derive_status(true, "ok", Some(false), false, false, false, false),
             UiStatus::SignedOut
         );
         // Signed in but the service is not running.
         assert_eq!(
-            derive_status(false, "ok", true, true, false, false),
+            derive_status(false, "ok", Some(true), false, false, false, false),
             UiStatus::EngineStopped
         );
         // ...or the user explicitly paused it.
         assert_eq!(
-            derive_status(false, "ok", true, true, false, true),
+            derive_status(false, "ok", Some(true), false, true, false, false),
             UiStatus::Paused
         );
         // Service up, no cycle reported yet.
         assert_eq!(
-            derive_status(true, "", true, true, false, false),
+            derive_status(true, "", Some(true), false, false, false, false),
             UiStatus::Starting
         );
         // Normal running states.
         assert_eq!(
-            derive_status(true, "ok", true, true, false, false),
+            derive_status(true, "ok", Some(true), false, false, false, false),
             UiStatus::Synced
         );
         assert_eq!(
-            derive_status(true, "syncing", true, true, false, false),
+            derive_status(true, "syncing", Some(true), false, false, false, false),
             UiStatus::Syncing
+        );
+    }
+
+    /// The engine's real state wins over a still-pending account probe: if it
+    /// is already syncing, the Home must say so.
+    #[test]
+    fn engine_syncing_wins_over_the_identity_probe() {
+        assert_eq!(
+            derive_status(true, "syncing", None, false, false, false, false),
+            UiStatus::Syncing
+        );
+        // Even while the sign-in terminal is open, an active engine shows
+        // Syncing rather than "Signing in...".
+        assert_eq!(
+            derive_status(true, "syncing", Some(false), true, false, false, false),
+            UiStatus::Syncing
+        );
+        // A finished cycle is also shown before the account probe returns.
+        assert_eq!(
+            derive_status(true, "ok", None, false, false, false, false),
+            UiStatus::Synced
+        );
+    }
+
+    #[test]
+    fn session_expiry_needs_a_previous_sign_in() {
+        // The identity probe failed with a login error, but this account was
+        // signed in before: padlock / "Sign in again".
+        assert_eq!(
+            derive_status(false, "ok", Some(false), false, false, true, true),
+            UiStatus::NeedsLogin
+        );
+        // Fresh install: no last email -> welcome screen.
+        assert_eq!(
+            derive_status(true, "needs_login", Some(false), false, false, false, false),
+            UiStatus::SignedOut
+        );
+    }
+
+    #[test]
+    fn stale_needs_login_after_sign_in_does_not_show_the_padlock() {
+        // The engine has not run its wake cycle yet; the identity is valid.
+        assert_eq!(
+            derive_status(true, "needs_login", Some(true), false, false, true, false),
+            UiStatus::Starting
+        );
+        // While the sign-in terminal is open, show progress instead.
+        assert_eq!(
+            derive_status(false, "needs_login", Some(false), true, false, true, true),
+            UiStatus::SigningIn
+        );
+    }
+
+    #[test]
+    fn engine_error_is_shown_even_before_the_identity_probe() {
+        assert_eq!(
+            derive_status(true, "error", None, false, false, false, false),
+            UiStatus::Error
+        );
+        assert_eq!(
+            derive_status(true, "error", Some(false), false, false, false, false),
+            UiStatus::Error
         );
     }
 }

@@ -24,10 +24,13 @@ pub fn write_health(health: &Health) {
     if h.build.is_none() {
         h.build = std::env::var("PROTON_GUI_VERSION").ok();
     }
+    if h.started.is_none() {
+        h.started = prev.started;
+    }
     if h.interval.is_none() {
         h.interval = prev.interval;
     }
-    if h.next_poll.is_none() {
+    if h.next_poll.is_none() && h.interval != Some(0) {
         h.next_poll = prev.next_poll;
     }
     let _ = fs::create_dir_all(state_dir());

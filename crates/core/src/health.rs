@@ -64,6 +64,18 @@ pub fn read(path: &Path) -> Health {
         .unwrap_or_default()
 }
 
+/// CLI errors that mean the keyring session is gone or locked, rather than a
+/// transient network/filesystem failure. Used by the engine (to write
+/// `needs_login`) and the GUI (to show the padlock instead of the welcome).
+pub fn is_login_error(message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    m.contains("you need to login")
+        || m.contains("login first")
+        || m.contains("unauthorized")
+        || m.contains("401")
+        || m.contains("keyring")
+}
+
 impl Health {
     pub fn ts_dt(&self) -> Option<DateTime<FixedOffset>> {
         self.ts.as_deref().and_then(crate::time::parse_iso)
@@ -154,5 +166,13 @@ mod tests {
         let h = read(&path);
         assert_eq!(h.status, "");
         assert_eq!(h.holds, 0);
+    }
+
+    #[test]
+    fn recognises_lost_session_errors() {
+        assert!(is_login_error("You need to login first"));
+        assert!(is_login_error("keyring unlock failed"));
+        assert!(is_login_error("HTTP 401 Unauthorized"));
+        assert!(!is_login_error("network is unreachable"));
     }
 }

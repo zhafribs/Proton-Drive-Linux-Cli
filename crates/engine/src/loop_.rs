@@ -106,7 +106,21 @@ pub fn run_loop() -> Result<()> {
         }
         first = false;
         wake.store(false, std::sync::atomic::Ordering::Relaxed);
-        let _ = run_once_cycle(&cli, &local_root, &remote_root, &filter, propagate_deletes);
+        let cycle_start = Instant::now();
+        if let Err(err) = run_once_cycle(&cli, &local_root, &remote_root, &filter, propagate_deletes) {
+            let message = format!("{err:#}");
+            let status = if proton_core::health::is_login_error(&message) {
+                "needs_login"
+            } else {
+                "error"
+            };
+            crate::health::write_health(&Health {
+                status: status.to_string(),
+                error: Some(message),
+                cycle_seconds: Some(cycle_start.elapsed().as_secs_f64()),
+                ..Default::default()
+            });
+        }
         crate::health::write_schedule(interval);
         last_cycle = Instant::now();
     }

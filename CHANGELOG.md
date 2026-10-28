@@ -1,3 +1,22 @@
+## 3.16.43 — 2026-10-28
+
+- **Accurate sign-in states.** A previously signed-in account whose keyring
+  session is lost now shows the padlock **"Your session expired"** and
+  **Sign in again**; a fresh install still shows **Welcome** / **Sign in**.
+- **The engine reports failures.** A failed cycle now writes `status: "error"`
+  or `"needs_login"` with the message and duration, instead of leaving the
+  health file stuck on "syncing". The Home shows the real error.
+- **Signing in wakes sync.** After a successful sign-in the app writes the
+  engine wake file and keeps probing identity during the sign-in window (once
+  per result, so probes do not stack), so an active engine starts a cycle
+  immediately; a stopped engine still offers **Start syncing**.
+- **The engine's state wins over the account probe.** If the engine is already
+  syncing/checking, Home shows **"Syncing your files..."** immediately, even
+  while the identity probe is still waiting on the CLI lock. The account card
+  shows the last known email with "Checking...".
+- Health metadata: `started` is preserved and `next_poll` is cleared when the
+  interval is 0.
+
 ## 3.16.42 — 2026-10-28
 
 - **AppStream metadata is fully clean.** Lowercased the component/desktop IDs

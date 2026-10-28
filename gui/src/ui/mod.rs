@@ -154,6 +154,10 @@ pub struct App {
     /// Re-probe sign-in after the engine reports a keyring problem: a locked
     /// keyring makes the CLI look "not signed in" until it is unlocked.
     pub identity_retry: Option<std::time::Instant>,
+    /// Last successfully probed account email. Lets the account card show the
+    /// address immediately, and distinguishes "session expired" (previous
+    /// sign-in) from a fresh install.
+    pub last_email: Option<String>,
     /// The user paused syncing (persisted across restarts via a marker file).
     pub paused_by_user: bool,
     pub paused_at: Option<std::time::Instant>,
@@ -513,6 +517,10 @@ impl App {
         let tray = tray::spawn(tx.clone(), icon_rgba, icon_w);
 
         let paused_by_user = paths.state_dir.join("paused").exists();
+        let last_email = std::fs::read_to_string(paths.state_dir.join("last-email"))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         Ok(Box::new(App {
             hide_on_start: prefs.start_in_tray(),
             prefs,
@@ -530,6 +538,7 @@ impl App {
 
             identity: None,
             identity_retry: None,
+            last_email,
             paused_by_user,
             paused_at: paused_by_user.then(Instant::now),
             login_started: None,
@@ -579,13 +588,20 @@ impl App {
             .login_started
             .is_some_and(|t| t.elapsed() < Duration::from_secs(300))
             && !self.logged_in();
+        let session_error = self
+            .identity
+            .as_ref()
+            .and_then(|i| i.error.as_deref())
+            .is_some_and(health::is_login_error);
+        let identity = self.identity.as_ref().map(|i| i.logged_in);
         health::derive_status(
             self.active,
             &self.health.status,
-            self.identity.is_some(),
-            self.logged_in(),
+            identity,
             signing_in,
             self.paused_by_user,
+            self.last_email.is_some(),
+            session_error,
         )
     }
 
@@ -710,7 +726,12 @@ impl App {
         }
     }
 
-    pub fn action_logout_confirmed(&self) {
+    pub fn action_logout_confirmed(&mut self) {
+        // Explicit sign-out: the next "not signed in" state is the welcome
+        // screen, not "session expired".
+        self.last_email = None;
+        self.login_started = None;
+        let _ = std::fs::remove_file(self.paths.state_dir.join("last-email"));
         let tx = self.tx.clone();
         std::thread::spawn(move || {
             if let Some(c) = cli::resolve_cli() {
@@ -825,10 +846,43 @@ impl App {
                     self.tray_sync();
                 }
                 Back::Identity(id) => {
+                    // Waking the engine is only needed when this is a fresh
+                    // sign-in, not the ordinary startup identity probe (the
+                    // service already runs its first cycle on its own).
+                    let was_signing_in = self.login_started.is_some();
+                    let signed_in_now = id.logged_in
+                        && self
+                            .identity
+                            .as_ref()
+                            .is_some_and(|i| !i.logged_in);
                     if id.logged_in {
                         self.login_started = None;
+                        if let Some(email) = id.email.clone() {
+                            let _ = std::fs::write(
+                                self.paths.state_dir.join("last-email"),
+                                &email,
+                            );
+                            self.last_email = Some(email);
+                        }
+                        if was_signing_in || signed_in_now {
+                            // A successful sign-in must start a cycle now, even
+                            // when interval=0 left the engine waiting.
+                            let _ = std::fs::write(&self.paths.wake_file, b"");
+                        }
                     }
                     self.identity = Some(id);
+                    // Keep probing while the sign-in terminal is open - after
+                    // each result, not on a blind timer, so probes never stack
+                    // up behind the engine's CLI lock.
+                    if !self.logged_in()
+                        && self
+                            .login_started
+                            .is_some_and(|t| t.elapsed() < Duration::from_secs(300))
+                        && self.identity_retry.is_none()
+                    {
+                        self.identity_retry =
+                            Some(Instant::now() + Duration::from_secs(10));
+                    }
                 }
                 Back::Stats { files, bytes } => {
                     self.stats = Some((files, bytes));

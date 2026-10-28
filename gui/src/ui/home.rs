@@ -30,6 +30,16 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                     health::hero_sub(status, &app.health)
                 } else if signing_in {
                     "Finish signing in in the terminal window.".to_string()
+                } else if matches!(
+                    status,
+                    health::UiStatus::Syncing
+                        | health::UiStatus::Synced
+                        | health::UiStatus::Error
+                        | health::UiStatus::Unknown
+                ) {
+                    // The engine's real state is more useful than the identity
+                    // probe, which may still be waiting on the CLI lock.
+                    health::hero_sub(status, &app.health)
                 } else if app.identity.is_none() {
                     "Checking your account...".to_string()
                 } else if !logged_in {
@@ -128,14 +138,25 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
         // --- account ------------------------------------------------------
         widgets::card(ui, None, |ui| {
             ui.horizontal(|ui| {
-                let email = app.identity.as_ref().and_then(|i| i.email.clone());
+                let id_email = app.identity.as_ref().and_then(|i| i.email.clone());
+                let email = id_email.clone().or_else(|| app.last_email.clone());
                 widgets::avatar(ui, email.as_deref());
                 ui.add_space(14.0);
                 ui.vertical(|ui| {
-                    let (value, badge) = match (&app.identity, &email) {
-                        (None, _) => ("Checking your account...", ""),
+                    let (value, badge) = match (&app.identity, &id_email) {
+                        (None, _) => (
+                            app.last_email.as_deref().unwrap_or("Checking your account..."),
+                            if app.last_email.is_some() { "Checking..." } else { "" },
+                        ),
                         (Some(_), Some(e)) => (e.as_str(), "Signed in"),
-                        (Some(_), None) => ("You're not signed in yet", "Not signed in"),
+                        (Some(_), None) => (
+                            app.last_email.as_deref().unwrap_or("You're not signed in yet"),
+                            if status == health::UiStatus::NeedsLogin {
+                                "Session expired"
+                            } else {
+                                "Not signed in"
+                            },
+                        ),
                     };
                     ui.label(egui::RichText::new(value).strong().size(15.0));
                     if !badge.is_empty() {
