@@ -37,19 +37,19 @@ fn smooth(edge0: f32, edge1: f32, x: f32) -> f32 {
 ///
 /// The dot is deliberately larger than Qt's: at a 22px tray size the old
 /// 14px fill became ~4px, making green (synced) and purple (syncing) hard to
-/// tell apart. The base icon is also 70px instead of 66px so the tray icon
-/// itself is a little bigger within the same canvas.
+/// tell apart. The base icon is 68px in the top-left (C66 plus a little) and
+/// the badge stays bottom-right, where the cloud still reads at 22px.
 /// Returns ARGB32 bytes, which is what `ksni::Icon` wants.
 pub fn compose_icon(base_rgba: &[u8], base_w: usize, status_key: &str) -> Vec<u8> {
     const C: usize = 72;
-    const BASE: usize = 70;
-    const DOT: f32 = 55.0;
+    const BASE: usize = 68;
+    const DOT: f32 = 56.0;
     const FILL: f32 = 12.0;
-    const RING: f32 = 17.0;
+    const RING: f32 = 16.0;
     let color = dot_color(status_key);
     let mut canvas: Vec<[f32; 4]> = vec![[0.0; 4]; C * C]; // premultiplied RGBA
 
-    // Base icon: bilinear scale base_w -> BASE at offset (1,1), premultiplied.
+    // Base icon: bilinear scale base_w -> BASE at the top-left, premultiplied.
     let base_h = if base_w > 0 && base_rgba.len() >= base_w * base_w * 4 {
         base_rgba.len() / (base_w * 4)
     } else {
@@ -87,8 +87,8 @@ pub fn compose_icon(base_rgba: &[u8], base_w: usize, status_key: &str) -> Vec<u8
                     px[ch] = top * (1.0 - ty) + bot * ty;
                 }
                 // Handle the sub-pixel edge (negative fx) by falling back to
-                // the clamped edge tap - close enough at 64 -> 70.
-                canvas[(y + 1) * C + (x + 1)] = px;
+                // the clamped edge tap - close enough at 64 -> 68.
+                canvas[y * C + x] = px;
             }
         }
     }
@@ -320,8 +320,8 @@ mod tests {
     fn dot_center_is_status_color_in_argb() {
         let argb = compose_icon(&[], 0, "synced");
         assert_eq!(argb.len(), 72 * 72 * 4);
-        // Pixel (55,55) sits on the dot center: opaque green, A then RGB.
-        let o = (55 * 72 + 55) * 4;
+        // Pixel (56,56) sits on the dot center: opaque green, A then RGB.
+        let o = (56 * 72 + 56) * 4;
         assert_eq!(&argb[o..o + 4], &[0xff, 0x16, 0xa3, 0x4a]);
     }
 
@@ -329,10 +329,10 @@ mod tests {
     fn dot_fill_and_white_ring_are_large_enough_to_read() {
         let argb = compose_icon(&[], 0, "syncing");
         // 11.5px out: still the purple fill (the old dot ended at 7).
-        let o = (55 * 72 + 66) * 4;
+        let o = (56 * 72 + 67) * 4;
         assert_eq!(&argb[o..o + 4], &[0xff, 0x6d, 0x4a, 0xff]);
-        // 16.5px out: the white pen ring.
-        let o = (55 * 72 + 71) * 4;
+        // 15.5px out: the white pen ring.
+        let o = (56 * 72 + 71) * 4;
         assert_eq!(&argb[o..o + 4], &[0xff, 0xff, 0xff, 0xff]);
         // Far corner: beyond dot and (empty) base -> fully transparent.
         let o = (71 * 72 + 71) * 4;
@@ -340,13 +340,18 @@ mod tests {
     }
 
     #[test]
-    fn base_icon_reaches_the_one_pixel_margin() {
-        // A solid 64px base must paint the canvas edge at (1,1): the old
-        // 66/72 scale left a 2px transparent border.
+    fn base_icon_starts_at_the_top_left_edge() {
+        // A solid 64px base must reach (0,0) and stop before the dot corner:
+        // the old 66/72 scale left a 2px transparent border all round.
         let base = vec![255u8; 64 * 64 * 4];
         let argb = compose_icon(&base, 64, "synced");
-        let o = (72 + 1) * 4; // row 1, column 1
+        let o = 0;
         assert_eq!(&argb[o..o + 4], &[0xff, 0xff, 0xff, 0xff]);
+        let o = (67 * 72 + 67) * 4;
+        assert_eq!(&argb[o..o + 4], &[0xff, 0xff, 0xff, 0xff]);
+        // (0,71) is below the 68px icon and clear of the badge.
+        let o = (71 * 72) * 4;
+        assert_eq!(&argb[o..o + 4], &[0, 0, 0, 0]);
     }
 
     #[test]

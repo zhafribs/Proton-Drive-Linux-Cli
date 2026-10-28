@@ -1,3 +1,10 @@
+## 3.16.47 — 2026-10-28
+
+- **Tray icon rebalanced.** The 24px status dot stays bottom-right, but the
+  purple cloud is now 68px (C66 plus a little) and sits at the top-left, so
+  less of the folder is hidden and the upload arrow stays readable at 22–24px.
+  The dot's white ring and green/purple colours are unchanged.
+
 ## 3.16.46 — 2026-10-28
 
 - **Readable tray status dot.** The dot is now 24px across (was 14px) with a
