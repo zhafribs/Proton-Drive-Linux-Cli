@@ -180,68 +180,19 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
 
         ui.add_space(18.0);
 
-        // --- account ------------------------------------------------------
-        widgets::card(ui, None, |ui| {
-            ui.horizontal(|ui| {
-                let id_email = app.identity.as_ref().and_then(|i| i.email.as_deref());
-                let email = id_email.or(app.last_email.as_deref());
-                widgets::avatar(ui, email);
-                ui.add_space(14.0);
-                ui.vertical(|ui| {
-                    let (value, badge) =
-                        account_text(app.identity.as_ref(), app.last_email.as_deref(), status);
-                    ui.label(egui::RichText::new(value).strong().size(15.0));
-                    if !badge.is_empty() {
-                        ui.label(egui::RichText::new(badge).size(12.0).weak());
-                    }
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if logged_in {
-                        if widgets::danger_ghost_button(ui, "Sign out") {
-                            app.dialog = Some(Dialog::ConfirmLogout);
-                        }
-                    } else if widgets::secondary_button(ui, "Sign in") {
-                        app.action_login();
-                    }
-                });
+        // On a wide window, put the account and folder cards side by side
+        // (TMOG's panels use the same horizontal packing); a single column
+        // leaves half the page empty on a large screen.
+        if ui.available_width() >= 1200.0 {
+            ui.columns(2, |cols| {
+                account_card(app, &mut cols[0], status, logged_in);
+                folder_card(app, &mut cols[1]);
             });
-        });
-
-        ui.add_space(14.0);
-
-        // --- folder -------------------------------------------------------
-        let local = app
-            .conf
-            .get("PROTON_SYNC_LOCAL")
-            .cloned()
-            .unwrap_or_default();
-        let folder_name = local
-            .rsplit('/')
-            .find(|s| !s.is_empty())
-            .unwrap_or("ProtonDrive")
-            .to_string();
-        widgets::card(ui, Some("Your folder on this computer"), |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("\u{1f4c1}").size(26.0));
-                ui.add_space(12.0);
-                ui.vertical(|ui| {
-                    ui.label(egui::RichText::new(folder_name).strong().size(15.0));
-                    ui.label(egui::RichText::new(&local).size(12.0).weak());
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if let Some((files, bytes)) = app.stats {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{} files \u{b7} {}",
-                                files,
-                                service::human_size(bytes)
-                            ))
-                            .weak(),
-                        );
-                    }
-                });
-            });
-        });
+        } else {
+            account_card(app, ui, status, logged_in);
+            ui.add_space(14.0);
+            folder_card(app, ui);
+        }
 
         ui.add_space(14.0);
 
@@ -262,6 +213,74 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                     widgets::move_row(ui, row, "", &when);
                 }
             }
+        });
+    });
+}
+
+fn account_card(
+    app: &mut App,
+    ui: &mut egui::Ui,
+    status: health::UiStatus,
+    logged_in: bool,
+) {
+    widgets::card(ui, None, |ui| {
+        ui.horizontal(|ui| {
+            let id_email = app.identity.as_ref().and_then(|i| i.email.as_deref());
+            let email = id_email.or(app.last_email.as_deref());
+            widgets::avatar(ui, email);
+            ui.add_space(14.0);
+            ui.vertical(|ui| {
+                let (value, badge) =
+                    account_text(app.identity.as_ref(), app.last_email.as_deref(), status);
+                ui.label(egui::RichText::new(value).strong().size(15.0));
+                if !badge.is_empty() {
+                    ui.label(egui::RichText::new(badge).size(12.0).weak());
+                }
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if logged_in {
+                    if widgets::danger_ghost_button(ui, "Sign out") {
+                        app.dialog = Some(Dialog::ConfirmLogout);
+                    }
+                } else if widgets::secondary_button(ui, "Sign in") {
+                    app.action_login();
+                }
+            });
+        });
+    });
+}
+
+fn folder_card(app: &mut App, ui: &mut egui::Ui) {
+    let local = app
+        .conf
+        .get("PROTON_SYNC_LOCAL")
+        .cloned()
+        .unwrap_or_default();
+    let folder_name = local
+        .rsplit('/')
+        .find(|s| !s.is_empty())
+        .unwrap_or("ProtonDrive")
+        .to_string();
+    widgets::card(ui, Some("Your folder on this computer"), |ui| {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("\u{1f4c1}").size(26.0));
+            ui.add_space(12.0);
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(folder_name).strong().size(15.0));
+                ui.label(egui::RichText::new(&local).size(12.0).weak());
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if let Some((files, bytes)) = app.stats {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} files \u{b7} {}",
+                            files,
+                            service::human_size(bytes)
+                        ))
+                        .weak(),
+                    );
+                }
+            });
         });
     });
 }

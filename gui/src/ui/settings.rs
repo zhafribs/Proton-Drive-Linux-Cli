@@ -220,6 +220,37 @@ impl Draft {
 
 // ---------------------------------------------------------------- page ----
 
+type CardFn = fn(&mut App, &mut egui::Ui);
+
+const COLUMN_A: &[CardFn] = &[folder_card, what_syncs_card, how_often_card, performance_card];
+const COLUMN_RIGHT: &[CardFn] =
+    &[notifications_card, background_card, appearance_card, updates_card, install_card];
+const COLUMN_ALL: &[CardFn] = &[
+    folder_card,
+    what_syncs_card,
+    how_often_card,
+    performance_card,
+    notifications_card,
+    background_card,
+    appearance_card,
+    updates_card,
+    install_card,
+];
+// Three columns are shallower: keep Performance with the folder cards, move
+// How often across, so no single column runs far past the others.
+const COLUMN_3A: &[CardFn] = &[folder_card, what_syncs_card, performance_card];
+const COLUMN_3B: &[CardFn] = &[how_often_card, notifications_card, background_card];
+const COLUMN_3C: &[CardFn] = &[appearance_card, updates_card, install_card];
+
+fn draw_cards(app: &mut App, ui: &mut egui::Ui, cards: &[CardFn]) {
+    for (i, card) in cards.iter().enumerate() {
+        if i > 0 {
+            ui.add_space(14.0);
+        }
+        card(app, ui);
+    }
+}
+
 pub fn draw(app: &mut App, ui: &mut egui::Ui) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -227,23 +258,24 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
             ui.label(egui::RichText::new("Settings").strong().size(24.0));
             ui.add_space(12.0);
 
-            folder_card(app, ui);
-            ui.add_space(14.0);
-            what_syncs_card(app, ui);
-            ui.add_space(14.0);
-            how_often_card(app, ui);
-            ui.add_space(14.0);
-            performance_card(app, ui);
-            ui.add_space(14.0);
-            notifications_card(app, ui);
-            ui.add_space(14.0);
-            background_card(app, ui);
-            ui.add_space(14.0);
-            appearance_card(app, ui);
-            ui.add_space(14.0);
-            updates_card(app, ui);
-            ui.add_space(14.0);
-            install_card(app, ui);
+            // Pack the cards into columns when there is room, the way TMOG's
+            // MetricsPanelBoxLayout reflows its panels instead of leaving a
+            // full-width card mostly empty on a large screen.
+            let width = ui.available_width();
+            if width >= 1200.0 {
+                ui.columns(3, |cols| {
+                    draw_cards(app, &mut cols[0], COLUMN_3A);
+                    draw_cards(app, &mut cols[1], COLUMN_3B);
+                    draw_cards(app, &mut cols[2], COLUMN_3C);
+                });
+            } else if width >= 700.0 {
+                ui.columns(2, |cols| {
+                    draw_cards(app, &mut cols[0], COLUMN_A);
+                    draw_cards(app, &mut cols[1], COLUMN_RIGHT);
+                });
+            } else {
+                draw_cards(app, ui, COLUMN_ALL);
+            }
             ui.add_space(14.0);
 
             // --- advanced (hidden) ---

@@ -1,3 +1,12 @@
+## 3.16.53 — 2026-10-29
+
+- **Wide windows use their width.** Settings now packs its cards into 1, 2 or
+  3 columns as space allows, like TMOG's `MetricsPanelBoxLayout`, instead of
+  one full-width column with empty space on the right. Home puts the account
+  and folder cards side by side on wide screens.
+- The 720×540 layout floor from 3.16.52 still applies: narrow windows keep the
+  single-column layout and the wrap/stack rules.
+
 ## 3.16.52 — 2026-10-29
 
 - **Compact window sizes are remembered.** The startup floor was still
