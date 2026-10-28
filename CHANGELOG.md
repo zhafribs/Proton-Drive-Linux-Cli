@@ -1,3 +1,15 @@
+## 3.16.41 — 2026-10-28
+
+- **Clean CI logs.** Silenced Zig's known `linker_messages` false positive
+  (`ignoring deprecated linker optimization setting '1'`;
+  cargo-zigbuild#487, rust#158192) for the GUI and AppRun builds.
+- **Faster CI/AppImage builds.** Release builds now use thin LTO with parallel
+  codegen units instead of fat LTO + one unit (GUI links in well under a
+  minute on the 4-core runner); fixed the Rust cache key (the workspace
+  `Cargo.lock`, not the old `gui/Cargo.lock`), restore the cache before
+  installing cargo-zigbuild, cache Zig, and trigger on `crates/**`,
+  `Cargo.toml`, `Cargo.lock` and `.cargo/**`.
+
 ## 3.16.40 — 2026-10-28
 
 - **The project is now Rust-only.** Removed the legacy Python sync engine, its

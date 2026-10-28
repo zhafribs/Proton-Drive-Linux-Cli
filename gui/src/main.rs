@@ -1,9 +1,12 @@
+// Zig's linker (via cargo-zigbuild) still passes a deprecated `-Wl,-O1`,
+// which rustc's `linker_messages` lint surfaces as a false-positive warning.
+// Upstream: rust-cross/cargo-zigbuild#487, rust-lang/rust#158192.
+#![allow(linker_messages)]
+
 //! Proton Drive for Linux - desktop GUI.
 //!
-//! One static binary replaces the bundled Python/Qt stack for the desktop
-//! app; the background sync engine stays the proven Python script, and every
-//! transfer still goes through the official Proton Drive CLI (unchanged,
-//! MIT, bundled as-is).
+//! The GUI and the background sync engine are Rust; every transfer still goes
+//! through the official Proton Drive CLI (unchanged, MIT, bundled as-is).
 
 mod cli;
 mod clilock;
@@ -29,7 +32,7 @@ use eframe::egui;
 use std::path::{Path, PathBuf};
 
 /// The GUI's own version (the release tag is `v<CLI>-gui<GUI>`).
-pub const GUI_VERSION: &str = "3.16.40";
+pub const GUI_VERSION: &str = "3.16.41";
 
 /// The systemd user unit path (shared with `service.rs`).
 pub fn service_unit_path() -> PathBuf {

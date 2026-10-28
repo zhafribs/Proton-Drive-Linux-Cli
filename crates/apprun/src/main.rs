@@ -1,3 +1,8 @@
+// Zig's linker (via cargo-zigbuild) still passes a deprecated `-Wl,-O1`,
+// which rustc's `linker_messages` lint surfaces as a false-positive warning.
+// Upstream: rust-cross/cargo-zigbuild#487, rust-lang/rust#158192.
+#![allow(linker_messages)]
+
 //! AppImage entry point - the Rust replacement for the old `src/AppRun`
 //! shell script.
 //!

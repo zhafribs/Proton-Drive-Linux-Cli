@@ -5,7 +5,9 @@ members = ["crates/apprun", "crates/core", "crates/engine", "gui"]
 # The binary ships inside the AppImage - size matters (this replaced a
 # bundled Qt6 stack, the whole point being a smaller app).
 [profile.release]
-lto = true
-codegen-units = 1
+# Thin LTO + parallel codegen: close to fat-LTO runtime performance, but the
+# GUI links in well under a minute on the 4-core CI runner instead of ~2 min.
+lto = "thin"
+codegen-units = 16
 strip = true
 panic = "abort"
