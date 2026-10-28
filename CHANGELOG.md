@@ -1,3 +1,11 @@
+## 3.16.48 — 2026-10-28
+
+- **Tray icon now fills its slot.** The cloud PNG has ~19% transparent
+  padding, so it looked much smaller than full-bleed tray icons like ZapFast.
+  The tray composition now crops to the artwork's alpha bounds and scales it
+  to 72×66; at a 22px tray slot the cloud is 22×20 instead of ~17×13. The
+  24px status dot stays bottom-right and is unchanged.
+
 ## 3.16.47 — 2026-10-28
 
 - **Tray icon rebalanced.** The 24px status dot stays bottom-right, but the

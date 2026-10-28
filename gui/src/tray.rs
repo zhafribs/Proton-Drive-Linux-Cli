@@ -31,31 +31,56 @@ fn smooth(edge0: f32, edge1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Tight alpha bounds `(x0, y0, x1, y1)` (exclusive max), ignoring the faint
+/// antialiased fringe. The tray icon crops to this so padding does not make
+/// the artwork look smaller than neighbouring full-bleed icons.
+fn alpha_bounds(rgba: &[u8], w: usize, h: usize) -> Option<(usize, usize, usize, usize)> {
+    if w == 0 || h == 0 || rgba.len() < w * h * 4 {
+        return None;
+    }
+    let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
+    for y in 0..h {
+        for x in 0..w {
+            if rgba[(y * w + x) * 4 + 3] > 8 {
+                x0 = x0.min(x);
+                y0 = y0.min(y);
+                x1 = x1.max(x + 1);
+                y1 = y1.max(y + 1);
+            }
+        }
+    }
+    (x1 > x0 && y1 > y0).then_some((x0, y0, x1, y1))
+}
+
 /// Qt drew a 72x72 canvas: the 64px icon scaled to 66px at (2,2), then a
 /// status dot `drawEllipse(52, 52, 18, 18)` with a 4px white pen (so the
 /// color fill shows to r=7 and the white ring covers 7..11, center (61,61)).
 ///
 /// The dot is deliberately larger than Qt's: at a 22px tray size the old
 /// 14px fill became ~4px, making green (synced) and purple (syncing) hard to
-/// tell apart. The base icon is 68px in the top-left (C66 plus a little) and
-/// the badge stays bottom-right, where the cloud still reads at 22px.
+/// tell apart.
+///
+/// The cloud PNG has ~19% transparent padding, which made the tray icon look
+/// much smaller than a full-bleed icon like ZapFast. Crop to the alpha bounds
+/// and scale that content to 72x66, so the cloud fills the slot; the badge
+/// stays bottom-right in the remaining strip.
 /// Returns ARGB32 bytes, which is what `ksni::Icon` wants.
 pub fn compose_icon(base_rgba: &[u8], base_w: usize, status_key: &str) -> Vec<u8> {
     const C: usize = 72;
-    const BASE: usize = 68;
+    const ICON_W: usize = 72;
+    const ICON_H: usize = 66;
     const DOT: f32 = 56.0;
     const FILL: f32 = 12.0;
     const RING: f32 = 16.0;
     let color = dot_color(status_key);
     let mut canvas: Vec<[f32; 4]> = vec![[0.0; 4]; C * C]; // premultiplied RGBA
 
-    // Base icon: bilinear scale base_w -> BASE at the top-left, premultiplied.
     let base_h = if base_w > 0 && base_rgba.len() >= base_w * base_w * 4 {
         base_rgba.len() / (base_w * 4)
     } else {
         0
     };
-    if base_h > 0 {
+    if let Some((x0, y0, x1, y1)) = alpha_bounds(base_rgba, base_w, base_h) {
         let sample = |x: usize, y: usize| -> [f32; 4] {
             let i = (y * base_w + x) * 4;
             let a = base_rgba[i + 3] as f32 / 255.0;
@@ -66,28 +91,27 @@ pub fn compose_icon(base_rgba: &[u8], base_w: usize, status_key: &str) -> Vec<u8
                 a,
             ]
         };
-        for y in 0..BASE {
-            for x in 0..BASE {
-                let fx = (x as f32 + 0.5) * base_w as f32 / BASE as f32 - 0.5;
-                let fy = (y as f32 + 0.5) * base_h as f32 / BASE as f32 - 0.5;
+        let (cw, ch) = ((x1 - x0) as f32, (y1 - y0) as f32);
+        for y in 0..ICON_H {
+            for x in 0..ICON_W {
+                let fx = x0 as f32 + (x as f32 + 0.5) * cw / ICON_W as f32 - 0.5;
+                let fy = y0 as f32 + (y as f32 + 0.5) * ch / ICON_H as f32 - 0.5;
                 let (x0f, y0f) = (fx.floor(), fy.floor());
                 let (tx, ty) = (fx - x0f, fy - y0f);
-                let x0 = (x0f as isize).clamp(0, base_w as isize - 1) as usize;
-                let y0 = (y0f as isize).clamp(0, base_h as isize - 1) as usize;
-                let x1 = (x0 + 1).min(base_w - 1);
-                let y1 = (y0 + 1).min(base_h - 1);
-                let a00 = sample(x0, y0);
-                let a10 = sample(x1, y0);
-                let a01 = sample(x0, y1);
-                let a11 = sample(x1, y1);
+                let xa = (x0f as isize).clamp(x0 as isize, x1 as isize - 1) as usize;
+                let ya = (y0f as isize).clamp(y0 as isize, y1 as isize - 1) as usize;
+                let xb = (xa + 1).min(x1 - 1);
+                let yb = (ya + 1).min(y1 - 1);
+                let a00 = sample(xa, ya);
+                let a10 = sample(xb, ya);
+                let a01 = sample(xa, yb);
+                let a11 = sample(xb, yb);
                 let mut px = [0.0f32; 4];
                 for ch in 0..4 {
                     let top = a00[ch] * (1.0 - tx) + a10[ch] * tx;
                     let bot = a01[ch] * (1.0 - tx) + a11[ch] * tx;
                     px[ch] = top * (1.0 - ty) + bot * ty;
                 }
-                // Handle the sub-pixel edge (negative fx) by falling back to
-                // the clamped edge tap - close enough at 64 -> 68.
                 canvas[y * C + x] = px;
             }
         }
@@ -340,18 +364,36 @@ mod tests {
     }
 
     #[test]
-    fn base_icon_starts_at_the_top_left_edge() {
-        // A solid 64px base must reach (0,0) and stop before the dot corner:
-        // the old 66/72 scale left a 2px transparent border all round.
+    fn base_icon_fills_the_slot_and_crops_padding() {
+        // A solid 64px base fills 72x66, leaving only the strip below for the
+        // badge.
         let base = vec![255u8; 64 * 64 * 4];
         let argb = compose_icon(&base, 64, "synced");
-        let o = 0;
-        assert_eq!(&argb[o..o + 4], &[0xff, 0xff, 0xff, 0xff]);
-        let o = (67 * 72 + 67) * 4;
-        assert_eq!(&argb[o..o + 4], &[0xff, 0xff, 0xff, 0xff]);
-        // (0,71) is below the 68px icon and clear of the badge.
+        for (x, y) in [(0, 0), (71, 0), (0, 65), (71, 65)] {
+            let o = (y * 72 + x) * 4;
+            assert_eq!(&argb[o..o + 4], &[0xff, 0xff, 0xff, 0xff], "({x},{y})");
+        }
+        // Below the icon and clear of the badge.
         let o = (71 * 72) * 4;
         assert_eq!(&argb[o..o + 4], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn transparent_padding_is_removed() {
+        // A 16px square at (24,24) inside a 64px canvas must be scaled to the
+        // full 72x66 slot: the corner is opaque now, not transparent padding.
+        let mut base = vec![0u8; 64 * 64 * 4];
+        for y in 24..40 {
+            for x in 24..40 {
+                let i = (y * 64 + x) * 4;
+                base[i..i + 4].copy_from_slice(&[0xff, 0xff, 0xff, 0xff]);
+            }
+        }
+        let argb = compose_icon(&base, 64, "synced");
+        for (x, y) in [(0, 0), (71, 0), (0, 65), (71, 65)] {
+            let o = (y * 72 + x) * 4;
+            assert_eq!(&argb[o..o + 4], &[0xff, 0xff, 0xff, 0xff], "({x},{y})");
+        }
     }
 
     #[test]
