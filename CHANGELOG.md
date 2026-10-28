@@ -1,3 +1,14 @@
+## 3.16.50 — 2026-10-29
+
+- **My files keeps the Modified column** at the narrowest window with the
+  sidebar dragged to its maximum. The three columns now use 132/84/124px
+  instead of 140/96/132px, so they fit the 720px floor; Modified still drops
+  first only below that floor.
+- **Settings labels stay with their dropdowns.** Each label + combo is now a
+  single wrapped item, so a narrow Performance or Appearance card moves the
+  whole pair to the next line instead of leaving the text on the line above
+  the dropdown.
+
 ## 3.16.49 — 2026-10-29
 
 - **Settings cards fit a narrow window.** Rows in Performance, Notifications,

@@ -1791,9 +1791,9 @@ impl eframe::App for App {
         // exactly like before, and egui remembers a dragged width across
         // restarts.
         // Keep the central pane above its layout floor: the file list needs
-        // the card margins (28) plus the three columns (min Name 140 + Size
-        // 96 + Modified 132 + two 10px gaps) and the page margins (60).
-        // 480 = 60 + 28 + 388 + a few px of rounding slack. Below this the
+        // the card margins plus the three columns (min Name 132 + Size 84 +
+        // Modified 124 + two gaps) and the page margins. 480 leaves room for
+        // the row padding and a few px of rounding slack; below this the
         // list would have to overlap.
         let nav_max = (ui.available_width() - 480.0).clamp(176.0, 400.0);
         egui::Panel::left("nav")

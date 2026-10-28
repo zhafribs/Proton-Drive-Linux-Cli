@@ -501,8 +501,7 @@ fn how_often_card(app: &mut App, ui: &mut egui::Ui) {
             app.draft.inotify = inotify;
         }
         ui.add_space(4.0);
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Look for changes in the cloud");
+        labeled_control(ui, "Look for changes in the cloud", |ui| {
             egui::ComboBox::from_id_salt("interval")
                 .selected_text(conf::INTERVAL_CHOICES[app.draft.interval_idx].0)
                 .show_ui(ui, |ui| {
@@ -548,6 +547,15 @@ fn number_display(value: i32, range: std::ops::RangeInclusive<i32>) -> String {
 
 fn number_options(range: std::ops::RangeInclusive<i32>) -> Vec<i32> {
     range.collect()
+}
+
+/// A label and its control as one wrapped item: `horizontal_wrapped` may move
+/// the whole pair to the next line, but never the label away from its input.
+fn labeled_control(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        add(ui);
+    });
 }
 
 fn number_combo(
@@ -598,23 +606,25 @@ fn performance_card(app: &mut App, ui: &mut egui::Ui) {
             app.draft.auto_workers = auto;
         }
         ui.horizontal_wrapped(|ui| {
-            ui.label("Scan workers");
-            number_combo(
-                ui,
-                "scan-workers",
-                &mut app.draft.workers,
-                WORKERS_RANGE,
-                "Upper limit for parallel scans. Adaptive scans may use fewer under memory pressure.",
-            );
+            labeled_control(ui, "Scan workers", |ui| {
+                number_combo(
+                    ui,
+                    "scan-workers",
+                    &mut app.draft.workers,
+                    WORKERS_RANGE,
+                    "Upper limit for parallel scans. Adaptive scans may use fewer under memory pressure.",
+                );
+            });
             ui.add_space(24.0);
-            ui.label("Transfer concurrency");
-            number_combo(
-                ui,
-                "transfer-concurrency",
-                &mut app.draft.transfers,
-                TRANSFERS_RANGE,
-                "Independent parent folders transferred at the same time.",
-            );
+            labeled_control(ui, "Transfer concurrency", |ui| {
+                number_combo(
+                    ui,
+                    "transfer-concurrency",
+                    &mut app.draft.transfers,
+                    TRANSFERS_RANGE,
+                    "Independent parent folders transferred at the same time.",
+                );
+            });
         });
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
@@ -732,8 +742,7 @@ fn background_card(app: &mut App, ui: &mut egui::Ui) {
 
 fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Appearance"), |ui| {
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Theme");
+        labeled_control(ui, "Theme", |ui| {
             const THEMES: [&str; 3] = ["Match my system", "Light", "Dark"];
             egui::ComboBox::from_id_salt("theme")
                 .selected_text(THEMES[app.draft.theme_idx.min(2)])
@@ -752,8 +761,7 @@ fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
                 });
         });
         ui.add_space(4.0);
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Interface size");
+        labeled_control(ui, "Interface size", |ui| {
             const SCALES: [&str; 3] = ["Compact", "Default", "Large"];
             egui::ComboBox::from_id_salt("ui_scale")
                 .selected_text(SCALES[app.draft.ui_scale_idx.min(2)])
@@ -846,18 +854,20 @@ fn install_card(app: &mut App, ui: &mut egui::Ui) {
 fn fine_tuning_card(app: &mut App, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Fine-tuning"), |ui| {
         ui.horizontal_wrapped(|ui| {
-            ui.label("Parallel connections");
-            number_combo(
-                ui,
-                "parallel-connections",
-                &mut app.draft.workers,
-                WORKERS_RANGE,
-                "Upper limit for parallel CLI calls. Adaptive scans may use fewer \
-                 automatically when memory is tight.",
-            );
+            labeled_control(ui, "Parallel connections", |ui| {
+                number_combo(
+                    ui,
+                    "parallel-connections",
+                    &mut app.draft.workers,
+                    WORKERS_RANGE,
+                    "Upper limit for parallel CLI calls. Adaptive scans may use fewer \
+                     automatically when memory is tight.",
+                );
+            });
             ui.add_space(24.0);
-            ui.label("Retries per folder");
-            number_combo(ui, "retries-per-folder", &mut app.draft.retries, RETRIES_RANGE, "");
+            labeled_control(ui, "Retries per folder", |ui| {
+                number_combo(ui, "retries-per-folder", &mut app.draft.retries, RETRIES_RANGE, "");
+            });
         });
     });
 }

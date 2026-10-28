@@ -1214,6 +1214,26 @@ fn header_cell(app: &mut App, ui: &mut egui::Ui, w: f32, label: &str, col: usize
     }
 }
 
+const COL_SIZE_W: f32 = 84.0;
+const COL_MTIME_W: f32 = 124.0;
+const NAME_MIN_W: f32 = 132.0;
+
+/// Column widths for the file list, degrading Modified then Size only when
+/// the compositor forces the pane below the layout floor.
+fn column_layout(full_w: f32, gap: f32) -> (f32, bool, bool) {
+    let show_size = full_w >= NAME_MIN_W + gap + COL_SIZE_W;
+    let show_mtime =
+        show_size && full_w >= NAME_MIN_W + COL_SIZE_W + COL_MTIME_W + 2.0 * gap;
+    let mut name_w = full_w;
+    if show_size {
+        name_w -= gap + COL_SIZE_W;
+    }
+    if show_mtime {
+        name_w -= gap + COL_MTIME_W;
+    }
+    (name_w.max(NAME_MIN_W), show_size, show_mtime)
+}
+
 fn table(app: &mut App, ui: &mut egui::Ui) {
     // The list sits in a white card with a quiet header, like Proton Drive's
     // file list; the action/status row below gets its space reserved so the
@@ -1225,8 +1245,6 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
         .shadow(theme::card_shadow(ui.visuals()))
         .inner_margin(egui::Margin::symmetric(16, 12))
         .show(ui, |ui| {
-            let col_size_w = 96.0f32;
-            let col_mtime_w = 132.0f32;
             let full_w = ui.available_width();
             // The header row is three cells separated by item_spacing; that
             // spacing comes out of the flexible Name column so the row adds
@@ -1234,29 +1252,15 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
             // the pane for the rows below - header and rows would end up on
             // different bases.
             let gap = ui.spacing().item_spacing.x;
-            let name_min = 140.0;
-            // Compositors may resize below the requested minimum (X11 hints
-            // are advisory), so the list degrades: drop Modified first, then
-            // Size, keeping the Name column readable instead of overlapping.
-            let show_size = full_w >= name_min + gap + col_size_w;
-            let show_mtime =
-                show_size && full_w >= name_min + col_size_w + col_mtime_w + 2.0 * gap;
-            let mut name_w = full_w;
-            if show_size {
-                name_w -= gap + col_size_w;
-            }
-            if show_mtime {
-                name_w -= gap + col_mtime_w;
-            }
-            let name_w = name_w.max(name_min);
+            let (name_w, show_size, show_mtime) = column_layout(full_w, gap);
 
             ui.horizontal(|ui| {
                 header_cell(app, ui, name_w, "Name", 0, false);
                 if show_size {
-                    header_cell(app, ui, col_size_w, "Size", 1, true);
+                    header_cell(app, ui, COL_SIZE_W, "Size", 1, true);
                 }
                 if show_mtime {
-                    header_cell(app, ui, col_mtime_w, "Modified", 2, true);
+                    header_cell(app, ui, COL_MTIME_W, "Modified", 2, true);
                 }
             });
             ui.separator();
@@ -1282,8 +1286,8 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
                             ui,
                             e,
                             name_w,
-                            col_size_w,
-                            col_mtime_w,
+                            COL_SIZE_W,
+                            COL_MTIME_W,
                             show_size,
                             show_mtime,
                             &mut open_rel,
@@ -2135,7 +2139,7 @@ fn tree_rows(app: &mut App, ui: &mut egui::Ui, parent: &str, depth: usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::collapse_segments;
+    use super::{NAME_MIN_W, collapse_segments, column_layout};
 
     /// The engine publishes `remote-snapshot.json`; the GUI's instant tree must
     /// read exactly that shape (`type`, `mtime` with a `T`, null folder size).
@@ -2224,6 +2228,21 @@ mod tests {
             }
             assert!(original.contains(&(s.clone(), p.clone())));
         }
+    }
+
+    #[test]
+    fn narrow_floor_keeps_the_modified_column() {
+        // 388 is the content width at the 720px window floor with the sidebar
+        // at its maximum; all three columns must still fit.
+        let (name_w, show_size, show_mtime) = column_layout(388.0, 6.0);
+        assert!(show_size && show_mtime);
+        assert!(name_w >= NAME_MIN_W);
+        // Below the floor, Modified goes first, then Size.
+        let (_, show_size, show_mtime) = column_layout(340.0, 6.0);
+        assert!(show_size && !show_mtime);
+        let (name_w, show_size, show_mtime) = column_layout(200.0, 6.0);
+        assert!(!show_size && !show_mtime);
+        assert!(name_w >= NAME_MIN_W);
     }
 
     #[test]
