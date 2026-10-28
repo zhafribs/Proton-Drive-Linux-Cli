@@ -267,7 +267,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
             ui.add_space(18.0);
 
             // --- save bar ---
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if widgets::primary_button(ui, "  Save changes") {
                     match validate(app) {
                         Some((title, body)) => {
@@ -476,7 +476,7 @@ fn what_syncs_card(app: &mut App, ui: &mut egui::Ui) {
             ui.add_space(6.0);
             sel_tree(app, ui, "");
             ui.add_space(6.0);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if ui.button("Refresh folder list").clicked() {
                     refresh_roots(app);
                 }
@@ -501,7 +501,7 @@ fn how_often_card(app: &mut App, ui: &mut egui::Ui) {
             app.draft.inotify = inotify;
         }
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Look for changes in the cloud");
             egui::ComboBox::from_id_salt("interval")
                 .selected_text(conf::INTERVAL_CHOICES[app.draft.interval_idx].0)
@@ -597,7 +597,7 @@ fn performance_card(app: &mut App, ui: &mut egui::Ui) {
         {
             app.draft.auto_workers = auto;
         }
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Scan workers");
             number_combo(
                 ui,
@@ -617,7 +617,7 @@ fn performance_card(app: &mut App, ui: &mut egui::Ui) {
             );
         });
         ui.add_space(8.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.button("Run full check now").clicked() {
                 match service::request_full_check(&app.paths) {
                     Ok(()) => app.toast("Full check requested. Deletes stay held until it finishes."),
@@ -663,7 +663,7 @@ fn notifications_card(app: &mut App, ui: &mut egui::Ui) {
             app.prefs.set_bool("notify_complete", v);
         }
         ui.add_space(6.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.button("Send a test notification").clicked() {
                 crate::notify::send(
                     "Proton Drive",
@@ -732,7 +732,7 @@ fn background_card(app: &mut App, ui: &mut egui::Ui) {
 
 fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Appearance"), |ui| {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Theme");
             const THEMES: [&str; 3] = ["Match my system", "Light", "Dark"];
             egui::ComboBox::from_id_salt("theme")
@@ -752,7 +752,7 @@ fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
                 });
         });
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Interface size");
             const SCALES: [&str; 3] = ["Compact", "Default", "Large"];
             egui::ComboBox::from_id_salt("ui_scale")
@@ -796,7 +796,7 @@ fn updates_card(app: &mut App, ui: &mut egui::Ui) {
         }
         ui.add_space(6.0);
         let has_update = app.upd.available.is_some() && app.paths.appimage.is_some();
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.button("Check now").clicked() {
                 app.action_check_updates();
             }
@@ -830,7 +830,7 @@ fn install_card(app: &mut App, ui: &mut egui::Ui) {
             .weak(),
         );
         ui.add_space(6.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.button("Add to my app menu").clicked() {
                 desktop::set_menu(&app.paths, true);
                 app.toast("Added to your app menu.");
@@ -845,7 +845,7 @@ fn install_card(app: &mut App, ui: &mut egui::Ui) {
 
 fn fine_tuning_card(app: &mut App, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Fine-tuning"), |ui| {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Parallel connections");
             number_combo(
                 ui,
@@ -864,7 +864,7 @@ fn fine_tuning_card(app: &mut App, ui: &mut egui::Ui) {
 
 fn troubleshooting_card(app: &mut App, ui: &mut egui::Ui) {
     widgets::card(ui, Some("If something goes wrong"), |ui| {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.button("Restart syncing now").clicked() {
                 app.action_restart_service();
             }

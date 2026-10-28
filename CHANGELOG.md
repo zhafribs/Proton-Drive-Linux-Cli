@@ -1,3 +1,10 @@
+## 3.16.49 — 2026-10-29
+
+- **Settings cards fit a narrow window.** Rows in Performance, Notifications,
+  Running in the background, Appearance, Updates, Installing on Linux, the
+  advanced cards and the Save bar now wrap their controls onto the next line
+  instead of being clipped on the right. No behaviour or settings changed.
+
 ## 3.16.48 — 2026-10-28
 
 - **Tray icon now fills its slot.** The cloud PNG has ~19% transparent
