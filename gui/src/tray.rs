@@ -34,13 +34,22 @@ fn smooth(edge0: f32, edge1: f32, x: f32) -> f32 {
 /// Qt drew a 72x72 canvas: the 64px icon scaled to 66px at (2,2), then a
 /// status dot `drawEllipse(52, 52, 18, 18)` with a 4px white pen (so the
 /// color fill shows to r=7 and the white ring covers 7..11, center (61,61)).
+///
+/// The dot is deliberately larger than Qt's: at a 22px tray size the old
+/// 14px fill became ~4px, making green (synced) and purple (syncing) hard to
+/// tell apart. The base icon is also 70px instead of 66px so the tray icon
+/// itself is a little bigger within the same canvas.
 /// Returns ARGB32 bytes, which is what `ksni::Icon` wants.
 pub fn compose_icon(base_rgba: &[u8], base_w: usize, status_key: &str) -> Vec<u8> {
     const C: usize = 72;
+    const BASE: usize = 70;
+    const DOT: f32 = 55.0;
+    const FILL: f32 = 12.0;
+    const RING: f32 = 17.0;
     let color = dot_color(status_key);
     let mut canvas: Vec<[f32; 4]> = vec![[0.0; 4]; C * C]; // premultiplied RGBA
 
-    // Base icon: bilinear scale base_w -> 66 at offset (2,2), premultiplied.
+    // Base icon: bilinear scale base_w -> BASE at offset (1,1), premultiplied.
     let base_h = if base_w > 0 && base_rgba.len() >= base_w * base_w * 4 {
         base_rgba.len() / (base_w * 4)
     } else {
@@ -57,10 +66,10 @@ pub fn compose_icon(base_rgba: &[u8], base_w: usize, status_key: &str) -> Vec<u8
                 a,
             ]
         };
-        for y in 0..66usize {
-            for x in 0..66usize {
-                let fx = (x as f32 + 0.5) * base_w as f32 / 66.0 - 0.5;
-                let fy = (y as f32 + 0.5) * base_h as f32 / 66.0 - 0.5;
+        for y in 0..BASE {
+            for x in 0..BASE {
+                let fx = (x as f32 + 0.5) * base_w as f32 / BASE as f32 - 0.5;
+                let fy = (y as f32 + 0.5) * base_h as f32 / BASE as f32 - 0.5;
                 let (x0f, y0f) = (fx.floor(), fy.floor());
                 let (tx, ty) = (fx - x0f, fy - y0f);
                 let x0 = (x0f as isize).clamp(0, base_w as isize - 1) as usize;
@@ -78,8 +87,8 @@ pub fn compose_icon(base_rgba: &[u8], base_w: usize, status_key: &str) -> Vec<u8
                     px[ch] = top * (1.0 - ty) + bot * ty;
                 }
                 // Handle the sub-pixel edge (negative fx) by falling back to
-                // the clamped edge tap - close enough at 64 -> 66.
-                canvas[(y + 2) * C + (x + 2)] = px;
+                // the clamped edge tap - close enough at 64 -> 70.
+                canvas[(y + 1) * C + (x + 1)] = px;
             }
         }
     }
@@ -98,14 +107,17 @@ pub fn compose_icon(base_rgba: &[u8], base_w: usize, status_key: &str) -> Vec<u8
     };
     for y in 0..C {
         for x in 0..C {
-            let d = ((x as f32 + 0.5 - 61.0).powi(2) + (y as f32 + 0.5 - 61.0).powi(2)).sqrt();
-            if d > 12.0 {
+            let d = ((x as f32 + 0.5 - DOT).powi(2) + (y as f32 + 0.5 - DOT).powi(2)).sqrt();
+            if d > RING + 0.5 {
                 continue;
             }
             let idx = y * C + x;
-            // Brush fill first (visible to r=7), then the white pen ring.
-            over(idx, color, 1.0 - smooth(6.5, 7.5, d));
-            over(idx, [0xff; 3], (1.0 - smooth(10.5, 11.5, d)) * smooth(6.5, 7.5, d));
+            // Brush fill first (visible to r=FILL), then the white pen ring.
+            let fill = 1.0 - smooth(FILL - 0.5, FILL + 0.5, d);
+            let ring = (1.0 - smooth(RING - 0.5, RING + 0.5, d))
+                * smooth(FILL - 0.5, FILL + 0.5, d);
+            over(idx, color, fill);
+            over(idx, [0xff; 3], ring);
         }
     }
 
@@ -308,20 +320,33 @@ mod tests {
     fn dot_center_is_status_color_in_argb() {
         let argb = compose_icon(&[], 0, "synced");
         assert_eq!(argb.len(), 72 * 72 * 4);
-        // Pixel (61,61) sits on the dot center: opaque green, A then RGB.
-        let o = (61 * 72 + 61) * 4;
+        // Pixel (55,55) sits on the dot center: opaque green, A then RGB.
+        let o = (55 * 72 + 55) * 4;
         assert_eq!(&argb[o..o + 4], &[0xff, 0x16, 0xa3, 0x4a]);
     }
 
     #[test]
-    fn white_ring_and_clear_corner() {
+    fn dot_fill_and_white_ring_are_large_enough_to_read() {
         let argb = compose_icon(&[], 0, "syncing");
-        // 9px out from center: the white pen ring.
-        let o = (61 * 72 + 70) * 4;
+        // 11.5px out: still the purple fill (the old dot ended at 7).
+        let o = (55 * 72 + 66) * 4;
+        assert_eq!(&argb[o..o + 4], &[0xff, 0x6d, 0x4a, 0xff]);
+        // 16.5px out: the white pen ring.
+        let o = (55 * 72 + 71) * 4;
         assert_eq!(&argb[o..o + 4], &[0xff, 0xff, 0xff, 0xff]);
         // Far corner: beyond dot and (empty) base -> fully transparent.
         let o = (71 * 72 + 71) * 4;
         assert_eq!(&argb[o..o + 4], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn base_icon_reaches_the_one_pixel_margin() {
+        // A solid 64px base must paint the canvas edge at (1,1): the old
+        // 66/72 scale left a 2px transparent border.
+        let base = vec![255u8; 64 * 64 * 4];
+        let argb = compose_icon(&base, 64, "synced");
+        let o = (72 + 1) * 4; // row 1, column 1
+        assert_eq!(&argb[o..o + 4], &[0xff, 0xff, 0xff, 0xff]);
     }
 
     #[test]

@@ -1,3 +1,13 @@
+## 3.16.46 — 2026-10-28
+
+- **Readable tray status dot.** The dot is now 24px across (was 14px) with a
+  5px white ring, so green (synced) and purple (syncing) stay distinct even
+  when the panel scales the 72px icon down to 22–24px. The app icon itself is
+  drawn at 70/72 instead of 66/72, a little larger in the same tray slot.
+- The CI cache needs no manual bump: its key hashes `Cargo.lock` and
+  `Cargo.toml`, and the 3.16.45 run saved the fresh key after the dependency
+  cleanup.
+
 ## 3.16.45 — 2026-10-28
 
 - **Smaller dependency tree.** Removed direct dependencies nothing referenced:
