@@ -47,7 +47,6 @@ pub struct Draft {
     pub note_errors: bool,
     pub note_conflicts: bool,
     pub note_done: bool,
-    pub show_adv: bool,
 }
 
 impl Draft {
@@ -104,7 +103,6 @@ impl Draft {
             note_errors: prefs.notify_errors(),
             note_conflicts: prefs.notify_conflicts(),
             note_done: prefs.notify_complete(),
-            show_adv: false,
         }
     }
 
@@ -222,9 +220,22 @@ impl Draft {
 
 type CardFn = fn(&mut App, &mut egui::Ui);
 
-const COLUMN_A: &[CardFn] = &[folder_card, what_syncs_card, how_often_card, performance_card];
-const COLUMN_RIGHT: &[CardFn] =
-    &[notifications_card, background_card, appearance_card, updates_card, install_card];
+const COLUMN_A: &[CardFn] = &[
+    folder_card,
+    what_syncs_card,
+    how_often_card,
+    performance_card,
+    fine_tuning_card,
+];
+const COLUMN_RIGHT: &[CardFn] = &[
+    notifications_card,
+    background_card,
+    appearance_card,
+    updates_card,
+    install_card,
+    troubleshooting_card,
+    env_card,
+];
 const COLUMN_ALL: &[CardFn] = &[
     folder_card,
     what_syncs_card,
@@ -235,12 +246,22 @@ const COLUMN_ALL: &[CardFn] = &[
     appearance_card,
     updates_card,
     install_card,
+    fine_tuning_card,
+    troubleshooting_card,
+    env_card,
 ];
 // Three columns are shallower: keep Performance with the folder cards, move
-// How often across, so no single column runs far past the others.
-const COLUMN_3A: &[CardFn] = &[folder_card, what_syncs_card, performance_card];
-const COLUMN_3B: &[CardFn] = &[how_often_card, notifications_card, background_card];
-const COLUMN_3C: &[CardFn] = &[appearance_card, updates_card, install_card];
+// How often across, so no single column runs far past the others. The
+// advanced/troubleshooting cards join the same packing, not a separate block.
+const COLUMN_3A: &[CardFn] =
+    &[folder_card, what_syncs_card, performance_card, fine_tuning_card];
+const COLUMN_3B: &[CardFn] = &[
+    how_often_card,
+    notifications_card,
+    background_card,
+    troubleshooting_card,
+];
+const COLUMN_3C: &[CardFn] = &[appearance_card, updates_card, install_card, env_card];
 
 fn draw_cards(app: &mut App, ui: &mut egui::Ui, cards: &[CardFn]) {
     for (i, card) in cards.iter().enumerate() {
@@ -276,26 +297,6 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
             } else {
                 draw_cards(app, ui, COLUMN_ALL);
             }
-            ui.add_space(14.0);
-
-            // --- advanced (hidden) ---
-            let label = if app.draft.show_adv {
-                "Advanced and troubleshooting \u{25be}"
-            } else {
-                "Advanced and troubleshooting \u{25b8}"
-            };
-            if ui.add(egui::Button::new(label).frame(false)).clicked() {
-                app.draft.show_adv = !app.draft.show_adv;
-            }
-            if app.draft.show_adv {
-                ui.add_space(10.0);
-                fine_tuning_card(app, ui);
-                ui.add_space(14.0);
-                troubleshooting_card(app, ui);
-                ui.add_space(14.0);
-                env_card(app, ui);
-            }
-
             ui.add_space(18.0);
 
             // --- save bar ---
@@ -466,7 +467,6 @@ fn folder_card(app: &mut App, ui: &mut egui::Ui) {
             ui.add_space(12.0);
             ui.vertical(|ui| {
                 ui.label(app.draft.local.clone());
-                ui.label(egui::RichText::new("Only this folder is synced.").size(12.0).weak());
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("Choose folder...").clicked() {
@@ -542,16 +542,6 @@ fn how_often_card(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
         });
-        if app.draft.interval_idx == 0 {
-            ui.label(
-                egui::RichText::new(
-                    "No scheduled checks. Cloud changes and local edits still sync right \
-                     away; Sync now runs a full check.",
-                )
-                .size(12.0)
-                .weak(),
-            );
-        }
         ui.add_space(4.0);
         let mut deletes = app.draft.deletes;
         if widgets::toggle(
@@ -679,14 +669,6 @@ fn performance_card(app: &mut App, ui: &mut egui::Ui) {
                 app.dialog = Some(Dialog::ConfirmClearCache);
             }
         });
-        ui.label(
-            egui::RichText::new(
-                "The full check audits every remote folder without blocking local edits. \
-                 Clearing the snapshot only removes the cached remote metadata.",
-            )
-            .size(12.0)
-            .weak(),
-        );
     });
 }
 
@@ -822,13 +804,6 @@ fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
         });
-        ui.label(
-            egui::RichText::new(
-                "Scales text and widgets together, like a browser zoom - handy on small screens.",
-            )
-            .size(12.0)
-            .weak(),
-        );
     });
 }
 

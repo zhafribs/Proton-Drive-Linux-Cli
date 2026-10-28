@@ -183,7 +183,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
         // On a wide window, put the account and folder cards side by side
         // (TMOG's panels use the same horizontal packing); a single column
         // leaves half the page empty on a large screen.
-        if ui.available_width() >= 1200.0 {
+        if ui.available_width() >= 640.0 {
             ui.columns(2, |cols| {
                 account_card(app, &mut cols[0], status, logged_in);
                 folder_card(app, &mut cols[1]);

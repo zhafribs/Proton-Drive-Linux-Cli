@@ -1,3 +1,14 @@
+## 3.16.54 — 2026-10-29
+
+- **Less explanatory clutter.** Removed the long muted notes under How often,
+  Performance and Appearance, plus the redundant folder note.
+- **Advanced cards join the columns.** Fine-tuning, If something goes wrong
+  and Extra environment variables are now always part of the same 1/2/3-column
+  packing instead of a separate collapsible full-width block.
+- **Home cards pair up sooner.** Account and Your folder sit side by side from
+  640px of content width, so a normal window no longer stacks them while there
+  is still room.
+
 ## 3.16.53 — 2026-10-29
 
 - **Wide windows use their width.** Settings now packs its cards into 1, 2 or
