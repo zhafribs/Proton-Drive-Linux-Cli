@@ -1,3 +1,14 @@
+## 3.16.44 — 2026-10-28
+
+- **No more "Checking your account..." under the Home buttons.** The account
+  card now uses the cached email with **Signed in** immediately (or a neutral
+  **Account**/"Signed in" on a first run with no cached email) while the
+  identity probe runs. The probe can spend up to a minute behind the engine's
+  CLI lock; the UI no longer displays that wait. The Home subtitle now follows
+  the real engine status ("Just a moment...") instead of the identity wording.
+- The first successful probe still caches the email; later starts show it
+  immediately.
+
 ## 3.16.43 — 2026-10-28
 
 - **Accurate sign-in states.** A previously signed-in account whose keyring

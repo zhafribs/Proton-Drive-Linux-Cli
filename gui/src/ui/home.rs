@@ -4,6 +4,63 @@ use super::{widgets, App, Dialog};
 use crate::{health, util};
 use eframe::egui;
 
+/// What the account card shows. The identity probe can wait up to a minute
+/// behind the engine's CLI lock, so never render a "checking" line: use the
+/// cached email, or a neutral "Signed in"/"Account" state.
+fn account_text(
+    identity: Option<&crate::cli::Identity>,
+    last_email: Option<&str>,
+    status: health::UiStatus,
+) -> (String, &'static str) {
+    let id_email = identity.and_then(|i| i.email.as_deref());
+    match (identity, id_email) {
+        // Identity probe still in flight.
+        (None, _) => {
+            if let Some(email) = last_email {
+                let badge = match status {
+                    health::UiStatus::NeedsLogin => "Session expired",
+                    health::UiStatus::SigningIn => "Signing in...",
+                    _ => "Signed in",
+                };
+                (email.to_string(), badge)
+            } else if status == health::UiStatus::SigningIn {
+                ("Signing in...".to_string(), "")
+            } else if matches!(
+                status,
+                health::UiStatus::Syncing | health::UiStatus::Synced
+            ) {
+                // The engine is already working; the address arrives with the
+                // identity probe, but the account is clearly signed in.
+                ("Signed in".to_string(), "")
+            } else if matches!(
+                status,
+                health::UiStatus::SignedOut | health::UiStatus::NeedsLogin
+            ) {
+                ("You're not signed in yet".to_string(), "Not signed in")
+            } else {
+                // Starting / engine stopped / paused / error: neutral until
+                // the probe answers.
+                ("Account".to_string(), "")
+            }
+        }
+        (Some(_), Some(email)) => (email.to_string(), "Signed in"),
+        (Some(_), None) => {
+            if let Some(email) = last_email {
+                let badge = match status {
+                    health::UiStatus::NeedsLogin => "Session expired",
+                    health::UiStatus::SigningIn => "Signing in...",
+                    _ => "Not signed in",
+                };
+                (email.to_string(), badge)
+            } else if status == health::UiStatus::SigningIn {
+                ("Signing in...".to_string(), "")
+            } else {
+                ("You're not signed in yet".to_string(), "Not signed in")
+            }
+        }
+    }
+}
+
 pub fn draw(app: &mut App, ui: &mut egui::Ui) {
     egui::ScrollArea::vertical().show(ui, |ui| {
         let status = app.ui_status();
@@ -26,25 +83,13 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                 ui.label(egui::RichText::new(t).strong().size(27.0));
                 ui.add_space(4.0);
 
-                let sub = if needs_login {
-                    health::hero_sub(status, &app.health)
-                } else if signing_in {
-                    "Finish signing in in the terminal window.".to_string()
-                } else if matches!(
-                    status,
-                    health::UiStatus::Syncing
-                        | health::UiStatus::Synced
-                        | health::UiStatus::Error
-                        | health::UiStatus::Unknown
-                ) {
-                    // The engine's real state is more useful than the identity
-                    // probe, which may still be waiting on the CLI lock.
-                    health::hero_sub(status, &app.health)
-                } else if app.identity.is_none() {
-                    "Checking your account...".to_string()
-                } else if !logged_in {
-                    "Sign in to start - your files will appear here.".to_string()
-                } else if let Some((text, at)) = &app.sub_override {
+                // The status text already covers signed-out, session-expired,
+                // signing-in, engine-stopped and error states. Never show a
+                // separate "Checking your account..." here: the identity probe
+                // can wait up to a minute behind the engine's CLI lock.
+                let sub = if logged_in
+                    && let Some((text, at)) = &app.sub_override
+                {
                     if app.now() < *at {
                         text.clone()
                     } else {
@@ -138,26 +183,13 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
         // --- account ------------------------------------------------------
         widgets::card(ui, None, |ui| {
             ui.horizontal(|ui| {
-                let id_email = app.identity.as_ref().and_then(|i| i.email.clone());
-                let email = id_email.clone().or_else(|| app.last_email.clone());
-                widgets::avatar(ui, email.as_deref());
+                let id_email = app.identity.as_ref().and_then(|i| i.email.as_deref());
+                let email = id_email.or(app.last_email.as_deref());
+                widgets::avatar(ui, email);
                 ui.add_space(14.0);
                 ui.vertical(|ui| {
-                    let (value, badge) = match (&app.identity, &id_email) {
-                        (None, _) => (
-                            app.last_email.as_deref().unwrap_or("Checking your account..."),
-                            if app.last_email.is_some() { "Checking..." } else { "" },
-                        ),
-                        (Some(_), Some(e)) => (e.as_str(), "Signed in"),
-                        (Some(_), None) => (
-                            app.last_email.as_deref().unwrap_or("You're not signed in yet"),
-                            if status == health::UiStatus::NeedsLogin {
-                                "Session expired"
-                            } else {
-                                "Not signed in"
-                            },
-                        ),
-                    };
+                    let (value, badge) =
+                        account_text(app.identity.as_ref(), app.last_email.as_deref(), status);
                     ui.label(egui::RichText::new(value).strong().size(15.0));
                     if !badge.is_empty() {
                         ui.label(egui::RichText::new(badge).size(12.0).weak());
@@ -235,3 +267,60 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
 }
 
 use crate::service;
+
+#[cfg(test)]
+mod tests {
+    use super::account_text;
+    use crate::cli::Identity;
+    use crate::health::UiStatus;
+
+    fn identity(email: Option<&str>) -> Identity {
+        Identity {
+            version: "0.9.0".into(),
+            email: email.map(str::to_string),
+            logged_in: email.is_some(),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn pending_probe_never_says_checking() {
+        assert_eq!(
+            account_text(None, None, UiStatus::Syncing),
+            ("Signed in".into(), "")
+        );
+        assert_eq!(
+            account_text(None, None, UiStatus::Starting),
+            ("Account".into(), "")
+        );
+        assert_eq!(
+            account_text(None, None, UiStatus::SigningIn),
+            ("Signing in...".into(), "")
+        );
+    }
+
+    #[test]
+    fn cached_email_is_used_immediately() {
+        assert_eq!(
+            account_text(None, Some("a@b.c"), UiStatus::Syncing),
+            ("a@b.c".into(), "Signed in")
+        );
+        assert_eq!(
+            account_text(None, Some("a@b.c"), UiStatus::NeedsLogin),
+            ("a@b.c".into(), "Session expired")
+        );
+    }
+
+    #[test]
+    fn signed_out_and_signed_in_states() {
+        assert_eq!(
+            account_text(None, None, UiStatus::SignedOut),
+            ("You're not signed in yet".into(), "Not signed in")
+        );
+        let id = identity(Some("a@b.c"));
+        assert_eq!(
+            account_text(Some(&id), None, UiStatus::Synced),
+            ("a@b.c".into(), "Signed in")
+        );
+    }
+}
