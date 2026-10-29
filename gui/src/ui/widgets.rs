@@ -28,17 +28,28 @@ pub fn section_label(ui: &mut egui::Ui, text: &str) {
 }
 
 pub fn primary_button(ui: &mut egui::Ui, text: &str) -> bool {
-    ui.add(
+    primary_button_hint(ui, text, "")
+}
+
+pub fn primary_button_hint(ui: &mut egui::Ui, text: &str, hint: &str) -> bool {
+    let response = ui.add(
         egui::Button::new(egui::RichText::new(text).color(egui::Color32::WHITE))
             .fill(theme::ACCENT)
             .stroke(egui::Stroke::NONE)
             .corner_radius(theme::pill()),
-    )
-    .clicked()
+    );
+    if !hint.is_empty() {
+        response.clone().on_hover_text(hint);
+    }
+    response.clicked()
 }
 
-pub fn secondary_button(ui: &mut egui::Ui, text: &str) -> bool {
-    ui.add(egui::Button::new(text).corner_radius(theme::pill())).clicked()
+pub fn secondary_button_hint(ui: &mut egui::Ui, text: &str, hint: &str) -> bool {
+    let response = ui.add(egui::Button::new(text).corner_radius(theme::pill()));
+    if !hint.is_empty() {
+        response.clone().on_hover_text(hint);
+    }
+    response.clicked()
 }
 
 pub fn danger_ghost_button(ui: &mut egui::Ui, text: &str) -> bool {
@@ -421,11 +432,14 @@ pub fn nav_row(ui: &mut egui::Ui, icon: NavIcon, label: &str, selected: bool) ->
     };
     ui.painter().rect(
         rect,
-        egui::CornerRadius::same(10),
+        egui::CornerRadius::same(12),
         fill,
         egui::Stroke::NONE,
         egui::StrokeKind::Inside,
     );
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
     if selected {
         let bar = egui::Rect::from_min_size(
             egui::pos2(rect.left() + 1.0, rect.top() + 9.0),

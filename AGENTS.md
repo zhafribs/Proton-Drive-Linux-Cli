@@ -27,6 +27,24 @@ shims, duplicated state.
 - Put a focused test at the seam (a pure function, or a fake CLI in a temp
   state directory), not a mock of the whole app.
 
+## Agency agents
+
+`agents/` vendors specialist playbooks from
+[`msitarzewski/agency-agents`](https://github.com/msitarzewski/agency-agents)
+(MIT). Consult them by task:
+
+- UI/visual changes: `agents/design-ui-designer.md` and, before shipping,
+  `agents/design-ui-finish-gate-reviewer.md` (no generic dashboards; every
+  visual choice needs product evidence).
+- Layout/structure: `agents/design-ux-architect.md`.
+- Trend decisions: `agents/product-trend-researcher.md`.
+- Rust refactors: `agents/engineering-rust-refactoring-specialist.md`
+  (behavior-preserving, evidence-based).
+- Reviews: `agents/engineering-code-reviewer.md`; scope control:
+  `agents/engineering-minimal-change-engineer.md`.
+- Accessibility baseline (contrast, keyboard, focus) on every UI change:
+  `agents/engineering-section-508-specialist.md`.
+
 ## This project
 
 - Rust only: GUI, engine, core and AppImage `AppRun`. The official Proton CLI

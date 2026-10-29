@@ -1,4 +1,4 @@
-//! Activity: the friendly "Files moved" list and the raw technical log,
+//! The Home feed: the friendly "Files moved" list and the raw technical log,
 //! exactly the two segments the PyQt app offered.
 
 use super::{widgets, App};

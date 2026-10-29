@@ -1,3 +1,18 @@
+## 3.16.68 — 2026-10-30
+
+- **Agency agents integrated.** Vendored nine specialist playbooks from
+  `msitarzewski/agency-agents` (MIT) under `agents/`, and `AGENTS.md` now
+  points every UI, layout, review, refactor and accessibility change at the
+  matching agent.
+- **2026-style polish.** Card corners rounded to 16px with softer, deeper
+  shadows; nav rows rounder (12px) with a pointing-hand cursor.
+- **Friendlier interface.** The hero actions and the sidebar account row now
+  have hover tooltips ("Open your Proton Drive folder…", "Account · click to
+  sign out or sign in", pause options).
+- **Code clarity.** The removed Activity tab's dead references are gone
+  (`journal_open` naming, Home-feed module docs, error copy now points at
+  Recent activity instead of a page that no longer exists).
+
 ## 3.16.67 — 2026-10-29
 
 - The **Recent activity** label now sits directly on top of its card (2px

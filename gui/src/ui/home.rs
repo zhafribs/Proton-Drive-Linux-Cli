@@ -76,10 +76,20 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     ui.spacing_mut().button_padding.x = 10.0;
-                    if widgets::primary_button(ui, "  Open my folder") {
+                    if widgets::primary_button_hint(
+                        ui,
+                        "  Open my folder",
+                        "Open your Proton Drive folder in the file manager.",
+                    ) {
                         app.action_open_folder();
                     }
-                    if app.active && widgets::secondary_button(ui, "  Sync now") {
+                    if app.active
+                        && widgets::secondary_button_hint(
+                            ui,
+                            "  Sync now",
+                            "Run a full check now.",
+                        )
+                    {
                         app.action_sync_now();
                     }
                     let pause_label = if app.active {
@@ -89,7 +99,14 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                     } else {
                         "Start syncing"
                     };
-                    if widgets::secondary_button(ui, pause_label) {
+                    let pause_hint = if app.active {
+                        "Pause syncing: pick 15 minutes, 1 hour, or until you resume."
+                    } else if app.paused_by_user {
+                        "Resume syncing."
+                    } else {
+                        "Start the sync engine."
+                    };
+                    if widgets::secondary_button_hint(ui, pause_label, pause_hint) {
                         if app.active {
                             app.dialog = Some(Dialog::PauseMenu);
                         } else {

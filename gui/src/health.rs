@@ -182,7 +182,7 @@ pub fn hero_sub(status: UiStatus, h: &Health) -> String {
         UiStatus::Error => h
             .error
             .clone()
-            .unwrap_or_else(|| "See the Activity page for details.".into()),
+            .unwrap_or_else(|| "See Recent activity below for details.".into()),
         _ => sub.replace("{error}", h.error.as_deref().unwrap_or("")),
     }
 }

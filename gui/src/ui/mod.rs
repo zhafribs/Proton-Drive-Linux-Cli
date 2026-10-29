@@ -145,9 +145,9 @@ pub struct App {
     pub active: bool,
     pub enabled: bool,
     pub page: Page,
-    /// Set by `logic()`, read by the poller: while Activity is on screen the
-    /// journal is refreshed on the live-log cadence.
-    pub activity_open: Arc<AtomicBool>,
+    /// Set by `logic()`, read by the poller: while the Home feed (the old
+    /// Activity tab) is on screen the journal refreshes on the live cadence.
+    pub journal_open: Arc<AtomicBool>,
 
     pub identity: Option<cli::Identity>,
     /// Re-probe sign-in after the engine reports a keyring problem: a locked
@@ -260,8 +260,8 @@ const JOURNAL_IDLE: Duration = Duration::from_secs(30);
 /// timer only has to catch edits made while sync is stopped.
 const STATS_FALLBACK: Duration = Duration::from_secs(300);
 
-fn journal_due(changed: bool, since: Duration, activity_open: bool) -> bool {
-    (activity_open && since >= JOURNAL_ACTIVE)
+fn journal_due(changed: bool, since: Duration, journal_open: bool) -> bool {
+    (journal_open && since >= JOURNAL_ACTIVE)
         || (changed && since >= JOURNAL_ACTIVE)
         || since >= JOURNAL_IDLE
 }
@@ -273,7 +273,7 @@ fn stats_due(have: bool, local_changed: bool, cycle_done: bool, since: Duration)
         || since >= STATS_FALLBACK
 }
 
-fn spawn_poller(tx: mpsc::Sender<Back>, paths: Paths, activity_open: Arc<AtomicBool>) {
+fn spawn_poller(tx: mpsc::Sender<Back>, paths: Paths, journal_open: Arc<AtomicBool>) {
     std::thread::spawn(move || {
         let (wake_tx, wake_rx) = mpsc::channel();
         // inotify makes the window react to a write immediately; the short
@@ -357,7 +357,7 @@ fn spawn_poller(tx: mpsc::Sender<Back>, paths: Paths, activity_open: Arc<AtomicB
             }
 
             let since = last_journal.map_or(Duration::MAX, |t| t.elapsed());
-            let watching = activity_open.load(Ordering::Relaxed);
+            let watching = journal_open.load(Ordering::Relaxed);
             if journal_due(changed, since, watching) {
                 last_journal = Some(Instant::now());
                 if tx.send(Back::Journal(service::journal_lines(600))).is_err() {
@@ -440,9 +440,9 @@ impl App {
         let conf_extras = conf::read_extras(&paths.conf_file);
         let draft = settings::Draft::load(&conf, &conf_extras, &prefs, &paths);
         let (tx, rx) = mpsc::channel();
-        let activity = Arc::new(AtomicBool::new(false));
+        let journal = Arc::new(AtomicBool::new(false));
 
-        spawn_poller(tx.clone(), paths.clone(), activity.clone());
+        spawn_poller(tx.clone(), paths.clone(), journal.clone());
         let theme_rx = system_theme::watch(cc.egui_ctx.clone());
 
         // Identity (version + sign-in) as soon as the window exists.
@@ -533,7 +533,7 @@ impl App {
             active: false,
             enabled: false,
             page: Page::Home,
-            activity_open: activity.clone(),
+            journal_open: journal.clone(),
 
             identity: None,
             identity_retry: None,
@@ -1231,6 +1231,7 @@ impl App {
         };
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
+        let response = response.on_hover_text("Account \u{b7} click to sign out or sign in");
         if response.hovered() {
             ui.painter().rect_filled(
                 rect.shrink(2.0),
@@ -1766,7 +1767,7 @@ impl eframe::App for App {
     /// `run_logic`) - so the sync poller keeps flowing to the tray even when
     /// the window is closed to the background.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.activity_open
+        self.journal_open
             .store(self.page == Page::Home && !self.hidden, Ordering::Relaxed);
         self.drain(ctx);
         self.drain_theme(ctx);

@@ -79,21 +79,21 @@ pub fn pill() -> egui::CornerRadius {
 }
 
 /// Soft card drop shadow: a whisper of depth rather than a hard edge, so the
-/// white cards float on the lavender page like the 2026 web look.
+/// cards float on the page like the 2026 soft-depth look.
 pub fn card_shadow(visuals: &egui::Visuals) -> egui::Shadow {
     if visuals.dark_mode {
+        egui::Shadow {
+            offset: [0, 4],
+            blur: 24,
+            spread: 0,
+            color: egui::Color32::from_black_alpha(80),
+        }
+    } else {
         egui::Shadow {
             offset: [0, 3],
             blur: 20,
             spread: 0,
-            color: egui::Color32::from_black_alpha(70),
-        }
-    } else {
-        egui::Shadow {
-            offset: [0, 2],
-            blur: 16,
-            spread: 0,
-            color: egui::Color32::from_black_alpha(12),
+            color: egui::Color32::from_black_alpha(14),
         }
     }
 }
@@ -104,7 +104,7 @@ pub fn card_frame(ui: &egui::Ui) -> egui::Frame {
     egui::Frame::new()
         .fill(surface(ui.visuals()))
         .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-        .corner_radius(egui::CornerRadius::same(14))
+        .corner_radius(egui::CornerRadius::same(16))
         .shadow(card_shadow(ui.visuals()))
         .inner_margin(egui::Margin::symmetric(20, 18))
 }
