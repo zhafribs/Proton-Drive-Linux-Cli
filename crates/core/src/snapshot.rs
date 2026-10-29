@@ -188,4 +188,12 @@ mod tests {
             "/my-files|Docs,Photos|*.tmp"
         );
     }
+    #[test]
+    fn garbage_snapshot_is_not_usable() {
+        let p = std::env::temp_dir().join(format!("pdsnap-garbage-{}.json", std::process::id()));
+        std::fs::write(&p, "{truncated").unwrap();
+        assert!(read(&p).is_none());
+        std::fs::remove_file(&p).ok();
+    }
+
 }

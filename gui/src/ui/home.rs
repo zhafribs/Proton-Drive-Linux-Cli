@@ -59,6 +59,8 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
             if app.health.transfer_active == Some(true)
                 && app.health.transfer_total.unwrap_or(0) > 0
             {
+                let done = app.health.transfer_done.unwrap_or(0) as f32;
+                let total = app.health.transfer_total.unwrap_or(0) as f32;
                 ui.label(
                     egui::RichText::new(format!(
                         "Transferring {} / {} files...",
@@ -67,6 +69,11 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                     ))
                     .size(12.0)
                     .weak(),
+                );
+                ui.add(
+                    egui::ProgressBar::new(done / total.max(1.0))
+                        .desired_width(220.0)
+                        .show_percentage(),
                 );
             }
             if let Some(dt) = app.health.last_audit_dt() {
@@ -129,6 +136,6 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
         });
     });
 
-    ui.add_space(18.0);
+    ui.add_space(16.0);
     activity::draw(app, ui, "Recent activity");
 }

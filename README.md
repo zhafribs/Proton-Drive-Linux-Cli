@@ -46,8 +46,9 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
 - **Folder sync** — `~/ProtonDrive` mirrors `/my-files` both ways: local edits
   upload within seconds (inotify), cloud changes arrive in ~10 s, and
   renames/moves are followed server-side without re-uploading.
-- **My files** — upload files/folders, download, rename, move, multi-select,
-  sortable columns, back/forward, breadcrumbs and a restorable **Trash**.
+- **My files** — upload files/folders (or drag-and-drop them in), download,
+  rename, move, multi-select, search, sortable columns, back/forward,
+  breadcrumbs and a restorable **Trash**.
 - **Home** — one plain-language status orb with pause (15 min, 1 h, until
   resumed), folder size in the sidebar, and the activity feed (uploads,
   downloads, removals, conflicts) with search and a raw log tab.

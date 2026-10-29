@@ -29,12 +29,21 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui, title: &str) {
                 .inner_margin(egui::Margin::symmetric(4, 4))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
                         let sel0 = app.act.seg == 0;
-                        if ui.selectable_label(sel0, "Files moved").clicked() {
+                        let r0 = ui.selectable_label(sel0, "Files moved");
+                        if r0.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if r0.clicked() {
                             app.act.seg = 0;
                         }
                         let sel1 = app.act.seg == 1;
-                        if ui.selectable_label(sel1, "Technical log").clicked() {
+                        let r1 = ui.selectable_label(sel1, "Technical log");
+                        if r1.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if r1.clicked() {
                             app.act.seg = 1;
                         }
                     });

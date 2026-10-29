@@ -1,3 +1,22 @@
+## 3.16.71 — 2026-10-30
+
+- **My Files search.** A client-side search box filters the current listing.
+- **Drag-and-drop upload.** Dropping files onto My Files uploads them into
+  the open folder.
+- **Transfer progress.** The Home hero shows a progress bar with percentage
+  while files are moving.
+- **Keyboard + focus.** Nav rows and My Files respond to Enter, with a visible
+  focus outline; the activity segmented control shows a pointer cursor;
+  activity rows get a hover highlight.
+- **Density.** Slightly tighter card gaps on Home and Settings.
+- **Tests.** Parser robustness tests (garbage state/snapshot/journal) and an
+  end-to-end engine test against a fake official CLI.
+- `docs/UPSTREAM.md` records the upstream requests (recursive listing,
+  per-folder change stamp, arm64 CLI) that would unlock the next big wins.
+- Deferred with reasons: conflict-resolution UI (the engine auto keeps-both
+  and exposes no per-conflict list), zsync delta updates, golden UI
+  snapshots, aarch64 AppImage (official CLI is x86_64-only).
+
 ## 3.16.70 — 2026-10-30
 
 - **Fast unchanged cycles.** The engine now checks one `fs size` fingerprint

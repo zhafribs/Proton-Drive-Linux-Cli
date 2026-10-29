@@ -305,6 +305,22 @@ fn dir_color(dir: Dir) -> egui::Color32 {
 /// One activity/recent row: colored glyph, name, parent path, label, time.
 pub fn move_row(ui: &mut egui::Ui, row: &ChangeRow, parent: &str, when: &str) {
     let color = dir_color(row.dir());
+    // Hover cue: a soft rounded track under the row the pointer is on, the
+    // list equivalent of the card hover-lift. Painted first, under the text.
+    let row_top = ui.cursor().min;
+    if ui.rect_contains_pointer(egui::Rect::from_min_size(
+        row_top + egui::vec2(-4.0, -1.0),
+        egui::vec2(ui.available_width() + 8.0, 31.0),
+    )) {
+        ui.painter().rect_filled(
+            egui::Rect::from_min_size(
+                row_top + egui::vec2(-4.0, -1.0),
+                egui::vec2(ui.available_width() + 8.0, 31.0),
+            ),
+            egui::CornerRadius::same(8),
+            ui.visuals().widgets.hovered.weak_bg_fill,
+        );
+    }
     // Reserve a fixed time column, then give the text the rest of the row.
     // Both text lines truncate, so a long name or path can never paint over
     // the timestamp or widen the activity card past the window.
@@ -465,6 +481,14 @@ pub fn nav_row(ui: &mut egui::Ui, icon: NavIcon, label: &str, selected: bool) ->
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
+    if resp.has_focus() {
+        ui.painter().rect_stroke(
+            rect,
+            egui::CornerRadius::same(12),
+            egui::Stroke::new(1.5, theme::accent(ui.visuals())),
+            egui::StrokeKind::Inside,
+        );
+    }
     if selected {
         let bar = egui::Rect::from_min_size(
             egui::pos2(rect.left() + 1.0, rect.top() + 9.0),
@@ -491,6 +515,7 @@ pub fn nav_row(ui: &mut egui::Ui, icon: NavIcon, label: &str, selected: bool) ->
         color,
     );
     resp.clicked()
+        || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
 }
 
 /// Toolbar glyphs for the files view (refresh ring + the two arrows),

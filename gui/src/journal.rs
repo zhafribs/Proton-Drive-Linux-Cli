@@ -234,4 +234,17 @@ mod tests {
             "UPLOAD x/y.md"
         );
     }
+    #[test]
+    fn malformed_lines_are_skipped_not_panics() {
+        let lines = vec![
+            "no timestamp at all".into(),
+            "2026-10-19T23:22:00+08:00 host app[1]: unrelated message".into(),
+            "2026-10-19T23:22:01+08:00 host proton-sync[1]: DOWNLOAD a/b.txt (kept both)".into(),
+        ];
+        let rows = parse_changes(&lines);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].rel, "a/b.txt");
+        assert_eq!(rows[0].name, "b.txt");
+    }
+
 }

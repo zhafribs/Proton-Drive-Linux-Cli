@@ -1856,6 +1856,20 @@ impl eframe::App for App {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Drag-and-drop upload: files dropped on My Files upload into the
+        // folder that is currently open.
+        if self.page == Page::Cloud && !self.cloud.trash_view && !self.cloud.busy {
+            let dropped: Vec<std::path::PathBuf> = ui.ctx().input(|i| {
+                i.raw
+                    .dropped_files
+                    .iter()
+                    .map(|f| f.path().to_path_buf())
+                    .collect()
+            });
+            if !dropped.is_empty() {
+                cloud::on_picked(self, Some(Picked::UploadFiles(dropped)));
+            }
+        }
         // White sidebar against the lavender content page - the Proton Drive
         // web layout. The pane's right edge is draggable (176-400 px); 216.0
         // is the width this pane has always had, so a fresh install looks

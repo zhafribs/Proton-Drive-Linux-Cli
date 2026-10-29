@@ -266,7 +266,7 @@ const COLUMN_3C: &[CardFn] = &[appearance_card, updates_card, install_card, env_
 fn draw_cards(app: &mut App, ui: &mut egui::Ui, cards: &[CardFn]) {
     for (i, card) in cards.iter().enumerate() {
         if i > 0 {
-            ui.add_space(14.0);
+            ui.add_space(12.0);
         }
         card(app, ui);
     }

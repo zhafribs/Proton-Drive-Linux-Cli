@@ -57,6 +57,8 @@ pub struct CloudState {
     pub opened: bool, // first render triggered the initial listing
     pub sort_col: usize, // 0 name, 1 size, 2 mtime
     pub sort_desc: bool,
+    /// Client-side filter over the current listing (name substring).
+    pub query: String,
     pub busy: bool,
     pub status: String,
     pub status_tip: String,
@@ -1270,6 +1272,7 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
                 (c.trash_view, c.busy, c.sort_col, c.sort_desc)
             };
             let rows = sorted(&app.cloud.entries, sort_col, sort_desc);
+            let query = app.cloud.query.trim().to_lowercase();
             // Frame margin (24) + gap (6) + the action row (~36).
             let max_h = (ui.available_height() - 66.0).max(120.0);
 
@@ -1280,7 +1283,10 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
                 .auto_shrink([false, false])
                 .max_height(max_h)
                 .show(ui, |ui| {
-                    for e in &rows {
+                    for e in rows
+                        .iter()
+                        .filter(|e| query.is_empty() || e.name.to_lowercase().contains(&query))
+                    {
                         row(
                             app,
                             ui,
@@ -1822,6 +1828,12 @@ fn bottom_row(app: &mut App, ui: &mut egui::Ui) {
     let dl_enabled = !sel.is_empty() && !docs_only && !trash_view && !busy;
 
     ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut app.cloud.query)
+                .hint_text("Search files...")
+                .desired_width(150.0),
+        );
+        ui.add_space(6.0);
         // Status on the left, never justified: a justified truncate-label
         // takes the whole row and clips the actions (the label's galley is
         // laid to the full available width in a justified layout). Eliding
@@ -2017,6 +2029,14 @@ fn my_files_row(app: &mut App, ui: &mut egui::Ui, root_open: bool) {
     if fill != egui::Color32::TRANSPARENT {
         ui.painter().rect_filled(rect, egui::CornerRadius::same(9), fill);
     }
+    if resp.has_focus() {
+        ui.painter().rect_stroke(
+            rect,
+            egui::CornerRadius::same(9),
+            egui::Stroke::new(1.5, theme::accent(ui.visuals())),
+            egui::StrokeKind::Inside,
+        );
+    }
     let color = if active {
         theme::accent(ui.visuals())
     } else {
@@ -2043,14 +2063,19 @@ fn my_files_row(app: &mut App, ui: &mut egui::Ui, root_open: bool) {
         egui::FontId::proportional(11.0),
         color,
     );
-    if resp.clicked()
-        && let Some(pos) = resp.interact_pointer_pos() {
+    let activated = resp.clicked()
+        || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+    if activated {
+        if let Some(pos) = resp.interact_pointer_pos() {
             if pos.x >= rect.right() - 26.0 {
                 toggle_tree(app, "");
             } else {
                 go(app, String::new());
             }
+        } else {
+            go(app, String::new());
         }
+    }
 }
 
 /// One level of the folder tree: indented rows with a left caret; the open

@@ -117,4 +117,13 @@ mod tests {
         assert!(read(&path).is_empty());
         std::fs::remove_file(&path).ok();
     }
+    #[test]
+    fn garbage_state_falls_back_to_empty() {
+        let p = std::env::temp_dir().join(format!("pdstate-garbage-{}.json", std::process::id()));
+        std::fs::write(&p, "{not json at all").unwrap();
+        let st = read(&p);
+        assert!(st.is_empty());
+        std::fs::remove_file(&p).ok();
+    }
+
 }
