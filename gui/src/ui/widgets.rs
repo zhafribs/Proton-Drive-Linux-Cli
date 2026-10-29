@@ -51,8 +51,8 @@ pub fn primary_button_hint(ui: &mut egui::Ui, text: &str, hint: &str) -> bool {
     if !hint.is_empty() {
         response.clone().on_hover_text(hint);
     }
-    // Gradient-CTA sheen: a faint white cap over the top half gives the flat
-    // accent a soft vertical gradient without a mesh.
+    // Gradient-CTA: violet base with a cyan cap gives the soft vertical
+    // gradient without a mesh.
     let rect = response.rect;
     let r = (rect.height() * 0.5).round().clamp(1.0, 255.0) as u8;
     let top = egui::Rect::from_min_max(
@@ -62,7 +62,7 @@ pub fn primary_button_hint(ui: &mut egui::Ui, text: &str, hint: &str) -> bool {
     ui.painter().rect_filled(
         top,
         egui::CornerRadius::same(r),
-        egui::Color32::WHITE.gamma_multiply(0.07),
+        theme::CYAN.gamma_multiply(0.30),
     );
     response.clicked()
 }
@@ -116,9 +116,15 @@ pub fn status_orb(ui: &mut egui::Ui, status: &str) {
     painter.circle_filled(c, r + 9.0, color.gamma_multiply(0.06 * glow));
     painter.circle_filled(c, r + 4.5, color.gamma_multiply(0.10 * glow));
 
-    // Glass core: Proton navy, flat - a lighter cap would sit off-centre
-    // and read as a misplaced circle in both idle and syncing states.
-    painter.circle_filled(c, r - 7.0, theme::NAVY);
+    // Glass core: transparent in the dark theme so the aurora reads through,
+    // navy in daylight. A lighter cap would sit off-centre and read as a
+    // misplaced circle in both idle and syncing states.
+    let core = if ui.visuals().dark_mode {
+        egui::Color32::from_white_alpha(8)
+    } else {
+        theme::NAVY
+    };
+    painter.circle_filled(c, r - 7.0, core);
 
     // Glass highlight: a faint white crescent on the upper-left, the one
     // cue that makes the core read as glass rather than a flat disc.
@@ -506,6 +512,12 @@ pub fn nav_row(ui: &mut egui::Ui, icon: NavIcon, label: &str, selected: bool) ->
         );
         ui.painter()
             .rect_filled(bar, egui::CornerRadius::same(2), theme::accent(ui.visuals()));
+        ui.painter().rect_stroke(
+            rect,
+            egui::CornerRadius::same(12),
+            egui::Stroke::new(1.0, theme::accent(ui.visuals()).gamma_multiply(0.55)),
+            egui::StrokeKind::Inside,
+        );
     }
     let color = if selected {
         theme::accent(ui.visuals())

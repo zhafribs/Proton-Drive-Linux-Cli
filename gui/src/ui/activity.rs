@@ -130,7 +130,7 @@ fn files_tab(app: &mut App, ui: &mut egui::Ui) {
         if shown == 0 {
             ui.label(
                 egui::RichText::new(
-                    "Nothing has moved yet - change a file and it will appear here.",
+                    "No activity yet — changes appear here as they sync.",
                 )
                 .weak(),
             );

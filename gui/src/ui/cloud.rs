@@ -1241,9 +1241,9 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
     // file list; the action/status row below gets its space reserved so the
     // card can never push it out of the panel.
     egui::Frame::new()
-        .fill(theme::surface(ui.visuals()))
-        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-        .corner_radius(egui::CornerRadius::same(14))
+        .fill(theme::glass_fill(ui.visuals()))
+        .stroke(theme::glass_stroke(ui.visuals()))
+        .corner_radius(egui::CornerRadius::same(18))
         .shadow(theme::card_shadow(ui.visuals()))
         .inner_margin(egui::Margin::symmetric(16, 12))
         .show(ui, |ui| {

@@ -259,7 +259,7 @@ impl ksni::Tray for AppTray {
         let mut sync = item("Sync now", tx, Back::TraySyncNow);
         sync.enabled = self.active;
         m.push(sync.into());
-        m.push(item("Open my folder", tx, Back::TrayOpenFolder).into());
+        m.push(item("Open local folder", tx, Back::TrayOpenFolder).into());
         m.push(ksni::MenuItem::Separator);
 
         // Qt: inactive -> "Resume sync" acts immediately; active -> the

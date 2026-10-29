@@ -1180,8 +1180,8 @@ impl App {
             self.account_row(ui);
             ui.add_space(8.0);
             // Status card, like the Proton sidebar's footer block.
-            let fill = theme::surface(ui.visuals());
-            let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+            let fill = theme::glass_fill(ui.visuals());
+            let stroke = theme::glass_stroke(ui.visuals());
             egui::Frame::new()
                 .fill(fill)
                 .stroke(stroke)
@@ -1197,7 +1197,7 @@ impl App {
                         ui.label(egui::RichText::new(self.side_label()).size(13.0));
                     });
                     ui.add_space(2.0);
-                    ui.label(egui::RichText::new("Unofficial community app").size(11.5).weak());
+                    ui.label(egui::RichText::new("Independent community edition").size(11.5).weak());
                 });
             ui.add_space(6.0);
             if let Some((files, bytes)) = self.stats {
@@ -1304,6 +1304,7 @@ impl App {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::central_panel(ui.style())
+                    .fill(egui::Color32::TRANSPARENT)
                     .inner_margin(egui::Margin::symmetric(30, 20)),
             )
             .show(ui, |ui| match self.page {
@@ -1870,6 +1871,13 @@ impl eframe::App for App {
                 cloud::on_picked(self, Some(Picked::UploadFiles(dropped)));
             }
         }
+        // Aurora backdrop: painted under both panels so the glass picks up
+        // the glow. One request_repaint per frame keeps the drift smooth;
+        // `PROTON_UI_MOTION=0` or a hidden window freezes it.
+        theme::paint_aurora(ui, ui.max_rect());
+        if theme::motion_enabled() && !self.hidden {
+            ui.ctx().request_repaint();
+        }
         // White sidebar against the lavender content page - the Proton Drive
         // web layout. The pane's right edge is draggable (176-400 px); 216.0
         // is the width this pane has always had, so a fresh install looks
@@ -1889,7 +1897,8 @@ impl eframe::App for App {
             .frame(
                 egui::Frame::side_top_panel(ui.style())
                     .inner_margin(egui::Margin::symmetric(16, 18))
-                    .fill(theme::surface(ui.visuals())),
+                    .fill(theme::glass_fill(ui.visuals()))
+                    .stroke(theme::glass_stroke(ui.visuals())),
             )
             .show(ui, |ui| self.sidebar(ui));
 

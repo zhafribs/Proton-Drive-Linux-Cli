@@ -1,3 +1,16 @@
+## 3.16.73 — 2026-10-30
+
+- **Aurora Glass redesign.** The app now wears a living dark interface:
+  a deep-navy page under five slowly drifting violet/cyan/magenta glow discs,
+  translucent glass cards and sidebar with hairline edges, a glowing
+  two-tone status orb with a glass core, gradient violet→cyan CTA buttons
+  and glass pill navigation with a glowing active row. The light theme is
+  the same language in frosted daylight. `PROTON_UI_MOTION=0` freezes all
+  motion; the backdrop is a handful of painted discs - no textures, no
+  shaders, no per-frame allocations.
+- Copy polished: “Open local folder”, “Independent community edition”, and a
+  calmer activity empty state.
+
 ## 3.16.72 — 2026-10-30
 
 - **Transfer queue.** The engine now publishes the in-flight paths; the Home

@@ -19,8 +19,14 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
     {
         let c = ui.cursor().min + egui::vec2(52.0, 52.0);
         let glow = theme::accent(ui.visuals());
-        for (r, a) in [(260.0, 0.05), (360.0, 0.032), (460.0, 0.02)] {
-            ui.painter().circle_filled(c, r, glow.gamma_multiply(a));
+        let cyan = theme::CYAN;
+        for (r, a, col) in [
+            (260.0, 0.05, glow),
+            (360.0, 0.030, cyan),
+            (460.0, 0.02, glow),
+        ] {
+            ui.painter()
+                .circle_filled(c, r, col.gamma_multiply(a));
         }
     }
 
@@ -109,7 +115,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                     ui.spacing_mut().button_padding.x = 10.0;
                     if widgets::primary_button_hint(
                         ui,
-                        "  Open my folder",
+                        "  Open local folder",
                         "Open your Proton Drive folder in the file manager.",
                     ) {
                         app.action_open_folder();
