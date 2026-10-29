@@ -1,3 +1,10 @@
+## 3.16.69 — 2026-10-30
+
+- **Design overhaul, first slice.** The Home hero now sits on a soft layered
+  accent glow, the status orb's core gets a glass highlight with a stronger
+  halo, and cards keep the deeper 16px shadow language from 3.16.68. No new
+  colours or layout changes - depth cues only.
+
 ## 3.16.68 — 2026-10-30
 
 - **Agency agents integrated.** Vendored nine specialist playbooks from

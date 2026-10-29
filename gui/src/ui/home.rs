@@ -1,7 +1,7 @@
 //! Home: the status hero plus the activity feed (the old Activity tab).
 
 use super::{activity, widgets, App, Dialog};
-use crate::{health, util};
+use crate::{health, theme, util};
 use eframe::egui;
 
 pub fn draw(app: &mut App, ui: &mut egui::Ui) {
@@ -12,6 +12,17 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
     let needs_login = status == health::UiStatus::NeedsLogin;
     let signed_out = status == health::UiStatus::SignedOut;
     let signing_in = status == health::UiStatus::SigningIn;
+
+    // Soft accent glow behind the hero: layered translucent discs so the
+    // status block reads as the page's focal point instead of floating on
+    // flat colour. Painted first, under every widget.
+    {
+        let c = ui.cursor().min + egui::vec2(52.0, 52.0);
+        let glow = theme::accent(ui.visuals());
+        for (r, a) in [(260.0, 0.05), (360.0, 0.032), (460.0, 0.02)] {
+            ui.painter().circle_filled(c, r, glow.gamma_multiply(a));
+        }
+    }
 
     // --- hero -------------------------------------------------------------
     ui.horizontal(|ui| {

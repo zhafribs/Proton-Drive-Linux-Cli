@@ -86,12 +86,20 @@ pub fn status_orb(ui: &mut egui::Ui, status: &str) {
 
     // Ambient halo: two ultra-soft discs so the ring glows instead of
     // sitting flat on the page.
-    painter.circle_filled(c, r + 9.0, color.gamma_multiply(0.05));
-    painter.circle_filled(c, r + 4.5, color.gamma_multiply(0.09));
+    painter.circle_filled(c, r + 9.0, color.gamma_multiply(0.06));
+    painter.circle_filled(c, r + 4.5, color.gamma_multiply(0.10));
 
     // Glass core: Proton navy, flat - a lighter cap would sit off-centre
     // and read as a misplaced circle in both idle and syncing states.
     painter.circle_filled(c, r - 7.0, theme::NAVY);
+
+    // Glass highlight: a faint white crescent on the upper-left, the one
+    // cue that makes the core read as glass rather than a flat disc.
+    painter.circle_filled(
+        c + egui::vec2(-(r - 7.0) * 0.38, -(r - 7.0) * 0.42),
+        (r - 7.0) * 0.26,
+        egui::Color32::WHITE.gamma_multiply(0.08),
+    );
 
     // The ring itself: a calm track in the status color.
     painter.circle_stroke(
