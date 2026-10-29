@@ -145,7 +145,7 @@ fn try_cached_tree(cli: &Cli, remote_root: &str, filter: &Filter) -> Result<Opti
 
 pub fn scan_remote(cli: &Cli, remote_root: &str, filter: &Filter) -> Result<RemoteScan> {
     let start_rpath = cli::remote_path(remote_root, "");
-    let workers = cli::cfg_int("PROTON_SYNC_WORKERS", 12, 16);
+    let workers = cli::cfg_int("PROTON_SYNC_WORKERS", 12, 32);
     let retries = cli::cfg_int("PROTON_SYNC_RETRIES", 3, 10);
 
     cli::with_cli_lock(|| {

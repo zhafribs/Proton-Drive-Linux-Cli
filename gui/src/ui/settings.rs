@@ -69,7 +69,7 @@ impl Draft {
             interval_idx: conf::interval_index(secs),
             inotify: get("PROTON_SYNC_INOTIFY", "1") == "1",
             deletes: get("PROTON_SYNC_DELETES", "1") == "1",
-            workers: get("PROTON_SYNC_WORKERS", "12").parse().unwrap_or(12).clamp(1, 16),
+            workers: get("PROTON_SYNC_WORKERS", "12").parse().unwrap_or(12).clamp(1, 32),
             retries: get("PROTON_SYNC_RETRIES", "3").parse().unwrap_or(3).clamp(1, 10),
             fast_start: get("PROTON_SYNC_FAST_START", "1") == "1",
             auto_workers: get("PROTON_SYNC_AUTO_WORKERS", "1") == "1",
@@ -555,7 +555,7 @@ fn how_often_card(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
-const WORKERS_RANGE: std::ops::RangeInclusive<i32> = 1..=16;
+const WORKERS_RANGE: std::ops::RangeInclusive<i32> = 1..=32;
 const TRANSFERS_RANGE: std::ops::RangeInclusive<i32> = 1..=10;
 const RETRIES_RANGE: std::ops::RangeInclusive<i32> = 1..=10;
 
@@ -983,7 +983,10 @@ fn sel_row(app: &mut App, ui: &mut egui::Ui, rel: &str, label: &str) {
         if !loaded_empty {
             let expanded = app.draft.expanded.contains(rel);
             let arrow = if expanded { "\u{25be}" } else { "\u{25b8}" };
-            if ui.add(egui::Label::new(arrow).sense(egui::Sense::click())).clicked() {
+            let resp = ui.add(egui::Label::new(arrow).sense(egui::Sense::click()));
+            if resp.clicked()
+                || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+            {
                 if expanded {
                     app.draft.expanded.remove(rel);
                 } else {
@@ -1004,7 +1007,9 @@ fn sel_row(app: &mut App, ui: &mut egui::Ui, rel: &str, label: &str) {
             "\u{2610}"
         };
         let resp = ui.add(egui::Label::new(glyph).sense(egui::Sense::click()));
-        if resp.clicked() {
+        if resp.clicked()
+            || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+        {
             app.draft.toggle_node(rel);
         }
         ui.label(label);
@@ -1044,7 +1049,7 @@ mod tests {
     #[test]
     fn ranges_match_spec() {
         assert_eq!(*WORKERS_RANGE.start(), 1);
-        assert_eq!(*WORKERS_RANGE.end(), 16);
+        assert_eq!(*WORKERS_RANGE.end(), 32);
         assert_eq!(*TRANSFERS_RANGE.start(), 1);
         assert_eq!(*TRANSFERS_RANGE.end(), 10);
         assert_eq!(*RETRIES_RANGE.start(), 1);
@@ -1061,7 +1066,7 @@ mod tests {
 
     #[test]
     fn options_cover_every_integer() {
-        assert_eq!(number_options(WORKERS_RANGE), (1..=16).collect::<Vec<i32>>());
+        assert_eq!(number_options(WORKERS_RANGE), (1..=32).collect::<Vec<i32>>());
         assert_eq!(number_options(TRANSFERS_RANGE), (1..=10).collect::<Vec<i32>>());
         assert_eq!(number_options(RETRIES_RANGE), (1..=10).collect::<Vec<i32>>());
     }

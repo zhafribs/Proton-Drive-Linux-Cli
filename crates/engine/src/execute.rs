@@ -191,7 +191,7 @@ pub fn execute(
 
     let total_files: u64 = batches.iter().map(|b| b.rels.len() as u64).sum();
     let done_files = std::sync::atomic::AtomicU64::new(0);
-    report_transfer(0, total_files);
+    report_transfer(0, total_files, &[]);
     let outcomes = cli::with_cli_lock(|| {
         let _ = cli.run(&["fs", "info", remote_root], true, Some(120), false);
         Ok(cli::run_parallel(batches, transfers, |b| {
@@ -213,11 +213,22 @@ pub fn execute(
                 cli.run(&args, false, Some(3600), false)
             };
             let done = done_files.fetch_add(n, std::sync::atomic::Ordering::Relaxed) + n;
-            report_transfer(done, total_files);
+            let names: Vec<String> = b
+                .rels
+                .iter()
+                .map(|r| {
+                    if b.upload {
+                        format!("up:{r}")
+                    } else {
+                        format!("down:{r}")
+                    }
+                })
+                .collect();
+            report_transfer(done, total_files, &names);
             (b, res)
         }))
     })?;
-    report_transfer(total_files, total_files);
+    report_transfer(total_files, total_files, &[]);
 
     for (b, res) in outcomes {
         match res {
@@ -253,13 +264,18 @@ pub fn report_progress(done: u64) {
     crate::health::write_health(&h);
 }
 
-fn report_transfer(done: u64, total: u64) {
+fn report_transfer(done: u64, total: u64, names: &[String]) {
     let path = crate::health::health_path();
     let mut h = proton_core::health::read(&path);
     h.status = "syncing".to_string();
     h.transfer_active = Some(done < total);
     h.transfer_done = Some(done);
     h.transfer_total = Some(total);
+    if names.is_empty() {
+        h.queue.clear();
+    } else {
+        h.queue = names.iter().take(20).cloned().collect();
+    }
     crate::health::write_health(&h);
 }
 

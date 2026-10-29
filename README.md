@@ -50,8 +50,9 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
   rename, move, multi-select, search, sortable columns, back/forward,
   breadcrumbs and a restorable **Trash**.
 - **Home** — one plain-language status orb with pause (15 min, 1 h, until
-  resumed), folder size in the sidebar, and the activity feed (uploads,
-  downloads, removals, conflicts) with search and a raw log tab.
+  resumed), folder size in the sidebar, a live transfer progress bar and
+  queue, and the activity feed (uploads, downloads, removals, conflicts) with
+  search and a raw log tab.
 - **Settings** — selective sync, never-sync patterns, instant upload, check
   intervals, notifications, light/dark/system theme, interface size, tray,
   start-at-login, menu install and **in-app updates** (SHA-256 verified).

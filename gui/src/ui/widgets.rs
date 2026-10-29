@@ -10,7 +10,7 @@ use eframe::egui;
 /// lavender page.
 pub fn card(ui: &mut egui::Ui, title: Option<&str>, add: impl FnOnce(&mut egui::Ui)) {
     let frame = theme::card_frame(ui);
-    frame.show(ui, |ui| {
+    let response = frame.show(ui, |ui| {
         // Proton's cards always span the content column.
         ui.set_min_width(ui.available_width());
         if let Some(t) = title {
@@ -19,6 +19,16 @@ pub fn card(ui: &mut egui::Ui, title: Option<&str>, add: impl FnOnce(&mut egui::
         }
         add(ui);
     });
+    // Hover-lift cue: an accent ring on the card under the pointer (egui
+    // paints frames before content, so a shadow change is not possible).
+    if ui.rect_contains_pointer(response.response.rect) {
+        ui.painter().rect_stroke(
+            response.response.rect,
+            egui::CornerRadius::same(16),
+            egui::Stroke::new(1.0, theme::accent(ui.visuals()).gamma_multiply(0.45)),
+            egui::StrokeKind::Inside,
+        );
+    }
 }
 
 /// Uppercase muted section label ("NEVER SYNC FILES MATCHING").
@@ -293,18 +303,18 @@ pub fn status_orb(ui: &mut egui::Ui, status: &str) {
     }
 }
 
-fn dir_color(dir: Dir) -> egui::Color32 {
+fn dir_color(dir: Dir, visuals: &egui::Visuals) -> egui::Color32 {
     match dir {
-        Dir::Up => theme::SUCCESS,
+        Dir::Up => theme::SUCCESS_TEXT,
         Dir::Down => theme::INFO,
-        Dir::Other => theme::MUTED,
-        Dir::Warn => theme::WARNING,
+        Dir::Other => theme::muted(visuals),
+        Dir::Warn => theme::WARNING_TEXT,
     }
 }
 
 /// One activity/recent row: colored glyph, name, parent path, label, time.
 pub fn move_row(ui: &mut egui::Ui, row: &ChangeRow, parent: &str, when: &str) {
-    let color = dir_color(row.dir());
+    let color = dir_color(row.dir(), ui.visuals());
     // Hover cue: a soft rounded track under the row the pointer is on, the
     // list equivalent of the card hover-lift. Painted first, under the text.
     let row_top = ui.cursor().min;
@@ -583,5 +593,45 @@ pub fn elide(s: &str, max: usize) -> String {
     } else {
         let cut: String = s.chars().take(max.saturating_sub(1)).collect();
         format!("{cut}\u{2026}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::journal::{ChangeKind, ChangeRow};
+
+    /// Golden-layout gate: at a narrow card width the activity row must not
+    /// overflow its container (the timestamp column absorbs the slack).
+    #[test]
+    fn move_row_stays_inside_a_narrow_card() {
+        let ctx = egui::Context::default();
+        let mut width = 0.0;
+        for _ in 0..2 {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::pos2(0.0, 0.0),
+                    egui::vec2(320.0, 400.0),
+                )),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.set_max_width(300.0);
+                    let row = ChangeRow {
+                        kind: ChangeKind::Downloaded,
+                        name: "A very long file name that would overflow.txt".into(),
+                        rel: "Docs/A very long file name that would overflow.txt".into(),
+                        ts: None,
+                    };
+                    move_row(ui, &row, "Docs", "11 h ago");
+                    width = ui.min_rect().width();
+                });
+            });
+            out.textures_delta.clear();
+        }
+        // The hover track extends 4px beyond each side; anything within the
+        // card plus that padding counts as fitting.
+        assert!(width <= 308.0, "row layout width {width}");
     }
 }

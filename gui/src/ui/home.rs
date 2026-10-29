@@ -75,6 +75,19 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                         .desired_width(220.0)
                         .show_percentage(),
                 );
+                for q in app.health.queue.iter().take(8) {
+                    let (glyph, rel) = match q.split_once(':') {
+                        Some(("up", r)) => ("\u{2191}", r),
+                        Some(("down", r)) => ("\u{2193}", r),
+                        _ => ("\u{b7}", q.as_str()),
+                    };
+                    let name = rel.rsplit('/').next().unwrap_or(rel);
+                    ui.label(
+                        egui::RichText::new(format!("{glyph} {name}"))
+                            .size(11.5)
+                            .weak(),
+                    );
+                }
             }
             if let Some(dt) = app.health.last_audit_dt() {
                 ui.label(

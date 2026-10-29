@@ -247,4 +247,22 @@ mod tests {
         assert_eq!(rows[0].name, "b.txt");
     }
 
+    /// Fuzz-lite: random lines must never panic the change parser.
+    #[test]
+    fn fuzz_parse_changes_never_panics() {
+        let mut x: u64 = 0x9E3779B97F4A7C15;
+        let mut rand = || {
+            x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+            x
+        };
+        for _ in 0..2000 {
+            let len = (rand() % 140) as usize;
+            let mut s = String::with_capacity(len);
+            for _ in 0..len {
+                s.push((32 + (rand() % 95) as u8) as char);
+            }
+            let _ = parse_changes(&[s]);
+        }
+    }
+
 }

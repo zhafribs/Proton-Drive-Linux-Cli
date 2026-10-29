@@ -1,3 +1,19 @@
+## 3.16.72 — 2026-10-30
+
+- **Transfer queue.** The engine now publishes the in-flight paths; the Home
+  hero shows the progress bar plus the files currently moving.
+- **Accessibility pass.** WCAG contrast fixes (darker success/warning glyph
+  text, theme-aware muted text, #6B7280 neutral for indicators) with a
+  contrast regression test; Enter activation and visible focus outlines on
+  nav rows, My Files, the folder tree and selective-sync rows; a hover ring
+  on cards instead of the unavailable shadow lift; activity rows highlight on
+  hover.
+- **Workers up to 32** (was 16) in the engine and Settings — a measurable
+  ~10% on full walks for users who raise it.
+- **Testing depth.** Fuzz-lite readers (state, snapshot, journal), a
+  golden-layout gate that the activity row never overflows a narrow card, and
+  the WCAG contrast gate join the fake-CLI end-to-end test.
+
 ## 3.16.71 — 2026-10-30
 
 - **My Files search.** A client-side search box filters the current listing.

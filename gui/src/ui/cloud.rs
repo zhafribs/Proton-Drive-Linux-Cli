@@ -2111,6 +2111,14 @@ fn tree_rows(app: &mut App, ui: &mut egui::Ui, parent: &str, depth: usize) {
         if fill != egui::Color32::TRANSPARENT {
             ui.painter().rect_filled(rect, egui::CornerRadius::same(7), fill);
         }
+        if resp.has_focus() {
+            ui.painter().rect_stroke(
+                rect,
+                egui::CornerRadius::same(7),
+                egui::Stroke::new(1.5, theme::accent(ui.visuals())),
+                egui::StrokeKind::Inside,
+            );
+        }
         let color = if active {
             theme::accent(ui.visuals())
         } else {
@@ -2136,14 +2144,19 @@ fn tree_rows(app: &mut App, ui: &mut egui::Ui, parent: &str, depth: usize) {
             egui::FontId::proportional(13.5),
             color,
         );
-        if resp.clicked()
-            && let Some(pos) = resp.interact_pointer_pos() {
+        let activated = resp.clicked()
+            || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+        if activated {
+            if let Some(pos) = resp.interact_pointer_pos() {
                 if pos.x < rect.left() + indent + 16.0 {
                     toggle_tree(app, &r);
                 } else {
                     go(app, r.clone());
                 }
+            } else {
+                go(app, r.clone());
             }
+        }
         if open {
             if children(app, &r).is_none() {
                 ensure_children(app, &r); // expanded node: fetch its listing once

@@ -46,6 +46,9 @@ pub struct Health {
     pub transfer_done: Option<u64>,
     pub transfer_total: Option<u64>,
     pub transfer_bytes: Option<u64>,
+    /// Recently reported transfer paths, `"up:rel"` / `"down:rel"`, newest
+    /// first. The GUI shows them under the progress bar while active.
+    pub queue: Vec<String>,
 
     /// AppImage/GUI build the engine was launched from (`PROTON_GUI_VERSION`).
     /// The GUI uses this to notice a stale engine after an in-app update.

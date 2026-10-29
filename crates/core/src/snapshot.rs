@@ -196,4 +196,19 @@ mod tests {
         std::fs::remove_file(&p).ok();
     }
 
+    /// Fuzz-lite: arbitrary bytes must never panic the snapshot reader.
+    #[test]
+    fn fuzz_snapshot_read_never_panics() {
+        let p = std::env::temp_dir().join(format!("pdsnap-fuzz-{}.json", std::process::id()));
+        let mut x: u64 = 0x9E3779B97F4A7C15;
+        for _ in 0..300 {
+            x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+            let len = (x % 200) as usize;
+            let bytes: Vec<u8> = (0..len).map(|_| { x ^= x << 13; x ^= x >> 7; x ^= x << 17; (x % 256) as u8 }).collect();
+            std::fs::write(&p, &bytes).unwrap();
+            let _ = read(&p);
+        }
+        std::fs::remove_file(&p).ok();
+    }
+
 }

@@ -12,9 +12,24 @@ pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(0x6D, 0x4A, 0xFF);
 pub const ACCENT_LIGHT: egui::Color32 = egui::Color32::from_rgb(0x8B, 0x6C, 0xFF);
 pub const SUCCESS: egui::Color32 = egui::Color32::from_rgb(0x16, 0xA3, 0x4A);
 pub const WARNING: egui::Color32 = egui::Color32::from_rgb(0xD9, 0x77, 0x06);
+/// Darker success/warning shades for glyph text: the bright dots pass the
+/// 3:1 non-text bar but not 4.5:1 as text, so glyphs use these instead.
+pub const SUCCESS_TEXT: egui::Color32 = egui::Color32::from_rgb(0x0B, 0x7A, 0x38);
+pub const WARNING_TEXT: egui::Color32 = egui::Color32::from_rgb(0x9A, 0x5B, 0x00);
 pub const ERROR: egui::Color32 = egui::Color32::from_rgb(0xDC, 0x26, 0x26);
 pub const INFO: egui::Color32 = egui::Color32::from_rgb(0x25, 0x63, 0xEB);
-pub const MUTED: egui::Color32 = egui::Color32::from_rgb(0x9C, 0xA3, 0xAF);
+/// Neutral grey used for dots and glyphs; #6B7280 keeps at least 3:1 on
+/// both the light and dark surfaces (WCAG non-text contrast).
+pub const MUTED: egui::Color32 = egui::Color32::from_rgb(0x6B, 0x72, 0x80);
+
+/// Theme-aware muted text colour with WCAG AA contrast on its own surface.
+pub fn muted(visuals: &egui::Visuals) -> egui::Color32 {
+    if visuals.dark_mode {
+        DARK_SECONDARY
+    } else {
+        SECONDARY
+    }
+}
 
 // --- light theme: the Proton Drive web look --------------------------------
 /// White surface: cards, sidebar, buttons, inputs.
@@ -261,5 +276,51 @@ mod tests {
             ctx.options(|o| o.theme_preference),
             egui::ThemePreference::System
         );
+    }
+
+    fn luminance(c: egui::Color32) -> f64 {
+        let lin = |v: u8| {
+            let s = v as f64 / 255.0;
+            if s <= 0.04045 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+    }
+
+    fn ratio(a: egui::Color32, b: egui::Color32) -> f64 {
+        let (l1, l2) = (luminance(a), luminance(b));
+        let (hi, lo) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    /// WCAG contrast gate for the palette: text pairs meet AA (4.5:1) and
+    /// dot/indicator colours meet the non-text bar (3:1) on their surfaces.
+    #[test]
+    fn palette_meets_wcag_contrast() {
+        for (fg, bg, min) in [
+            (INK, SURFACE, 4.5),
+            (NAVY, SURFACE, 4.5),
+            (SECONDARY, SURFACE, 4.5),
+            (SUCCESS_TEXT, SURFACE, 4.5),
+            (WARNING_TEXT, SURFACE, 4.5),
+            (INFO, SURFACE, 4.5),
+            (ERROR, SURFACE, 4.5),
+            (DARK_INK, DARK_SURFACE, 4.5),
+            (DARK_STRONG, DARK_SURFACE, 4.5),
+            (DARK_SECONDARY, DARK_SURFACE, 4.5),
+            (MUTED, SURFACE, 3.0),
+            (MUTED, DARK_SURFACE, 3.0),
+            (SUCCESS, SURFACE, 3.0),
+            (WARNING, SURFACE, 3.0),
+            (SUCCESS, DARK_SURFACE, 3.0),
+            (WARNING, DARK_SURFACE, 3.0),
+            (egui::Color32::WHITE, ACCENT, 4.5),
+        ] {
+            let r = ratio(fg, bg);
+            assert!(r >= min, "ratio {r:.2} below {min}: {fg:?} on {bg:?}");
+        }
     }
 }
