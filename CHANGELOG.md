@@ -1,3 +1,17 @@
+## 3.16.70 — 2026-10-30
+
+- **Fast unchanged cycles.** The engine now checks one `fs size` fingerprint
+  before walking folders: when the totals match the last full walk, it reuses
+  the cached tree and skips every per-folder listing. Measured on the live
+  tree: **2m12s → 4.5s** for an unchanged cycle. A full re-walk is forced
+  every `PROTON_SYNC_FAST_REMOTE_MAX_SKIPS` cycles (default 6) or after
+  `PROTON_SYNC_FAST_REMOTE_MAX_AGE` seconds (default 6 h), which bounds
+  same-size renames the totals cannot see. Set `PROTON_SYNC_FAST_REMOTE=0`
+  to disable.
+- **Design slices 2–4.** The primary CTA gets a soft gradient sheen; the
+  status orb's glow fades in when the status changes; toasts slide up and
+  fade instead of popping.
+
 ## 3.16.69 — 2026-10-30
 
 - **Design overhaul, first slice.** The Home hero now sits on a soft layered

@@ -1321,10 +1321,21 @@ impl App {
                 self.toast = None;
                 return;
             }
+            let age = (t - *at) as f32;
+            // Slide up and fade in over 150 ms, fade out over the last 300.
+            let (fade, slide) = if age < 0.15 {
+                (age / 0.15, (1.0 - age / 0.15) * 14.0)
+            } else if age > 3.7 {
+                ((4.0 - age) / 0.3, 0.0)
+            } else {
+                (1.0, 0.0)
+            };
+            ctx.request_repaint();
             let msg = msg.clone();
             egui::Area::new(egui::Id::unique("toast"))
-                .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-18.0, -18.0))
+                .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-18.0, -18.0 + slide))
                 .show(ctx, |ui| {
+                    ui.set_opacity(fade.clamp(0.0, 1.0));
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         ui.label(msg);
                     });

@@ -151,14 +151,17 @@ pub fn run_once_cycle(cli: &Cli, local_root: &str, remote_root: &str, filter: &F
         downloaded.extend(out.downloaded);
         // the tree on disk changed: plan against what actually landed
         local = scan_local(Path::new(local_root), filter);
-        out.tree
+        crate::scan::RemoteScan { tree: out.tree, full: true }
     } else {
         scan_remote(cli, remote_root, filter)?
     };
-
     // Publish the fresh walk immediately, before any transfers, so the GUI's
-    // folder tree goes instant as soon as the scan finishes.
-    publish_snapshot(remote_root, filter, &remote);
+    // folder tree goes instant as soon as the scan finishes. A reused cached
+    // walk keeps its own timestamp/skip bookkeeping; only full walks rewrite.
+    if remote.full {
+        publish_snapshot(cli, remote_root, filter, &remote.tree);
+    }
+    let remote = remote.tree;
 
     let config = PlanConfig { propagate_deletes, wipe_min: 5 };
     let result = plan_cycle(&remote, &local, &st, &config);
@@ -183,15 +186,14 @@ pub fn run_once_cycle(cli: &Cli, local_root: &str, remote_root: &str, filter: &F
         scan_local(Path::new(local_root), filter)
     };
     let remote2 = if remote_touched {
-        scan_remote(cli, remote_root, filter)?
+        let out = scan_remote(cli, remote_root, filter)?;
+        if out.full {
+            publish_snapshot(cli, remote_root, filter, &out.tree);
+        }
+        out.tree
     } else {
         remote.clone()
     };
-
-    // Remote-side actions changed the tree: publish the re-walk too.
-    if remote_touched {
-        publish_snapshot(remote_root, filter, &remote2);
-    }
 
     let acted: BTreeSet<String> = result.actions.iter().map(|a| a.rel().to_string()).collect();
     let options = RefreshOptions {
@@ -227,6 +229,7 @@ pub fn run_once_cycle(cli: &Cli, local_root: &str, remote_root: &str, filter: &F
 /// omit folders the user can still browse in the cloud, and the GUI treats the
 /// snapshot as the whole folder list.
 fn publish_snapshot(
+    cli: &Cli,
     remote_root: &str,
     filter: &Filter,
     tree: &proton_core::snapshot::RemoteTree,
@@ -234,13 +237,26 @@ fn publish_snapshot(
     if !filter.is_unfiltered() {
         return;
     }
+    let fp = cli
+        .run_json(&["fs", "size", remote_root], false)
+        .ok()
+        .map(|v| {
+            vec![
+                v.get("size").and_then(|s| s.as_i64()).unwrap_or(-1),
+                v.get("numberOfDescendants")
+                    .and_then(|n| n.as_i64())
+                    .unwrap_or(-1),
+            ]
+        })
+        .unwrap_or_default();
     let snapshot = proton_core::snapshot::Snapshot {
         sig: filter.signature(remote_root),
-        fp: Vec::new(),
+        fp,
         ts: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs_f64())
             .unwrap_or(0.0),
+        skips: 0,
         tree: tree.clone(),
     };
     let _ = proton_core::snapshot::write(&state_dir().join("remote-snapshot.json"), &snapshot);

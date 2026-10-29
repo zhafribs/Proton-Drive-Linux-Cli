@@ -22,6 +22,10 @@ pub struct Snapshot {
     pub fp: Vec<i64>,
     /// Unix seconds when the walk was saved.
     pub ts: f64,
+    /// Consecutive cycles that reused this walk without a full re-list.
+    /// A full walk resets it; the skip budget bounds same-size renames.
+    #[serde(default)]
+    pub skips: u32,
     pub tree: RemoteTree,
 }
 
@@ -126,6 +130,7 @@ mod tests {
             sig: "/my-files||".into(),
             fp: vec![1, 2],
             ts: 3.5,
+            skips: 0,
             tree: RemoteTree::new(),
         };
         snap.tree.insert(

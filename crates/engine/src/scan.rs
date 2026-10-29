@@ -84,12 +84,81 @@ use proton_core::snapshot::{RemoteEntry, RemoteTree};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
-pub fn scan_remote(cli: &Cli, remote_root: &str, filter: &Filter) -> Result<RemoteTree> {
+/// Result of a remote scan: the tree plus whether a full walk ran (false =
+/// the cached walk was reused on the `fs size` fingerprint).
+pub struct RemoteScan {
+    pub tree: RemoteTree,
+    pub full: bool,
+}
+
+/// `fs size` fingerprint of the remote root: `[size, numberOfDescendants]`.
+/// One CLI call replaces a per-folder walk when it matches the last one.
+fn remote_fp(cli: &Cli, remote_root: &str) -> Result<Vec<i64>> {
+    let v = cli.run_json(&["fs", "size", remote_root], false)?;
+    let size = v.get("size").and_then(|s| s.as_i64()).unwrap_or(-1);
+    let descendants = v
+        .get("numberOfDescendants")
+        .and_then(|n| n.as_i64())
+        .unwrap_or(-1);
+    Ok(vec![size, descendants])
+}
+
+/// Pure decision for the cached-walk fast path: the fingerprint must match,
+/// the walk must be fresh enough, and the skip budget must still have room.
+/// Separated from I/O so the staleness rules are unit-testable.
+fn cache_usable(snap: &proton_core::snapshot::Snapshot, sig: &str, fp: &[i64], now: f64, max_age: f64, max_skips: u32) -> bool {
+    snap.sig == sig
+        && !snap.tree.is_empty()
+        && snap.fp == fp
+        && now - snap.ts <= max_age
+        && snap.skips < max_skips
+}
+
+/// Reuse the cached remote walk when the fingerprint is unchanged, the walk
+/// is fresh enough, and the skip budget still has room. On success the
+/// snapshot's timestamp and skip counter are refreshed so the next cycle sees
+/// this reuse; `None` means a full walk must run.
+fn try_cached_tree(cli: &Cli, remote_root: &str, filter: &Filter) -> Result<Option<RemoteTree>> {
+    if cli::cfg_int("PROTON_SYNC_FAST_REMOTE", 1, 1) == 0 || !filter.is_unfiltered() {
+        return Ok(None);
+    }
+    let snap_path = crate::health::state_dir().join("remote-snapshot.json");
+    let Some(snap) = proton_core::snapshot::read(&snap_path) else {
+        return Ok(None);
+    };
+    let fp = remote_fp(cli, remote_root)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let max_age = cli::cfg_int("PROTON_SYNC_FAST_REMOTE_MAX_AGE", 21600, 604800) as f64;
+    let max_skips = cli::cfg_int("PROTON_SYNC_FAST_REMOTE_MAX_SKIPS", 6, 48) as u32;
+    if !cache_usable(&snap, &filter.signature(remote_root), &fp, now, max_age, max_skips) {
+        return Ok(None);
+    }
+    let mut updated = snap.clone();
+    updated.ts = now;
+    updated.skips += 1;
+    let _ = proton_core::snapshot::write(&snap_path, &updated);
+    Ok(Some(snap.view()))
+}
+
+pub fn scan_remote(cli: &Cli, remote_root: &str, filter: &Filter) -> Result<RemoteScan> {
     let start_rpath = cli::remote_path(remote_root, "");
     let workers = cli::cfg_int("PROTON_SYNC_WORKERS", 12, 16);
     let retries = cli::cfg_int("PROTON_SYNC_RETRIES", 3, 10);
 
     cli::with_cli_lock(|| {
+        // Fast path: one `fs size` call is the change signal for the whole
+        // tree. When `[size, numberOfDescendants]` still matches the last
+        // full walk and that walk is recent enough (few skipped cycles), the
+        // cached tree is authoritative and no per-folder listing runs. The
+        // periodic forced full walk bounds same-size renames the totals
+        // cannot see.
+        if let Some(tree) = try_cached_tree(cli, remote_root, filter)? {
+            return Ok(RemoteScan { tree, full: false });
+        }
+
         let _ = cli.run(&["fs", "info", remote_root], true, Some(120), false);
 
         let mut tree = RemoteTree::new();
@@ -162,7 +231,7 @@ pub fn scan_remote(cli: &Cli, remote_root: &str, filter: &Filter) -> Result<Remo
             }
             level = next;
         }
-        Ok(tree)
+        Ok(RemoteScan { tree, full: true })
     })
 }
 
@@ -217,5 +286,45 @@ mod tests {
         assert!(!tree.contains_key("linked-file"));
         fs::remove_dir_all(&root).ok();
         fs::remove_dir_all(&outside).ok();
+    }
+
+    fn snap() -> proton_core::snapshot::Snapshot {
+        let mut tree = RemoteTree::new();
+        tree.insert(
+            "a.txt".into(),
+            RemoteEntry {
+                uid: Some("uid-1".into()),
+                kind: "file".into(),
+                mtime: None,
+                size: Some(12),
+                doc: false,
+            },
+        );
+        proton_core::snapshot::Snapshot {
+            sig: "/my-files||".into(),
+            fp: vec![100, 10],
+            ts: 1000.0,
+            skips: 0,
+            tree,
+        }
+    }
+
+    #[test]
+    fn cached_walk_is_reused_only_when_fresh_matching_and_within_budget() {
+        // Fresh, matching fingerprint, budget left: reuse.
+        assert!(cache_usable(&snap(), "/my-files||", &[100, 10], 2000.0, 21600.0, 6));
+        // Fingerprint changed: full walk.
+        assert!(!cache_usable(&snap(), "/my-files||", &[99, 10], 2000.0, 21600.0, 6));
+        // Too old: full walk.
+        assert!(!cache_usable(&snap(), "/my-files||", &[100, 10], 1000.0 + 21601.0, 21600.0, 6));
+        // Skip budget exhausted: forced full walk.
+        let mut s = snap();
+        s.skips = 6;
+        assert!(!cache_usable(&s, "/my-files||", &[100, 10], 2000.0, 21600.0, 6));
+        // Empty tree or wrong signature: never reused.
+        let mut e = snap();
+        e.tree.clear();
+        assert!(!cache_usable(&e, "/my-files||", &[100, 10], 2000.0, 21600.0, 6));
+        assert!(!cache_usable(&snap(), "/other||", &[100, 10], 2000.0, 21600.0, 6));
     }
 }

@@ -145,7 +145,9 @@ fn dry_run_cmd(_args: &[String]) -> Result<()> {
     let filter = Filter::new(&subfolders, &exclude);
 
     let local = scan_local(Path::new(&local_root), &filter);
-    let remote = scan_remote(&cli, &remote_root, &filter).context("scanning remote tree")?;
+    let remote = scan_remote(&cli, &remote_root, &filter)
+        .context("scanning remote tree")?
+        .tree;
     let st = state::read(&state_dir.join("state.json"));
 
     let config = PlanConfig { propagate_deletes, wipe_min: 5 };

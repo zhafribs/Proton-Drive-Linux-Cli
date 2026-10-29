@@ -41,6 +41,19 @@ pub fn primary_button_hint(ui: &mut egui::Ui, text: &str, hint: &str) -> bool {
     if !hint.is_empty() {
         response.clone().on_hover_text(hint);
     }
+    // Gradient-CTA sheen: a faint white cap over the top half gives the flat
+    // accent a soft vertical gradient without a mesh.
+    let rect = response.rect;
+    let r = (rect.height() * 0.5).round().clamp(1.0, 255.0) as u8;
+    let top = egui::Rect::from_min_max(
+        rect.min,
+        egui::pos2(rect.max.x, rect.min.y + rect.height() * 0.55),
+    );
+    ui.painter().rect_filled(
+        top,
+        egui::CornerRadius::same(r),
+        egui::Color32::WHITE.gamma_multiply(0.07),
+    );
     response.clicked()
 }
 
@@ -85,9 +98,13 @@ pub fn status_orb(ui: &mut egui::Ui, status: &str) {
     let r = size / 2.0 - 8.0;
 
     // Ambient halo: two ultra-soft discs so the ring glows instead of
-    // sitting flat on the page.
-    painter.circle_filled(c, r + 9.0, color.gamma_multiply(0.06));
-    painter.circle_filled(c, r + 4.5, color.gamma_multiply(0.10));
+    // sitting flat on the page. The glow fades in whenever the status key
+    // changes, a soft state transition rather than a hard colour swap.
+    let glow = ui
+        .ctx()
+        .animate_value_with_time(ui.scope_id().with(("orb-glow", status)), 1.0, 0.4);
+    painter.circle_filled(c, r + 9.0, color.gamma_multiply(0.06 * glow));
+    painter.circle_filled(c, r + 4.5, color.gamma_multiply(0.10 * glow));
 
     // Glass core: Proton navy, flat - a lighter cap would sit off-centre
     // and read as a misplaced circle in both idle and syncing states.
