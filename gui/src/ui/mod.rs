@@ -145,6 +145,8 @@ pub struct App {
     pub active: bool,
     pub enabled: bool,
     pub page: Page,
+    /// Sidebar width in points; the pane default and the remembered size.
+    pub nav_width: f32,
     /// Set by `logic()`, read by the poller: while the Home feed (the old
     /// Activity tab) is on screen the journal refreshes on the live cadence.
     pub journal_open: Arc<AtomicBool>,
@@ -535,6 +537,7 @@ impl App {
         // System tray (Qt built it whenever a tray host existed).
         let tray = tray::spawn(tx.clone(), icon_rgba, icon_w);
 
+        let nav_width = prefs.nav_width;
         let paused_by_user = paths.state_dir.join("paused").exists();
         let last_email = std::fs::read_to_string(paths.state_dir.join("last-email"))
             .ok()
@@ -553,6 +556,7 @@ impl App {
             active: false,
             enabled: false,
             page: Page::Home,
+            nav_width,
             journal_open: journal.clone(),
 
             identity: None,
@@ -1935,10 +1939,10 @@ impl eframe::App for App {
         // the row padding and a few px of rounding slack; below this the
         // list would have to overlap.
         let nav_max = (ui.available_width() - 480.0).clamp(176.0, 400.0);
-        egui::Panel::left("nav")
+        let panel = egui::Panel::left("nav")
             .resizable(true)
-            .default_size(216.0)
-            .min_size(176.0)
+            .default_size(self.nav_width)
+            .min_size(150.0)
             .max_size(nav_max)
             .frame(
                 egui::Frame::side_top_panel(ui.style())
@@ -1947,6 +1951,36 @@ impl eframe::App for App {
                     .stroke(theme::glass_stroke(ui.visuals())),
             )
             .show(ui, |ui| self.sidebar(ui));
+
+        // Visible grab line on the pane edge: brighter on hover so the
+        // divider is discoverable on glass.
+        let prect = panel.response.rect;
+        let grab = egui::Rect::from_center_size(
+            egui::pos2(prect.right(), prect.center().y),
+            egui::vec2(8.0, 48.0),
+        );
+        let hovering = ui.rect_contains_pointer(grab);
+        let sep = if hovering {
+            theme::accent(ui.visuals())
+        } else {
+            theme::glass_stroke(ui.visuals()).color
+        };
+        ui.painter().line_segment(
+            [egui::pos2(prect.right(), prect.top() + 8.0), egui::pos2(prect.right(), prect.bottom() - 8.0)],
+            egui::Stroke::new(1.5, sep),
+        );
+        if hovering {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+
+        // Remember the width for the next start (persist after the drag ends).
+        let w = prect.width();
+        if (w - self.nav_width).abs() > 0.5 {
+            self.nav_width = w;
+            if !ui.input(|i| i.pointer.any_down()) {
+                self.prefs.set_nav_width(w);
+            }
+        }
 
         self.central(ui);
 

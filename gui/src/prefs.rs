@@ -75,6 +75,8 @@ pub struct Prefs {
     pub values: BTreeMap<String, String>,
     pub window_w: u32,
     pub window_h: u32,
+    /// Sidebar width in points, remembered across restarts (150–400).
+    pub nav_width: f32,
 }
 
 impl Prefs {
@@ -102,12 +104,19 @@ impl Prefs {
             // silently grown back to 920x780 on the next start.
             .filter(|(w, h)| *w >= 700 && *h >= 480)
             .unwrap_or((940, 780));
+        let nav = Self::nav_width(values.get("nav_width"));
         Prefs {
             file: file.to_path_buf(),
             values,
             window_w: window_w.max(720),
             window_h: window_h.max(540),
+            nav_width: nav,
         }
+    }
+
+    pub fn set_nav_width(&mut self, w: f32) {
+        self.nav_width = w.clamp(150.0, 400.0);
+        self.set("nav_width", format!("{:.0}", self.nav_width));
     }
 
     fn bool_of(&self, key: &str, default: bool) -> bool {
@@ -116,6 +125,12 @@ impl Prefs {
             Some("false") => false,
             _ => default,
         }
+    }
+
+    fn nav_width(raw: Option<&String>) -> f32 {
+        raw.and_then(|v| v.trim().parse::<f32>().ok())
+            .unwrap_or(200.0)
+            .clamp(150.0, 400.0)
     }
 
     pub fn theme(&self) -> Theme {
@@ -245,4 +260,18 @@ mod tests {
         assert_eq!(Prefs::load(&p).ui_scale(), UiScale::Default);
         std::fs::remove_file(&p).ok();
     }
+    #[test]
+    fn nav_width_is_parsed_and_clamped() {
+        let p = std::env::temp_dir().join(format!("pdprefs-nw-{}.conf", std::process::id()));
+        std::fs::write(&p, "[General]\nnav_width=300\n").unwrap();
+        assert_eq!(Prefs::load(&p).nav_width, 300.0);
+        std::fs::write(&p, "[General]\nnav_width=900\n").unwrap();
+        assert_eq!(Prefs::load(&p).nav_width, 400.0);
+        std::fs::write(&p, "[General]\nnav_width=abc\n").unwrap();
+        assert_eq!(Prefs::load(&p).nav_width, 200.0);
+        std::fs::write(&p, "[General]\n").unwrap();
+        assert_eq!(Prefs::load(&p).nav_width, 200.0);
+        std::fs::remove_file(&p).ok();
+    }
+
 }

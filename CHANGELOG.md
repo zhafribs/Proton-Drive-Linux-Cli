@@ -1,3 +1,9 @@
+## 3.16.76 — 2026-10-30
+
+- **Sidebar resize is back and remembered.** The pane defaults to a narrower
+  200px, can shrink to 150px, shows a visible grab line on its edge (glowing
+  on hover), and the width you drag is saved in preferences across restarts.
+
 ## 3.16.75 — 2026-10-30
 
 - More breathing room between the sidebar stat chips and the status card
