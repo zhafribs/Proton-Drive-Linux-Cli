@@ -1,3 +1,14 @@
+## 3.16.80 — 2026-10-30
+
+- **New and changed files sync immediately.** The engine watched only the
+  top-level folder, so a file added inside a subfolder (for example
+  `personal/`) waited for the next interval or a manual **Sync now**. Every
+  folder is now watched, including folders created later.
+- A change that arrives while a cycle is running no longer loses its
+  wake-up, so the next cycle starts right away instead of sleeping until
+  the following interval.
+- `PROTON_SYNC_INOTIFY=0` now actually disables the watcher.
+
 ## 3.16.79 — 2026-10-30
 
 - **The sidebar really resizes now.** The stat chips were 4px wider than the

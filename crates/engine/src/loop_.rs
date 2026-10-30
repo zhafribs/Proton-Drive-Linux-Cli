@@ -62,13 +62,16 @@ pub fn run_loop() -> Result<()> {
     // inotify
     #[cfg(target_os = "linux")]
     {
-        let root = local_root.clone();
-        let w = wake.clone();
-        let we = wake_event.clone();
-        let wm = wake_mutex.clone();
-        std::thread::spawn(move || {
-            let _ = inotify_watch(&root, w, we, wm);
-        });
+        let inotify = values.get("PROTON_SYNC_INOTIFY").map(|v| v != "0").unwrap_or(true);
+        if inotify {
+            let root = local_root.clone();
+            let w = wake.clone();
+            let we = wake_event.clone();
+            let wm = wake_mutex.clone();
+            std::thread::spawn(move || {
+                let _ = inotify_watch(&root, w, we, wm);
+            });
+        }
     }
 
     // wake file
@@ -94,15 +97,8 @@ pub fn run_loop() -> Result<()> {
     loop {
         // the first cycle runs at once; later ones wait for the interval or a wake
         if !first {
-            if interval == 0 {
-                let guard = wake_mutex.lock().unwrap();
-                drop(wake_event.wait_timeout(guard, Duration::from_secs(3600)).unwrap());
-            } else {
-                let elapsed = last_cycle.elapsed().as_secs();
-                if elapsed < interval {
-                    std::thread::sleep(Duration::from_secs(interval - elapsed));
-                }
-            }
+            let deadline = (interval > 0).then(|| last_cycle + Duration::from_secs(interval));
+            wait_for_cycle(&wake, &wake_event, &wake_mutex, deadline);
         }
         first = false;
         wake.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -270,27 +266,114 @@ fn inotify_watch(
     wake_mutex: Arc<Mutex<()>>,
 ) -> Result<()> {
     use anyhow::bail;
+    use std::collections::HashMap;
     use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::{Path, PathBuf};
+
+    // Watching only the root missed every change in a subfolder, so a file
+    // added in e.g. "personal/" waited for the next interval or Sync now.
+    fn add_watch(fd: i32, path: &Path, dirs: &mut HashMap<i32, PathBuf>) {
+        let Ok(path_c) = CString::new(path.as_os_str().as_bytes()) else {
+            return;
+        };
+        let mask = libc::IN_MODIFY
+            | libc::IN_CREATE
+            | libc::IN_DELETE
+            | libc::IN_MOVED_FROM
+            | libc::IN_MOVED_TO
+            | libc::IN_CLOSE_WRITE;
+        let wd = unsafe { libc::inotify_add_watch(fd, path_c.as_ptr(), mask) };
+        if wd >= 0 {
+            dirs.insert(wd, path.to_path_buf());
+        }
+    }
+
+    fn add_tree(fd: i32, path: &Path, dirs: &mut HashMap<i32, PathBuf>) {
+        add_watch(fd, path, dirs);
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                add_tree(fd, &entry.path(), dirs);
+            }
+        }
+    }
+
     let fd = unsafe { libc::inotify_init1(libc::IN_CLOEXEC) };
     if fd < 0 {
         bail!("inotify_init1 failed");
     }
-    fn add_watch(fd: i32, path: &str) {
-        let c = CString::new(path).unwrap_or_default();
-        unsafe {
-            libc::inotify_add_watch(fd, c.as_ptr(), libc::IN_MODIFY | libc::IN_CREATE | libc::IN_DELETE | libc::IN_MOVED_FROM | libc::IN_MOVED_TO | libc::IN_CLOSE_WRITE);
-        }
-    }
-    add_watch(fd, root);
-    let mut buf = vec![0u8; 4096];
+    let mut dirs: HashMap<i32, PathBuf> = HashMap::new();
+    add_tree(fd, Path::new(root), &mut dirs);
+
+    let mut buf = vec![0u8; 8192];
+    let event_size = std::mem::size_of::<libc::inotify_event>();
     loop {
         let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
-        if n <= 0 { break; }
+        if n <= 0 {
+            break;
+        }
+        let mut offset = 0usize;
+        while offset + event_size <= n as usize {
+            let event = unsafe { &*(buf.as_ptr().add(offset) as *const libc::inotify_event) };
+            // A new folder gets its own watch so later changes inside it
+            // are seen too. The event name is relative to the watched dir.
+            if event.mask & (libc::IN_CREATE | libc::IN_MOVED_TO) != 0 && event.len > 0 {
+                let raw = unsafe {
+                    std::slice::from_raw_parts(
+                        buf.as_ptr().add(offset + event_size),
+                        event.len as usize,
+                    )
+                };
+                if let Ok(name) = std::ffi::CStr::from_bytes_until_nul(raw)
+                    && let Some(dir) = dirs.get(&event.wd)
+                {
+                    let path = dir.join(name.to_string_lossy().as_ref());
+                    if path.is_dir() {
+                        add_tree(fd, &path, &mut dirs);
+                    }
+                }
+            }
+            offset += event_size + event.len as usize;
+        }
         wake.store(true, std::sync::atomic::Ordering::Relaxed);
         let _guard = wake_mutex.lock().unwrap();
         wake_event.notify_all();
     }
     Ok(())
+}
+
+/// Block until a wake arrives or the interval deadline passes.
+///
+/// Checking the flag before waiting closes the race where a change lands
+/// while a cycle is running: the condvar notification is lost, but the flag
+/// is not, so the next cycle still starts immediately instead of sleeping
+/// until the following interval.
+fn wait_for_cycle(
+    wake: &std::sync::atomic::AtomicBool,
+    wake_event: &std::sync::Condvar,
+    wake_mutex: &Mutex<()>,
+    deadline: Option<Instant>,
+) {
+    let mut guard = wake_mutex.lock().unwrap();
+    loop {
+        if wake.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let wait = match deadline {
+            Some(deadline) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    return;
+                }
+                deadline - now
+            }
+            None => Duration::from_secs(3600),
+        };
+        guard = wake_event.wait_timeout(guard, wait).unwrap().0;
+    }
 }
 
 use fs2::FileExt;
@@ -301,4 +384,93 @@ fn acquire_process_lock() -> anyhow::Result<std::fs::File> {
     let fh = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(&lock_path)?;
     fh.try_lock_exclusive().map_err(|_| anyhow::anyhow!("another proton-sync run is already active"))?;
     Ok(fh)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    fn wait_until(mut done: impl FnMut() -> bool, timeout: Duration) -> bool {
+        let start = Instant::now();
+        while start.elapsed() < timeout {
+            if done() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        done()
+    }
+
+    /// Regression: a file dropped in a subfolder must wake the loop, not
+    /// wait for the next interval or a manual "Sync now".
+    #[test]
+    fn subfolder_change_wakes_the_loop() {
+        let root = std::env::temp_dir().join(format!(
+            "pd-inotify-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let sub = root.join("personal");
+        std::fs::create_dir_all(&sub).unwrap();
+
+        let wake = Arc::new(AtomicBool::new(false));
+        let event = Arc::new(std::sync::Condvar::new());
+        let mutex = Arc::new(Mutex::new(()));
+        {
+            let root = root.to_string_lossy().into_owned();
+            let (w, e, m) = (wake.clone(), event.clone(), mutex.clone());
+            std::thread::spawn(move || {
+                let _ = inotify_watch(&root, w, e, m);
+            });
+        }
+        // Give inotify_add_watch a moment to register.
+        std::thread::sleep(Duration::from_millis(150));
+        std::fs::write(sub.join("new.txt"), b"x").unwrap();
+
+        let woke = wait_until(|| wake.load(Ordering::Relaxed), Duration::from_secs(2));
+        std::fs::remove_dir_all(&root).ok();
+        assert!(woke, "subfolder change did not wake the engine");
+    }
+
+    /// A change that lands while a cycle is running must not be lost: the
+    /// flag is checked before sleeping, so the next cycle starts at once.
+    #[test]
+    fn wake_before_wait_is_not_lost() {
+        let wake = AtomicBool::new(true);
+        let event = std::sync::Condvar::new();
+        let mutex = Mutex::new(());
+        let started = Instant::now();
+        wait_for_cycle(
+            &wake,
+            &event,
+            &mutex,
+            Some(Instant::now() + Duration::from_secs(5)),
+        );
+        assert!(started.elapsed() < Duration::from_millis(200));
+    }
+
+    /// With an interval set, a quiet wait still ends at the deadline rather
+    /// than sleeping forever or until a wake.
+    #[test]
+    fn interval_deadline_ends_the_wait() {
+        let wake = AtomicBool::new(false);
+        let event = std::sync::Condvar::new();
+        let mutex = Mutex::new(());
+        let started = Instant::now();
+        wait_for_cycle(
+            &wake,
+            &event,
+            &mutex,
+            Some(Instant::now() + Duration::from_millis(80)),
+        );
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(50) && elapsed < Duration::from_secs(2),
+            "unexpected wait: {elapsed:?}"
+        );
+    }
 }
