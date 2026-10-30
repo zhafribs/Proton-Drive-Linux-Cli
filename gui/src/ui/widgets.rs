@@ -72,6 +72,9 @@ pub fn primary_button_hint(ui: &mut egui::Ui, text: &str, hint: &str) -> bool {
 pub fn primary_button_full(ui: &mut egui::Ui, text: &str) -> bool {
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), text)
+    });
     let radius = theme::pill();
     let fill = if response.hovered() {
         theme::ACCENT.gamma_multiply(1.12)

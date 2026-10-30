@@ -399,10 +399,12 @@ pub fn spawn(
     std::thread::spawn(move || {
         let start = std::time::Instant::now();
         loop {
-            std::thread::sleep(std::time::Duration::from_millis(120));
+            // Do not tick at animation rate while the icon is idle.
             if !pulse_flag.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_secs(1));
                 continue;
             }
+            std::thread::sleep(std::time::Duration::from_millis(120));
             let phase = (start.elapsed().as_secs_f32() / 2.0) % 1.0;
             if pulse_handle.update(|t| t.pulse = phase).is_none() {
                 break;

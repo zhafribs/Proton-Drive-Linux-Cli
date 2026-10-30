@@ -306,6 +306,10 @@ fn inotify_watch(
         bail!("inotify_init1 failed");
     }
     let mut dirs: HashMap<i32, PathBuf> = HashMap::new();
+    // The sync folder may not exist yet on a fresh install. Create it here
+    // (the first sync would anyway) so the watch is not silently lost until
+    // the service restarts.
+    let _ = std::fs::create_dir_all(root);
     add_tree(fd, Path::new(root), &mut dirs);
 
     let mut buf = vec![0u8; 8192];
@@ -316,6 +320,10 @@ fn inotify_watch(
             break;
         }
         let mut offset = 0usize;
+        // Files are written in pieces: waking on IN_CREATE/IN_MODIFY starts a
+        // cycle mid-copy and uploads a partial file. Only settled changes
+        // (close-write, move, delete, new folder) start a cycle.
+        let mut settled = false;
         while offset + event_size <= n as usize {
             let event = unsafe { &*(buf.as_ptr().add(offset) as *const libc::inotify_event) };
             // A new folder gets its own watch so later changes inside it
@@ -333,14 +341,26 @@ fn inotify_watch(
                     let path = dir.join(name.to_string_lossy().as_ref());
                     if path.is_dir() {
                         add_tree(fd, &path, &mut dirs);
+                        settled = true;
                     }
                 }
             }
+            if event.mask
+                & (libc::IN_CLOSE_WRITE
+                    | libc::IN_MOVED_FROM
+                    | libc::IN_MOVED_TO
+                    | libc::IN_DELETE)
+                != 0
+            {
+                settled = true;
+            }
             offset += event_size + event.len as usize;
         }
-        wake.store(true, std::sync::atomic::Ordering::Relaxed);
-        let _guard = wake_mutex.lock().unwrap();
-        wake_event.notify_all();
+        if settled {
+            wake.store(true, std::sync::atomic::Ordering::Relaxed);
+            let _guard = wake_mutex.lock().unwrap();
+            wake_event.notify_all();
+        }
     }
     Ok(())
 }
@@ -434,6 +454,77 @@ mod tests {
         let woke = wait_until(|| wake.load(Ordering::Relaxed), Duration::from_secs(2));
         std::fs::remove_dir_all(&root).ok();
         assert!(woke, "subfolder change did not wake the engine");
+    }
+
+    /// A file copied in pieces must not start a cycle until the writer closes
+    /// it, otherwise the CLI uploads a partial (or empty) snapshot.
+    #[test]
+    fn partial_writes_do_not_wake_until_close() {
+        use std::io::Write;
+        let root = std::env::temp_dir().join(format!(
+            "pd-inotify-partial-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let wake = Arc::new(AtomicBool::new(false));
+        let event = Arc::new(std::sync::Condvar::new());
+        let mutex = Arc::new(Mutex::new(()));
+        {
+            let root = root.to_string_lossy().into_owned();
+            let (w, e, m) = (wake.clone(), event.clone(), mutex.clone());
+            std::thread::spawn(move || {
+                let _ = inotify_watch(&root, w, e, m);
+            });
+        }
+        std::thread::sleep(Duration::from_millis(150));
+
+        let mut file = std::fs::File::create(root.join("copy.bin")).unwrap();
+        file.write_all(b"first half").unwrap();
+        file.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(400));
+        let woke_early = wake.load(Ordering::Relaxed);
+        drop(file);
+        let woke_after_close = wait_until(|| wake.load(Ordering::Relaxed), Duration::from_secs(2));
+        std::fs::remove_dir_all(&root).ok();
+        assert!(!woke_early, "a partial write started a sync cycle");
+        assert!(woke_after_close, "closing the file did not wake the engine");
+    }
+
+    /// Fresh installs have no sync folder yet; the watcher must create it
+    /// instead of silently watching nothing until the service restarts.
+    #[test]
+    fn missing_root_is_created_and_watched() {
+        let root = std::env::temp_dir().join(format!(
+            "pd-inotify-missing-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let wake = Arc::new(AtomicBool::new(false));
+        let event = Arc::new(std::sync::Condvar::new());
+        let mutex = Arc::new(Mutex::new(()));
+        {
+            let root = root.to_string_lossy().into_owned();
+            let (w, e, m) = (wake.clone(), event.clone(), mutex.clone());
+            std::thread::spawn(move || {
+                let _ = inotify_watch(&root, w, e, m);
+            });
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        let created = root.is_dir();
+        if created {
+            std::fs::write(root.join("new.txt"), b"x").unwrap();
+        }
+        let woke = wait_until(|| wake.load(Ordering::Relaxed), Duration::from_secs(2));
+        std::fs::remove_dir_all(&root).ok();
+        assert!(created, "the watcher did not create the sync root");
+        assert!(woke, "a file in the newly created root did not wake the engine");
     }
 
     /// A change that lands while a cycle is running must not be lost: the

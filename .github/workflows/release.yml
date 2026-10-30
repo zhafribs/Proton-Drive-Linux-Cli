@@ -182,6 +182,19 @@ jobs:
             echo "Created release $TAG."
           fi
 
+      - name: Keep the seven newest releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release list --limit 100 --json tagName,createdAt \
+            --jq 'sort_by(.createdAt) | reverse | .[7:] | .[].tagName' |
+          while read -r tag; do
+            [ -n "$tag" ] || continue
+            echo "Removing old release $tag"
+            gh release delete "$tag" --yes --cleanup-tag
+          done
+
       - name: Keep the built artifacts for inspection
         uses: actions/upload-artifact@v7
         with:

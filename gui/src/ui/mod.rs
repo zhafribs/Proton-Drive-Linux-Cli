@@ -147,6 +147,8 @@ pub struct App {
     pub page: Page,
     /// Sidebar width in points; the pane default and the remembered size.
     pub nav_width: f32,
+    /// True while the user is dragging the pane divider.
+    nav_drag: bool,
     /// Set by `logic()`, read by the poller: while the Home feed (the old
     /// Activity tab) is on screen the journal refreshes on the live cadence.
     pub journal_open: Arc<AtomicBool>,
@@ -392,6 +394,9 @@ fn spawn_poller(tx: mpsc::Sender<Back>, paths: Paths, journal_open: Arc<AtomicBo
 fn account_action(ui: &mut egui::Ui, label: &str, danger: bool) -> bool {
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label)
+    });
     if response.hovered() {
         let fill = if danger {
             theme::ERROR.gamma_multiply(0.14)
@@ -411,7 +416,7 @@ fn account_action(ui: &mut egui::Ui, label: &str, danger: bool) -> bool {
         );
     }
     let color = if danger {
-        theme::ERROR
+        theme::danger_text(ui.visuals())
     } else {
         ui.visuals().strong_text_color()
     };
@@ -630,6 +635,7 @@ impl App {
             enabled: false,
             page: Page::Home,
             nav_width,
+            nav_drag: false,
             journal_open: journal.clone(),
 
             identity: None,
@@ -720,8 +726,7 @@ impl App {
     }
 
     fn now(&self) -> f64 {
-        // ctx.time is captured in update; Approximation via Instant is fine
-        // for a 4-second toast lifetime - keep a monotonic clock here.
+        // Monotonic clock for the four-second toast lifetime.
         static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
         START.get_or_init(Instant::now).elapsed().as_secs_f64()
     }
@@ -1381,6 +1386,9 @@ impl App {
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 46.0), egui::Sense::click());
         let response = response.on_hover_text(hint);
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Account menu")
+        });
         // Glass pill: accent-glow edge on hover/focus, presence dot on the
         // avatar, chevron hinting the menu.
         ui.painter().rect_filled(
@@ -1434,15 +1442,6 @@ impl App {
             egui::FontId::proportional(12.0),
             ui.visuals().weak_text_color(),
         );
-
-        // Keyboard users can open the menu without a pointer.
-        if response.has_focus()
-            && ui.input(|i| {
-                i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space)
-            })
-        {
-            egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&response));
-        }
 
         egui::Popup::menu(&response)
             .gap(8.0)
@@ -1522,7 +1521,9 @@ impl App {
     }
 
     fn toast_ui(&mut self, ctx: &egui::Context) {
-        let t = ctx.input(|i| i.time);
+        // Same clock as `toast()`; ctx.time starts at app launch, so mixing
+        // the two made most toasts expire on their first frame.
+        let t = self.now();
         if let Some((msg, at)) = &self.toast {
             if t - *at > 4.0 {
                 self.toast = None;
@@ -2129,13 +2130,21 @@ impl eframe::App for App {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
 
-        // Remember the width for the next start (persist only after the drag
-        // ends, and never feed the live width back into `default_size` - that
-        // feedback made the pane fight the pointer).
-        let w = prect.width();
-        if (w - self.nav_width).abs() > 0.5 && !ui.input(|i| i.pointer.any_down()) {
-            self.nav_width = w;
-            self.prefs.set_nav_width(w);
+        // Remember the width only after a real divider drag. Persisting any
+        // difference also saved the width whenever a small window clamped the
+        // pane, permanently losing the user's chosen size.
+        let pressed = ui.input(|i| i.pointer.primary_pressed());
+        if hovering && pressed {
+            self.nav_drag = true;
+        }
+        let released = ui.input(|i| i.pointer.primary_released() || !i.pointer.any_down());
+        if self.nav_drag && released {
+            let w = prect.width();
+            if (w - self.nav_width).abs() > 0.5 {
+                self.nav_width = w;
+                self.prefs.set_nav_width(w);
+            }
+            self.nav_drag = false;
         }
 
         self.central(ui);

@@ -19,13 +19,17 @@ no AUR.
 
 **[Download the latest AppImage →](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/latest)**
 
+The releases page keeps the **seven most recent builds**; older ones are
+removed automatically.
+
 ## Quick start
 
 1. Download and make it executable:
    ```bash
    chmod +x ProtonDrive-CLI-*-x86_64.AppImage
    ```
-2. Run it and click **Sign in** — Proton's CLI opens a terminal for 2FA.
+2. Run it and click **Sign in** in the bottom-left account pill — Proton's CLI
+   opens a terminal for 2FA.
 3. **Settings → pick your sync folder → Save.** The app installs a systemd
    *user* service; from then on `~/ProtonDrive` mirrors your Drive.
 
@@ -50,14 +54,18 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
   rename, move, multi-select, search, sortable columns, back/forward,
   breadcrumbs and a restorable **Trash**.
 - **Home** — one plain-language status orb with pause (15 min, 1 h, until
-  resumed), folder size in the sidebar, a live transfer progress bar and
-  queue, and the activity feed (uploads, downloads, removals, conflicts) with
-  search and a raw log tab.
+  resumed), file count and disk usage in the sidebar, a live transfer progress
+  bar and queue, and the activity feed (uploads, downloads, removals,
+  conflicts) with search and a raw log tab.
 - **Settings** — selective sync, never-sync patterns, instant upload, check
   intervals, notifications, light/dark/system theme, interface size, tray,
   start-at-login, menu install and **in-app updates** (SHA-256 verified).
-- **Tray + notifications** — status at a glance; closing the window keeps
-  syncing in the background.
+- **Tray + notifications** — a plain icon when synced, a pulse while starting,
+  syncing or signing in, and a red X when paused, signed out, stopped or in
+  error. Click it to reopen the window (it floats on Hyprland). Closing the
+  window keeps syncing in the background.
+- **Account** — the bottom-left pill shows your email and live status; sign in
+  or sign out from its menu.
 
 **Safety built in:** deletes follow both ways but **only to trash** (never
 permanent); a wipe guard holds mass deletions; conflicts keep both versions;

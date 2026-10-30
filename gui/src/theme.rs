@@ -20,6 +20,8 @@ pub const WARNING: egui::Color32 = egui::Color32::from_rgb(0xD9, 0x77, 0x06);
 pub const SUCCESS_TEXT: egui::Color32 = egui::Color32::from_rgb(0x0B, 0x7A, 0x38);
 pub const WARNING_TEXT: egui::Color32 = egui::Color32::from_rgb(0x9A, 0x5B, 0x00);
 pub const ERROR: egui::Color32 = egui::Color32::from_rgb(0xDC, 0x26, 0x26);
+/// Lighter red for danger *text* on dark surfaces (AA at 13px).
+pub const DANGER_TEXT: egui::Color32 = egui::Color32::from_rgb(0xF8, 0x71, 0x71);
 pub const INFO: egui::Color32 = egui::Color32::from_rgb(0x25, 0x63, 0xEB);
 /// Neutral grey used for dots and glyphs; #6B7280 keeps at least 3:1 on
 /// both the light and dark surfaces (WCAG non-text contrast).
@@ -86,6 +88,11 @@ pub fn glass_stroke(visuals: &egui::Visuals) -> egui::Stroke {
     } else {
         egui::Stroke::new(1.0, BORDER)
     }
+}
+
+/// Danger text that stays AA on the current surface.
+pub fn danger_text(visuals: &egui::Visuals) -> egui::Color32 {
+    if visuals.dark_mode { DANGER_TEXT } else { ERROR }
 }
 
 /// Accent that reads on the theme currently in use.
@@ -367,6 +374,7 @@ mod tests {
             (WARNING_TEXT, SURFACE, 4.5),
             (INFO, SURFACE, 4.5),
             (ERROR, SURFACE, 4.5),
+            (DANGER_TEXT, DARK_SURFACE, 4.5),
             (DARK_INK, DARK_PAGE, 4.5),
             (DARK_STRONG, DARK_PAGE, 4.5),
             (DARK_SECONDARY, DARK_PAGE, 4.5),

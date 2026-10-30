@@ -1,3 +1,21 @@
+## 3.16.83 — 2026-10-31
+
+- **Sync waits for complete files.** The recursive watcher now wakes on
+  close, move and delete instead of every write, so a file being copied is
+  never uploaded half-written. A missing sync folder is created and watched
+  on first start instead of silently falling back to interval-only syncing.
+- **Toasts appear again.** Their timer mixed two clocks, so most expired on
+  the first frame.
+- **Account menu is keyboard- and screen-reader-friendly.** Enter/Space opens
+  it once, its actions have accessible labels, and the dark-theme sign-out
+  text now meets WCAG AA contrast.
+- **Sidebar width is preserved.** Resizing the window below the pane floor no
+  longer overwrites the saved width.
+- **Tray idles cheaper** (1 Hz instead of 8) and stops retrying unsupported
+  Hyprland dispatch syntax.
+- README screenshots and feature copy refreshed; releases auto-prune to the
+  seven newest builds.
+
 ## 3.16.82 — 2026-10-30
 
 - **Tray icon states, without the dot.** A synced app shows the plain icon;

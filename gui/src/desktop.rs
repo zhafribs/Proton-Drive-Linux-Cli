@@ -170,11 +170,18 @@ pub fn float_on_show() {
             let dispatch = format!(
                 "hl.dsp.window.float({{ action = \"set\", window = \"address:{address}\" }})"
             );
-            let _ = exec::run(
+            let Ok(out) = exec::run(
                 "hyprctl",
                 &["dispatch", &dispatch],
                 std::time::Duration::from_secs(2),
-            );
+            ) else {
+                return;
+            };
+            if !out.ok() {
+                // Different Hyprland syntax (pre-0.55) or a stale socket:
+                // stop instead of spawning 40 more probes.
+                return;
+            }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
     });
