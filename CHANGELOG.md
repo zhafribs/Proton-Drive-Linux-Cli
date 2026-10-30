@@ -1,3 +1,15 @@
+## 3.16.79 — 2026-10-30
+
+- **The sidebar really resizes now.** The stat chips were 4px wider than the
+  pane on every frame, so the panel crept back to its maximum width no matter
+  where you dragged it. The chips now have exact widths, and the footer is
+  measured instead of guessed at, so the status card and account row no
+  longer overlap at narrow widths.
+- The brand wordmark switches to a compact mark, and the status text and
+  account email elide, so a 150px pane is usable. Long stat values elide
+  rather than overflow.
+- New layout regression test: a too-wide chip row fails the suite.
+
 ## 3.16.78 — 2026-10-30
 
 - **Sidebar drag fix.** The pane no longer snaps back to its maximum: the
