@@ -1,3 +1,9 @@
+## 3.16.77 — 2026-10-30
+
+- Version bump only — forces a fresh in-app update so the 3.16.76 sidebar
+  fixes actually land on machines whose updater compared against the same
+  number.
+
 ## 3.16.76 — 2026-10-30
 
 - **Sidebar resize is back and remembered.** The pane defaults to a narrower
