@@ -138,6 +138,77 @@ pub fn set_menu(paths: &Paths, on: bool) {
         }
 }
 
+/// Ask Hyprland to float the window after it is shown from the tray.
+///
+/// Floating is compositor-side (there is no Wayland client request for it),
+/// so this uses Hyprland's control socket. It is a no-op on other desktops,
+/// safe to call when the window is already floating, and retries briefly
+/// because a window hidden to the tray may not be mapped yet.
+pub fn float_on_show() {
+    if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none() {
+        return;
+    }
+    std::thread::spawn(|| {
+        let pid = std::process::id();
+        // A freshly mapped window can be tiled again by the compositor after
+        // the first request, so verify and retry instead of firing once.
+        for _ in 0..20 {
+            let Ok(clients) = exec::run(
+                "hyprctl",
+                &["-j", "clients"],
+                std::time::Duration::from_secs(2),
+            ) else {
+                return;
+            };
+            let Some(address) = window_address(&clients.stdout, pid) else {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                continue;
+            };
+            if window_is_floating(&clients.stdout, pid) {
+                return;
+            }
+            let dispatch = format!(
+                "hl.dsp.window.float({{ action = \"set\", window = \"address:{address}\" }})"
+            );
+            let _ = exec::run(
+                "hyprctl",
+                &["dispatch", &dispatch],
+                std::time::Duration::from_secs(2),
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    });
+}
+
+/// Whether the client belonging to `pid` is currently floating.
+fn window_is_floating(clients_json: &str, pid: u32) -> bool {
+    let Ok(clients) = serde_json::from_str::<serde_json::Value>(clients_json) else {
+        return false;
+    };
+    let Some(client) = clients.as_array().and_then(|clients| {
+        clients.iter().find(|client| {
+            client["pid"].as_u64() == Some(u64::from(pid))
+                && client["mapped"].as_bool() == Some(true)
+        })
+    }) else {
+        return false;
+    };
+    client["floating"].as_bool() == Some(true)
+}
+
+/// The mapped Hyprland client address belonging to `pid`, if present.
+/// Unmapped windows are skipped: floating one before it is shown lets the
+/// compositor map it tiled again.
+fn window_address(clients_json: &str, pid: u32) -> Option<String> {
+    let clients: serde_json::Value = serde_json::from_str(clients_json).ok()?;
+    clients.as_array()?.iter().find_map(|client| {
+        (client["pid"].as_u64() == Some(u64::from(pid))
+            && client["mapped"].as_bool() == Some(true))
+        .then(|| client["address"].as_str().map(str::to_owned))
+        .flatten()
+    })
+}
+
 fn which(name: &str) -> Option<String> {
     std::env::var("PATH").ok().and_then(|paths| {
         std::env::split_paths(&paths)
@@ -150,6 +221,26 @@ fn which(name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_our_window_by_pid() {
+        let json = r#"[{"pid":111,"address":"0xaaa","mapped":true},{"pid":222,"address":"0xbbb","mapped":true}]"#;
+        assert_eq!(window_address(json, 222).as_deref(), Some("0xbbb"));
+        assert_eq!(window_address(json, 333), None);
+        assert_eq!(window_address("not json", 222), None);
+        // Still hidden/demapped: wait for it to map instead of floating early.
+        let hidden = r#"[{"pid":222,"address":"0xbbb","mapped":false}]"#;
+        assert_eq!(window_address(hidden, 222), None);
+    }
+
+    #[test]
+    fn detects_the_floating_state() {
+        let json = r#"[{"pid":222,"address":"0xbbb","mapped":true,"floating":true}]"#;
+        assert!(window_is_floating(json, 222));
+        let tiled = r#"[{"pid":222,"address":"0xbbb","mapped":true,"floating":false}]"#;
+        assert!(!window_is_floating(tiled, 222));
+        assert!(!window_is_floating(json, 111));
+    }
 
     #[test]
     fn desktop_exec_quotes_only_spaced_paths() {

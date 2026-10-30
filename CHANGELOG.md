@@ -1,3 +1,10 @@
+## 3.16.81 — 2026-10-30
+
+- **The tray opens the window floating on Hyprland.** Showing the app from
+  the tray (or a notification) asks Hyprland to float it, retrying until the
+  freshly mapped window stays floating, so it behaves like a launcher instead
+  of dropping back into the tiling layout. Other desktops are unchanged.
+
 ## 3.16.80 — 2026-10-30
 
 - **New and changed files sync immediately.** The engine watched only the

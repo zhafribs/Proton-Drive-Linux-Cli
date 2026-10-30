@@ -922,12 +922,7 @@ impl App {
                 Back::Stats { files, bytes } => {
                     self.stats = Some((files, bytes));
                 }
-                Back::ShowWindow => {
-                    self.hidden = false;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                }
+                Back::ShowWindow => self.show_from_tray(ctx),
                 Back::SaveHint(h) => self.save_hint = h,
                 Back::SelFolders { parent, folders } => {
                     let selective = self.draft.selective;
@@ -960,10 +955,7 @@ impl App {
                     let minimized =
                         ctx.input(|i| i.viewport().minimized.unwrap_or(false));
                     if self.hidden || minimized {
-                        self.hidden = false;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                        self.show_from_tray(ctx);
                     } else {
                         self.hide_to_tray(ctx);
                     }
@@ -1177,6 +1169,16 @@ impl App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
         }
         self.hide_window(ctx);
+    }
+
+    /// Bring the window back from the tray (also used by notification clicks).
+    /// On Hyprland this also floats it, like a launcher.
+    fn show_from_tray(&mut self, ctx: &egui::Context) {
+        self.hidden = false;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        crate::desktop::float_on_show();
     }
 
     fn quit(&mut self, ctx: &egui::Context) {
