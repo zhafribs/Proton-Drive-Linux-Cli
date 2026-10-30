@@ -45,6 +45,14 @@ shims, duplicated state.
 - Accessibility baseline (contrast, keyboard, focus) on every UI change:
   `agents/engineering-section-508-specialist.md`.
 
+## pstack
+
+[`pstack`](https://github.com/cursor/plugins/tree/main/pstack) (MIT, Lauren
+Tan) is vendored in `agents/pstack/` and exposed as the OpenCode `pstack`
+skill and `/pstack` command. Use it for deep-first, verified work. Its
+Cursor-only model routing, slash commands and plugins are not used here; the
+adapter at `.opencode/skills/pstack/SKILL.md` maps them.
+
 ## This project
 
 - Rust only: GUI, engine, core and AppImage `AppRun`. The official Proton CLI
