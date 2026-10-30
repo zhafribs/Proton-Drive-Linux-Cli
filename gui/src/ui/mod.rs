@@ -197,7 +197,7 @@ pub struct App {
     theme_rx: mpsc::Receiver<prefs::Theme>,
     pub icon_tex: Option<egui::TextureHandle>,
     /// The system tray (None when the desktop has no tray host).
-    pub tray: Option<ksni::blocking::Handle<tray::AppTray>>,
+    pub tray: Option<tray::Tray>,
     /// Running on the Wayland backend (no working client-side hide).
     pub wayland_fallback: bool,
     /// Slot main() reads after the event loop ends: the freshly swapped-in
@@ -385,6 +385,67 @@ fn spawn_poller(tx: mpsc::Sender<Back>, paths: Paths, journal_open: Arc<AtomicBo
             }
         }
     });
+}
+
+/// Account-popup action row: a full-width, focusable menu item with a
+/// logout glyph. Danger rows hover with a red tint.
+fn account_action(ui: &mut egui::Ui, label: &str, danger: bool) -> bool {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
+    if response.hovered() {
+        let fill = if danger {
+            theme::ERROR.gamma_multiply(0.14)
+        } else {
+            ui.visuals().widgets.hovered.weak_bg_fill
+        };
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(9), fill);
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            rect,
+            egui::CornerRadius::same(9),
+            egui::Stroke::new(1.5, theme::accent(ui.visuals())),
+            egui::StrokeKind::Inside,
+        );
+    }
+    let color = if danger {
+        theme::ERROR
+    } else {
+        ui.visuals().strong_text_color()
+    };
+    // Door + arrow: the familiar sign-out glyph, drawn to the nav icon weight.
+    let c = egui::pos2(rect.left() + 18.0, rect.center().y);
+    let stroke = egui::Stroke::new(1.5, color);
+    ui.painter().add(egui::Shape::line(
+        vec![
+            c + egui::vec2(6.0, -6.0),
+            c + egui::vec2(1.0, -6.0),
+            c + egui::vec2(1.0, 6.0),
+            c + egui::vec2(6.0, 6.0),
+        ],
+        stroke,
+    ));
+    ui.painter()
+        .line_segment([c + egui::vec2(1.0, 0.0), c + egui::vec2(12.0, 0.0)], stroke);
+    ui.painter().add(egui::Shape::line(
+        vec![
+            c + egui::vec2(8.0, -4.0),
+            c + egui::vec2(12.0, 0.0),
+            c + egui::vec2(8.0, 4.0),
+        ],
+        stroke,
+    ));
+    ui.painter().text(
+        rect.left_center() + egui::vec2(36.0, 0.0),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(13.0),
+        color,
+    );
+    response.clicked()
+        || (response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
 }
 
 /// Sidebar stat chip: glass mini-card with an accent number and a muted
@@ -711,12 +772,13 @@ impl App {
     /// Push status/tooltip/menu state to the tray (Qt refreshed the icon,
     /// tooltip and action enablement on every status refresh).
     fn tray_sync(&self) {
-        let Some(handle) = &self.tray else { return };
+        let Some(tray) = &self.tray else { return };
         let status_key = self.status_key().to_string();
+        tray.set_pulsing(tray::pulses(&status_key));
         let title = self.side_label().to_string();
         let active = self.active;
         let recent = tray::recent_labels(&self.changes);
-        handle.update(move |t| t.apply(status_key, title, active, recent));
+        tray.update(move |t| t.apply(status_key, title, active, recent));
     }
 
     pub fn action_login(&mut self) {
@@ -1303,9 +1365,22 @@ impl App {
         } else {
             "Checking your account..."
         };
+        let signed_in = self.logged_in()
+            || (self.last_email.is_some()
+                && !matches!(
+                    self.ui_status(),
+                    health::UiStatus::SignedOut
+                        | health::UiStatus::NeedsLogin
+                        | health::UiStatus::SigningIn
+                ));
+        let hint = if signed_in {
+            "Account \u{b7} click to sign out"
+        } else {
+            "Account \u{b7} click to sign in"
+        };
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 46.0), egui::Sense::click());
-        let response = response.on_hover_text("Account \u{b7} click to sign out or sign in");
+        let response = response.on_hover_text(hint);
         // Glass pill: accent-glow edge on hover/focus, presence dot on the
         // avatar, chevron hinting the menu.
         ui.painter().rect_filled(
@@ -1327,26 +1402,13 @@ impl App {
         if response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
-        // Avatar: gradient violet disc with a cyan cap and the initial.
-        let c = egui::pos2(rect.left() + 22.0, rect.center().y);
-        ui.painter().circle_filled(c, 15.0, theme::ACCENT);
-        ui.painter().circle_filled(
-            c + egui::vec2(0.0, -6.0),
-            9.5,
-            theme::CYAN.gamma_multiply(0.45),
-        );
         let ch = email
             .as_deref()
             .and_then(|e| e.chars().next())
             .map(|c| c.to_uppercase().to_string())
             .unwrap_or_else(|| "?".into());
-        ui.painter().text(
-            c,
-            egui::Align2::CENTER_CENTER,
-            ch,
-            egui::FontId::proportional(14.0),
-            egui::Color32::WHITE,
-        );
+        let c = egui::pos2(rect.left() + 22.0, rect.center().y);
+        widgets::avatar(ui, c, 15.0, &ch);
         // Presence dot: the live status colour with a ring.
         let dot = c + egui::vec2(10.0, 10.0);
         ui.painter()
@@ -1373,34 +1435,75 @@ impl App {
             ui.visuals().weak_text_color(),
         );
 
-        let signed_in = self.logged_in()
-            || (self.last_email.is_some()
-                && !matches!(
-                    self.ui_status(),
-                    health::UiStatus::SignedOut
-                        | health::UiStatus::NeedsLogin
-                        | health::UiStatus::SigningIn
-                ));
-        egui::Popup::menu(&response).show(|ui| {
-            ui.set_min_width(140.0);
-            if signed_in {
-                if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new("Sign out").color(theme::ERROR),
-                        )
-                        .frame(false),
-                    )
-                    .clicked()
-                {
-                    self.dialog = Some(Dialog::ConfirmLogout);
+        // Keyboard users can open the menu without a pointer.
+        if response.has_focus()
+            && ui.input(|i| {
+                i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space)
+            })
+        {
+            egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&response));
+        }
+
+        egui::Popup::menu(&response)
+            .gap(8.0)
+            .frame(
+                egui::Frame::popup(ui.style())
+                    .fill(ui.visuals().window_fill)
+                    .stroke(theme::glass_stroke(ui.visuals()))
+                    .corner_radius(egui::CornerRadius::same(14))
+                    .inner_margin(egui::Margin::same(12)),
+            )
+            .show(|ui| {
+                // Pin the width: the full-width CTA would otherwise ask for
+                // the whole screen and stretch the popup across the page.
+                ui.set_width(220.0);
+                ui.horizontal(|ui| {
+                    let (av, _) = ui
+                        .allocate_exact_size(egui::vec2(34.0, 34.0), egui::Sense::hover());
+                    widgets::avatar(ui, av.center(), 16.0, &ch);
+                    ui.add_space(4.0);
+                    ui.vertical(|ui| {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(email.as_deref().unwrap_or(label))
+                                    .strong()
+                                    .size(13.0),
+                            )
+                            .truncate(),
+                        );
+                        ui.add_space(1.0);
+                        ui.horizontal(|ui| {
+                            let (d, _) = ui.allocate_exact_size(
+                                egui::vec2(10.0, 10.0),
+                                egui::Sense::hover(),
+                            );
+                            ui.painter().circle_filled(
+                                d.center(),
+                                4.0,
+                                theme::status_color(self.status_key()),
+                            );
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(self.side_label()).size(11.5).weak(),
+                                )
+                                .truncate(),
+                            );
+                        });
+                    });
+                });
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(6.0);
+                if signed_in {
+                    if account_action(ui, "Sign out", true) {
+                        self.dialog = Some(Dialog::ConfirmLogout);
+                        ui.close();
+                    }
+                } else if widgets::primary_button_full(ui, "Sign in") {
+                    self.action_login();
                     ui.close();
                 }
-            } else if ui.button("Sign in").clicked() {
-                self.action_login();
-                ui.close();
-            }
-        });
+            });
     }
 
     fn central(&mut self, ui: &mut egui::Ui) {

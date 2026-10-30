@@ -67,6 +67,64 @@ pub fn primary_button_hint(ui: &mut egui::Ui, text: &str, hint: &str) -> bool {
     response.clicked()
 }
 
+/// Full-width primary CTA, for popups and empty states. Painted rather than
+/// stretched from a `Button` so the label stays centered.
+pub fn primary_button_full(ui: &mut egui::Ui, text: &str) -> bool {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
+    let radius = theme::pill();
+    let fill = if response.hovered() {
+        theme::ACCENT.gamma_multiply(1.12)
+    } else {
+        theme::ACCENT
+    };
+    ui.painter().rect_filled(rect, radius, fill);
+    let top = egui::Rect::from_min_max(
+        rect.min,
+        egui::pos2(rect.max.x, rect.min.y + rect.height() * 0.55),
+    );
+    ui.painter()
+        .rect_filled(top, radius, theme::CYAN.gamma_multiply(0.30));
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        text,
+        egui::FontId::proportional(13.0),
+        egui::Color32::WHITE,
+    );
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            rect,
+            radius,
+            egui::Stroke::new(1.5, egui::Color32::from_white_alpha(220)),
+            egui::StrokeKind::Inside,
+        );
+    }
+    response.clicked()
+        || (response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+}
+
+/// Round identity avatar: accent disc, cyan cap and the initial.
+pub fn avatar(ui: &egui::Ui, center: egui::Pos2, radius: f32, initial: &str) {
+    let painter = ui.painter();
+    painter.circle_filled(center, radius, theme::ACCENT);
+    painter.circle_filled(
+        center + egui::vec2(0.0, -radius * 0.4),
+        radius * 0.63,
+        theme::CYAN.gamma_multiply(0.45),
+    );
+    painter.text(
+        center,
+        egui::Align2::CENTER_CENTER,
+        initial,
+        egui::FontId::proportional(radius * 0.93),
+        egui::Color32::WHITE,
+    );
+}
+
 pub fn secondary_button_hint(ui: &mut egui::Ui, text: &str, hint: &str) -> bool {
     let response = ui.add(egui::Button::new(text).corner_radius(theme::pill()));
     if !hint.is_empty() {

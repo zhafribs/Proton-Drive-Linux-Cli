@@ -7,23 +7,32 @@
 use crate::journal::ChangeRow;
 use crate::ui::Back;
 use crate::util::rel_time;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 
-/// Qt's tray dot palette (ACCENT / SUCCESS / WARNING / ERROR / MUTED_GRAY).
-fn dot_color(status_key: &str) -> [u8; 3] {
+/// What the tray icon should communicate.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum IconMode {
+    /// Synced: the plain app icon.
+    Normal,
+    /// Work in progress: fade the icon in and out.
+    Pulse,
+    /// Not syncing, paused, signed out or an error: app icon with an X.
+    Error,
+}
+
+pub fn icon_mode(status_key: &str) -> IconMode {
     match status_key {
-        "synced" => [0x16, 0xa3, 0x4a],
-        "syncing" => [0x6d, 0x4a, 0xff],
-        "paused" => [0xd9, 0x77, 0x06],
-        // A lost session is recoverable - warn, do not alarm.
-        "needs_login" => [0xd9, 0x77, 0x06],
-        "signing_in" => [0x6d, 0x4a, 0xff],
-        // No account / engine stopped: neutral, not an error.
-        "signed_out" | "engine_stopped" => [0x9c, 0xa3, 0xaf],
-        "starting" => [0x25, 0x63, 0xeb],
-        "error" => [0xdc, 0x26, 0x26],
-        _ => [0x9c, 0xa3, 0xaf],
+        "synced" => IconMode::Normal,
+        // Starting, checking and signing in are still working states.
+        "syncing" | "starting" | "signing_in" | "unknown" => IconMode::Pulse,
+        _ => IconMode::Error,
     }
+}
+
+pub fn pulses(status_key: &str) -> bool {
+    icon_mode(status_key) == IconMode::Pulse
 }
 
 fn smooth(edge0: f32, edge1: f32, x: f32) -> f32 {
@@ -65,14 +74,11 @@ fn alpha_bounds(rgba: &[u8], w: usize, h: usize) -> Option<(usize, usize, usize,
 /// and scale that content to 72x66, so the cloud fills the slot; the badge
 /// stays bottom-right in the remaining strip.
 /// Returns ARGB32 bytes, which is what `ksni::Icon` wants.
-pub fn compose_icon(base_rgba: &[u8], base_w: usize, status_key: &str) -> Vec<u8> {
+pub fn compose_icon(base_rgba: &[u8], base_w: usize, status_key: &str, pulse: f32) -> Vec<u8> {
     const C: usize = 72;
     const ICON_W: usize = 72;
     const ICON_H: usize = 66;
-    const DOT: f32 = 56.0;
-    const FILL: f32 = 12.0;
-    const RING: f32 = 16.0;
-    let color = dot_color(status_key);
+    let mode = icon_mode(status_key);
     let mut canvas: Vec<[f32; 4]> = vec![[0.0; 4]; C * C]; // premultiplied RGBA
 
     let base_h = if base_w > 0 && base_rgba.len() >= base_w * base_w * 4 {
@@ -117,7 +123,6 @@ pub fn compose_icon(base_rgba: &[u8], base_w: usize, status_key: &str) -> Vec<u8
         }
     }
 
-    // Status dot over the base.
     let mut over = |idx: usize, rgb: [u8; 3], a: f32| {
         if a <= 0.0 {
             return;
@@ -129,34 +134,66 @@ pub fn compose_icon(base_rgba: &[u8], base_w: usize, status_key: &str) -> Vec<u8
         dst[2] = rgb[2] as f32 / 255.0 * a + dst[2] * ia;
         dst[3] = a + dst[3] * ia;
     };
-    for y in 0..C {
-        for x in 0..C {
-            let d = ((x as f32 + 0.5 - DOT).powi(2) + (y as f32 + 0.5 - DOT).powi(2)).sqrt();
-            if d > RING + 0.5 {
-                continue;
+
+    // Error badge: a red disc with a white X over the lower-right corner.
+    // There is no status dot any more; this is the only badge.
+    if mode == IconMode::Error {
+        const BX: f32 = 54.0;
+        const BY: f32 = 54.0;
+        const BR: f32 = 17.0;
+        const ARM: f32 = 7.5;
+        for y in 0..C {
+            for x in 0..C {
+                let px = x as f32 + 0.5;
+                let py = y as f32 + 0.5;
+                let d = ((px - BX).powi(2) + (py - BY).powi(2)).sqrt();
+                let idx = y * C + x;
+                let disc = 1.0 - smooth(BR - 0.5, BR + 0.5, d);
+                if disc > 0.0 {
+                    over(idx, [0xdc, 0x26, 0x26], disc);
+                }
+                if d <= BR - 2.0 {
+                    let a = segment_distance(px, py, BX - ARM, BY - ARM, BX + ARM, BY + ARM);
+                    let b = segment_distance(px, py, BX + ARM, BY - ARM, BX - ARM, BY + ARM);
+                    let x = 1.0 - smooth(2.1, 2.7, a.min(b));
+                    if x > 0.0 {
+                        over(idx, [0xff; 3], x);
+                    }
+                }
             }
-            let idx = y * C + x;
-            // Brush fill first (visible to r=FILL), then the white pen ring.
-            let fill = 1.0 - smooth(FILL - 0.5, FILL + 0.5, d);
-            let ring = (1.0 - smooth(RING - 0.5, RING + 0.5, d))
-                * smooth(FILL - 0.5, FILL + 0.5, d);
-            over(idx, color, fill);
-            over(idx, [0xff; 3], ring);
         }
     }
 
-    // Unpremultiply into ARGB32.
+    // Unpremultiply into ARGB32. The pulse dims the whole icon; the badge
+    // only exists in Error mode, which never pulses.
+    let dim = if mode == IconMode::Pulse {
+        0.35 + 0.65 * (0.5 - 0.5 * (std::f32::consts::TAU * pulse.clamp(0.0, 1.0)).cos())
+    } else {
+        1.0
+    };
     let mut out = vec![0u8; C * C * 4];
     for (i, px) in canvas.iter().enumerate() {
         let a = px[3];
         let (r, g, b) = (px[0] / a.max(1e-6), px[1] / a.max(1e-6), px[2] / a.max(1e-6));
         let o = i * 4;
-        out[o] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
+        out[o] = (a * dim * 255.0).round().clamp(0.0, 255.0) as u8;
         out[o + 1] = (r * 255.0).round().clamp(0.0, 255.0) as u8;
         out[o + 2] = (g * 255.0).round().clamp(0.0, 255.0) as u8;
         out[o + 3] = (b * 255.0).round().clamp(0.0, 255.0) as u8;
     }
     out
+}
+
+/// Shortest distance from a point to a line segment (for the badge X).
+fn segment_distance(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
+    let (dx, dy) = (bx - ax, by - ay);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 <= f32::EPSILON {
+        0.0
+    } else {
+        (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0)
+    };
+    ((px - (ax + t * dx)).powi(2) + (py - (ay + t * dy)).powi(2)).sqrt()
 }
 
 /// "Recent files" entries: last 5 changes, newest first, Qt's label shape
@@ -178,6 +215,7 @@ pub fn recent_labels(changes: &[ChangeRow]) -> Vec<(String, String)> {
 
 pub struct AppTray {
     status_key: String,
+    pulse: f32,
     title: String,
     active: bool,
     recent: Vec<(String, String)>,
@@ -239,7 +277,7 @@ impl ksni::Tray for AppTray {
         vec![ksni::Icon {
             width: 72,
             height: 72,
-            data: compose_icon(&self.base_rgba, self.base_w, &self.status_key),
+            data: compose_icon(&self.base_rgba, self.base_w, &self.status_key, self.pulse),
         }]
     }
 
@@ -309,6 +347,22 @@ impl ksni::Tray for AppTray {
     }
 }
 
+/// A live tray handle plus the flag the pulse thread watches.
+pub struct Tray {
+    handle: ksni::blocking::Handle<AppTray>,
+    pulsing: Arc<AtomicBool>,
+}
+
+impl Tray {
+    pub fn update<R>(&self, f: impl FnOnce(&mut AppTray) -> R) -> Option<R> {
+        self.handle.update(f)
+    }
+
+    pub fn set_pulsing(&self, on: bool) {
+        self.pulsing.store(on, Ordering::Relaxed);
+    }
+}
+
 /// Build and start the tray. Returns `None` when the desktop has no
 /// StatusNotifierWatcher (Qt's `isSystemTrayAvailable() == False` - the app
 /// keeps working, just without a tray).
@@ -316,10 +370,11 @@ pub fn spawn(
     tx: Sender<Back>,
     base_rgba: Vec<u8>,
     base_w: usize,
-) -> Option<ksni::blocking::Handle<AppTray>> {
+) -> Option<Tray> {
     use ksni::blocking::TrayMethods;
     let tray = AppTray {
         status_key: "unknown".into(),
+        pulse: 1.0,
         title: "Checking your files...".into(),
         active: false,
         recent: Vec::new(),
@@ -327,13 +382,35 @@ pub fn spawn(
         base_w,
         tx,
     };
-    match tray.spawn() {
-        Ok(handle) => Some(handle),
+    let handle = match tray.spawn() {
+        Ok(handle) => handle,
         Err(e) => {
             eprintln!("tray unavailable: {e}");
-            None
+            return None;
         }
-    }
+    };
+
+    // The tray host only re-reads the icon on `update`, so the fade needs its
+    // own clock. It runs only while the status is a pulsing one; otherwise
+    // the loop just checks an atomic.
+    let pulsing = Arc::new(AtomicBool::new(false));
+    let pulse_handle = handle.clone();
+    let pulse_flag = pulsing.clone();
+    std::thread::spawn(move || {
+        let start = std::time::Instant::now();
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            if !pulse_flag.load(Ordering::Relaxed) {
+                continue;
+            }
+            let phase = (start.elapsed().as_secs_f32() / 2.0) % 1.0;
+            if pulse_handle.update(|t| t.pulse = phase).is_none() {
+                break;
+            }
+        }
+    });
+
+    Some(Tray { handle, pulsing })
 }
 
 #[cfg(test)]
@@ -341,26 +418,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dot_center_is_status_color_in_argb() {
-        let argb = compose_icon(&[], 0, "synced");
-        assert_eq!(argb.len(), 72 * 72 * 4);
-        // Pixel (56,56) sits on the dot center: opaque green, A then RGB.
-        let o = (56 * 72 + 56) * 4;
-        assert_eq!(&argb[o..o + 4], &[0xff, 0x16, 0xa3, 0x4a]);
+    fn icon_modes_match_the_sync_state() {
+        assert_eq!(icon_mode("synced"), IconMode::Normal);
+        assert_eq!(icon_mode("syncing"), IconMode::Pulse);
+        assert_eq!(icon_mode("starting"), IconMode::Pulse);
+        assert_eq!(icon_mode("signing_in"), IconMode::Pulse);
+        for bad in ["error", "needs_login", "paused", "signed_out", "engine_stopped"] {
+            assert_eq!(icon_mode(bad), IconMode::Error, "{bad}");
+        }
     }
 
     #[test]
-    fn dot_fill_and_white_ring_are_large_enough_to_read() {
-        let argb = compose_icon(&[], 0, "syncing");
-        // 11.5px out: still the purple fill (the old dot ended at 7).
-        let o = (56 * 72 + 67) * 4;
-        assert_eq!(&argb[o..o + 4], &[0xff, 0x6d, 0x4a, 0xff]);
-        // 15.5px out: the white pen ring.
-        let o = (56 * 72 + 71) * 4;
-        assert_eq!(&argb[o..o + 4], &[0xff, 0xff, 0xff, 0xff]);
-        // Far corner: beyond dot and (empty) base -> fully transparent.
-        let o = (71 * 72 + 71) * 4;
+    fn synced_icon_has_no_badge() {
+        let argb = compose_icon(&[], 0, "synced", 1.0);
+        let o = (56 * 72 + 56) * 4;
         assert_eq!(&argb[o..o + 4], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn error_icon_draws_a_white_x_on_red() {
+        let argb = compose_icon(&[], 0, "error", 1.0);
+        // The two strokes cross at the badge center: white.
+        let o = (54 * 72 + 54) * 4;
+        assert_eq!(&argb[o..o + 4], &[0xff, 0xff, 0xff, 0xff]);
+        // Left of the arms, still on the red disc.
+        let o = (54 * 72 + 40) * 4;
+        assert_eq!(&argb[o..o + 4], &[0xff, 0xdc, 0x26, 0x26]);
+    }
+
+    #[test]
+    fn pulse_fades_the_whole_icon() {
+        let base = vec![255u8; 64 * 64 * 4];
+        let full = compose_icon(&base, 64, "syncing", 0.5);
+        let dim = compose_icon(&base, 64, "syncing", 0.0);
+        let o = 0;
+        assert_eq!(full[o], 0xff, "pulse peak should be opaque");
+        assert!(dim[o] < 0x60, "pulse trough should be faded: {}", dim[o]);
+        assert_eq!(&full[o + 1..o + 4], &[0xff, 0xff, 0xff]);
     }
 
     #[test]
@@ -368,7 +462,7 @@ mod tests {
         // A solid 64px base fills 72x66, leaving only the strip below for the
         // badge.
         let base = vec![255u8; 64 * 64 * 4];
-        let argb = compose_icon(&base, 64, "synced");
+        let argb = compose_icon(&base, 64, "synced", 1.0);
         for (x, y) in [(0, 0), (71, 0), (0, 65), (71, 65)] {
             let o = (y * 72 + x) * 4;
             assert_eq!(&argb[o..o + 4], &[0xff, 0xff, 0xff, 0xff], "({x},{y})");
@@ -389,7 +483,7 @@ mod tests {
                 base[i..i + 4].copy_from_slice(&[0xff, 0xff, 0xff, 0xff]);
             }
         }
-        let argb = compose_icon(&base, 64, "synced");
+        let argb = compose_icon(&base, 64, "synced", 1.0);
         for (x, y) in [(0, 0), (71, 0), (0, 65), (71, 65)] {
             let o = (y * 72 + x) * 4;
             assert_eq!(&argb[o..o + 4], &[0xff, 0xff, 0xff, 0xff], "({x},{y})");

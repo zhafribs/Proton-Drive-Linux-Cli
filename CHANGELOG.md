@@ -1,3 +1,13 @@
+## 3.16.82 — 2026-10-30
+
+- **Tray icon states, without the dot.** A synced app shows the plain icon;
+  while syncing it fades in and out; paused, signed out, engine-stopped and
+  error states show a red X badge.
+- **Account menu restyled.** The bottom-left account pill opens a compact
+  glass card with the avatar, email and live status, a proper sign-out row,
+  or a centered gradient Sign in button. It opens from the keyboard and no
+  longer stretches across the page.
+
 ## 3.16.81 — 2026-10-30
 
 - **The tray opens the window floating on Hyprland.** Showing the app from
