@@ -1973,13 +1973,13 @@ impl eframe::App for App {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
 
-        // Remember the width for the next start (persist after the drag ends).
+        // Remember the width for the next start (persist only after the drag
+        // ends, and never feed the live width back into `default_size` - that
+        // feedback made the pane fight the pointer).
         let w = prect.width();
-        if (w - self.nav_width).abs() > 0.5 {
+        if (w - self.nav_width).abs() > 0.5 && !ui.input(|i| i.pointer.any_down()) {
             self.nav_width = w;
-            if !ui.input(|i| i.pointer.any_down()) {
-                self.prefs.set_nav_width(w);
-            }
+            self.prefs.set_nav_width(w);
         }
 
         self.central(ui);

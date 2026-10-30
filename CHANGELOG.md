@@ -1,3 +1,9 @@
+## 3.16.78 — 2026-10-30
+
+- **Sidebar drag fix.** The pane no longer snaps back to its maximum: the
+  live width is only persisted after the pointer is released, so the panel
+  stops fighting the drag.
+
 ## 3.16.77 — 2026-10-30
 
 - Version bump only — forces a fresh in-app update so the 3.16.76 sidebar
