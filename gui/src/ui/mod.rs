@@ -1219,7 +1219,7 @@ impl App {
                     ui.add_space(2.0);
                     ui.label(egui::RichText::new("Independent community edition").size(11.5).weak());
                 });
-            ui.add_space(6.0);
+            ui.add_space(12.0);
             if let Some((files, bytes)) = self.stats {
                 let w = ((ui.available_width() - 8.0) / 2.0).max(60.0);
                 ui.horizontal(|ui| {

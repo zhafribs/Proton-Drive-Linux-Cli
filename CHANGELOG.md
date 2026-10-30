@@ -1,3 +1,8 @@
+## 3.16.75 — 2026-10-30
+
+- More breathing room between the sidebar stat chips and the status card
+  below them.
+
 ## 3.16.74 — 2026-10-30
 
 - **Sidebar footer redesign.** The file count and disk usage are now two
