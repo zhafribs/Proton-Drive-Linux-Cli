@@ -4,6 +4,19 @@ use chrono::{DateTime, FixedOffset, Utc};
 
 pub use proton_core::time::parse_iso;
 
+/// "1234567" -> "1,234,567" (grouped thousands, for stat readouts).
+pub fn thousands(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 /// "just now" / "3 min ago" / "2 h ago" / "1 d ago" - PyQt `rel_time`.
 pub fn rel_time(dt: Option<DateTime<FixedOffset>>) -> String {
     let Some(dt) = dt else { return String::new() };
@@ -99,4 +112,13 @@ mod tests {
         assert!(!is_newer("3.16.27-rust", "3.16.26"));
         assert_eq!(parse_version("3.16.27"), parse_version("3.16.27-rust"));
     }
+    #[test]
+    fn thousands_groups_digits() {
+        assert_eq!(thousands(0), "0");
+        assert_eq!(thousands(999), "999");
+        assert_eq!(thousands(1000), "1,000");
+        assert_eq!(thousands(1037), "1,037");
+        assert_eq!(thousands(1234567), "1,234,567");
+    }
+
 }

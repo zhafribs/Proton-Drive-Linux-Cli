@@ -11,7 +11,7 @@ pub mod widgets;
 
 use crate::{
     cli, conf, health, journal, notify, paths::Paths, prefs, release, service,
-    system_theme, theme, tray,
+    system_theme, theme, tray, util,
 };
 use eframe::egui;
 use std::collections::BTreeMap;
@@ -383,6 +383,26 @@ fn spawn_poller(tx: mpsc::Sender<Back>, paths: Paths, journal_open: Arc<AtomicBo
             }
         }
     });
+}
+
+/// Sidebar stat chip: glass mini-card with an accent number and a muted
+/// label ("1,037 / files", "1.1 GB / on disk").
+fn stat_chip(ui: &mut egui::Ui, value: &str, label: &str, w: f32) {
+    egui::Frame::new()
+        .fill(theme::glass_fill(ui.visuals()))
+        .stroke(theme::glass_stroke(ui.visuals()))
+        .corner_radius(egui::CornerRadius::same(12))
+        .inner_margin(egui::Margin::symmetric(12, 8))
+        .show(ui, |ui| {
+            ui.set_min_width((w - 24.0).max(30.0));
+            ui.label(
+                egui::RichText::new(value)
+                    .strong()
+                    .size(15.0)
+                    .color(theme::accent(ui.visuals())),
+            );
+            ui.label(egui::RichText::new(label).size(10.5).weak());
+        });
 }
 
 impl App {
@@ -1172,7 +1192,7 @@ impl App {
         egui::ScrollArea::vertical()
             .id_salt("nav-scroll")
             .auto_shrink([false, false])
-            .max_height((ui.available_height() - 150.0).max(130.0))
+            .max_height((ui.available_height() - 172.0).max(130.0))
             .show(ui, |ui| cloud::nav_ui(self, ui));
 
         ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
@@ -1201,14 +1221,13 @@ impl App {
                 });
             ui.add_space(6.0);
             if let Some((files, bytes)) = self.stats {
-                ui.label(
-                    egui::RichText::new(format!(
-                        "{files} files \u{b7} {}",
-                        service::human_size(bytes)
-                    ))
-                    .size(12.0)
-                    .weak(),
-                );
+                let w = ((ui.available_width() - 8.0) / 2.0).max(60.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    stat_chip(ui, &util::thousands(files), "files", w);
+                    ui.add_space(8.0);
+                    stat_chip(ui, &service::human_size(bytes), "on disk", w);
+                });
             }
         });
     }
@@ -1230,19 +1249,37 @@ impl App {
             "Checking your account..."
         };
         let (rect, response) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 46.0), egui::Sense::click());
         let response = response.on_hover_text("Account \u{b7} click to sign out or sign in");
+        // Glass pill: accent-glow edge on hover/focus, presence dot on the
+        // avatar, chevron hinting the menu.
+        ui.painter().rect_filled(
+            rect,
+            egui::CornerRadius::same(12),
+            theme::glass_fill(ui.visuals()),
+        );
+        let pill_stroke = if response.hovered() || response.has_focus() {
+            egui::Stroke::new(1.0, theme::accent(ui.visuals()).gamma_multiply(0.8))
+        } else {
+            theme::glass_stroke(ui.visuals())
+        };
+        ui.painter().rect_stroke(
+            rect,
+            egui::CornerRadius::same(12),
+            pill_stroke,
+            egui::StrokeKind::Inside,
+        );
         if response.hovered() {
-            ui.painter().rect_filled(
-                rect.shrink(2.0),
-                egui::CornerRadius::same(8),
-                ui.visuals().widgets.hovered.weak_bg_fill,
-            );
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
-        // Accent initial circle, like Home's account card.
-        let c = egui::pos2(rect.left() + 14.0, rect.center().y);
-        ui.painter().circle_filled(c, 11.0, theme::ACCENT.gamma_multiply(0.25));
+        // Avatar: gradient violet disc with a cyan cap and the initial.
+        let c = egui::pos2(rect.left() + 22.0, rect.center().y);
+        ui.painter().circle_filled(c, 15.0, theme::ACCENT);
+        ui.painter().circle_filled(
+            c + egui::vec2(0.0, -6.0),
+            9.5,
+            theme::CYAN.gamma_multiply(0.45),
+        );
         let ch = email
             .as_deref()
             .and_then(|e| e.chars().next())
@@ -1252,21 +1289,30 @@ impl App {
             c,
             egui::Align2::CENTER_CENTER,
             ch,
-            egui::FontId::proportional(12.0),
-            theme::ACCENT,
+            egui::FontId::proportional(14.0),
+            egui::Color32::WHITE,
+        );
+        // Presence dot: the live status colour with a ring.
+        let dot = c + egui::vec2(10.0, 10.0);
+        ui.painter()
+            .circle_filled(dot, 4.5, theme::status_color(self.status_key()));
+        ui.painter().circle_stroke(
+            dot,
+            4.5,
+            egui::Stroke::new(1.5, ui.visuals().panel_fill),
         );
         ui.painter().text(
-            rect.left_center() + egui::vec2(34.0, 0.0),
+            rect.left_center() + egui::vec2(48.0, 0.0),
             egui::Align2::LEFT_CENTER,
-            widgets::elide(label, 22),
-            egui::FontId::proportional(13.0),
-            ui.visuals().text_color(),
+            widgets::elide(label, 20),
+            egui::FontId::proportional(13.5),
+            ui.visuals().strong_text_color(),
         );
         ui.painter().text(
-            rect.right_center() + egui::vec2(-10.0, 0.0),
+            rect.right_center() + egui::vec2(-12.0, 0.0),
             egui::Align2::RIGHT_CENTER,
-            "\u{22ef}",
-            egui::FontId::proportional(15.0),
+            "\u{25be}",
+            egui::FontId::proportional(12.0),
             ui.visuals().weak_text_color(),
         );
 

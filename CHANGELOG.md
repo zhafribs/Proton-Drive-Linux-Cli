@@ -1,3 +1,11 @@
+## 3.16.74 — 2026-10-30
+
+- **Sidebar footer redesign.** The file count and disk usage are now two
+  glass stat chips with accent numbers (`1,037 files` / `1.1 GB on disk`),
+  and the account row is a glass pill with a gradient violet→cyan avatar, a
+  live status presence dot and a chevron; its edge glows on hover and
+  keyboard focus.
+
 ## 3.16.73 — 2026-10-30
 
 - **Aurora Glass redesign.** The app now wears a living dark interface:
