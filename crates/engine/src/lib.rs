@@ -6,6 +6,7 @@
 
 pub mod action;
 pub mod cli;
+pub mod events;
 pub mod execute;
 pub mod filter;
 pub mod firstsync;

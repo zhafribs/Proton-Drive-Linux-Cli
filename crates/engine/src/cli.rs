@@ -91,6 +91,13 @@ pub struct Cli {
     bin: PathBuf,
 }
 
+#[cfg(test)]
+impl Cli {
+    pub fn for_test(bin: std::path::PathBuf) -> Self {
+        Self { bin }
+    }
+}
+
 impl Cli {
     pub fn new() -> Result<Self> {
         let bin = bin().ok_or_else(|| anyhow!("proton-drive not found (set PROTON_DRIVE_BIN or put it on PATH)"))?;

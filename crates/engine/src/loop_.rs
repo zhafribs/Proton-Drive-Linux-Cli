@@ -89,14 +89,25 @@ pub fn run_loop() -> Result<()> {
         }
     });
 
-    // Fast remote fingerprint watcher (the official CLI has no event stream).
-    crate::push::start(
+    // Primary: Proton's real event stream with the CLI's own keyring
+    // session. If that is unavailable, fall back to the 3 s fingerprint
+    // watcher; the interval remains the final fallback.
+    let event_watch = crate::events::start(
         cli.clone(),
         remote_root.clone(),
         wake.clone(),
         wake_event.clone(),
         wake_mutex.clone(),
     );
+    if event_watch.is_none() {
+        crate::push::start(
+            cli.clone(),
+            remote_root.clone(),
+            wake.clone(),
+            wake_event.clone(),
+            wake_mutex.clone(),
+        );
+    }
 
     let mut last_cycle = Instant::now();
     let mut first = true;
@@ -107,9 +118,27 @@ pub fn run_loop() -> Result<()> {
             wait_for_cycle(&wake, &wake_event, &wake_mutex, deadline);
         }
         first = false;
-        wake.store(false, std::sync::atomic::Ordering::Relaxed);
+        let scopes = match &event_watch {
+            Some(watch) => watch.take(&wake),
+            None => {
+                wake.store(false, std::sync::atomic::Ordering::Relaxed);
+                Default::default()
+            }
+        };
+        let push_ctx = event_watch.as_ref().map(|watch| crate::events::PushContext {
+            pending: &scopes,
+            volume: &watch.volume,
+            root_uid: &watch.root_uid,
+        });
         let cycle_start = Instant::now();
-        if let Err(err) = run_once_cycle(&cli, &local_root, &remote_root, &filter, propagate_deletes) {
+        if let Err(err) = run_once_cycle(
+            &cli,
+            &local_root,
+            &remote_root,
+            &filter,
+            propagate_deletes,
+            push_ctx.as_ref(),
+        ) {
             let message = format!("{err:#}");
             let status = if proton_core::health::is_login_error(&message) {
                 "needs_login"
@@ -128,7 +157,14 @@ pub fn run_loop() -> Result<()> {
     }
 }
 
-pub fn run_once_cycle(cli: &Cli, local_root: &str, remote_root: &str, filter: &Filter, propagate_deletes: bool) -> Result<()> {
+pub fn run_once_cycle(
+    cli: &Cli,
+    local_root: &str,
+    remote_root: &str,
+    filter: &Filter,
+    propagate_deletes: bool,
+    push: Option<&crate::events::PushContext<'_>>,
+) -> Result<()> {
     let t0 = SystemTime::now();
     let started = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
     crate::health::write_health(&Health {
@@ -154,6 +190,15 @@ pub fn run_once_cycle(cli: &Cli, local_root: &str, remote_root: &str, filter: &F
         // the tree on disk changed: plan against what actually landed
         local = scan_local(Path::new(local_root), filter);
         crate::scan::RemoteScan { tree: out.tree, full: true }
+    } else if let Some(push) = push {
+        match scoped_remote(cli, remote_root, filter, push) {
+            Ok(Some(scan)) => scan,
+            Ok(None) => scan_remote(cli, remote_root, filter)?,
+            Err(err) => {
+                eprintln!("push: scoped refresh failed: {err:#}; full walk");
+                scan_remote(cli, remote_root, filter)?
+            }
+        }
     } else {
         scan_remote(cli, remote_root, filter)?
     };
@@ -174,28 +219,60 @@ pub fn run_once_cycle(cli: &Cli, local_root: &str, remote_root: &str, filter: &F
         downloaded.extend(d);
     }
 
-    // Only a remote-side change needs the cloud walked again; downloads,
-    // local trashes and local moves leave it as it was.
-    let remote_touched = result.actions.iter().any(|a| {
-        matches!(
-            a,
-            Action::Up { .. } | Action::TrashRemote { .. } | Action::MvRemote { .. } | Action::Conflict { .. }
-        )
-    });
     let local2 = if result.actions.is_empty() && !first {
         local.clone()
     } else {
         scan_local(Path::new(local_root), filter)
     };
-    let remote2 = if remote_touched {
-        let out = scan_remote(cli, remote_root, filter)?;
-        if out.full {
-            publish_snapshot(cli, remote_root, filter, &out.tree);
+    // Re-list only the folders this cycle changed (uploads, trashes, moves)
+    // instead of re-walking the whole cloud after every upload. This is the
+    // Python 3.13.2 scoped post-upload refresh.
+    let mut remote2 = remote.clone();
+    let mut parents: BTreeSet<String> = BTreeSet::new();
+    for action in &result.actions {
+        let mut sides: Vec<&str> = Vec::new();
+        match action {
+            Action::Dl { .. } | Action::TrashLocal { .. } | Action::MvLocal { .. } => continue,
+            Action::MvRemote { old, new } => {
+                sides.push(old);
+                sides.push(new);
+            }
+            Action::Up { rel, .. }
+            | Action::TrashRemote { rel, .. }
+            | Action::Conflict { rel, .. } => sides.push(rel),
         }
-        out.tree
-    } else {
-        remote.clone()
-    };
+        for side in sides {
+            let mut parent = side.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
+            while !parent.is_empty() && !remote.contains_key(parent) {
+                parent = parent.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
+            }
+            parents.insert(parent.to_string());
+        }
+    }
+    if !parents.is_empty() {
+        let scoped = crate::cli::with_cli_lock(|| -> Result<()> {
+            for parent in &parents {
+                crate::scan::apply_scope(cli, remote_root, filter, &mut remote2, parent)?;
+            }
+            publish_snapshot(cli, remote_root, filter, &remote2);
+            Ok(())
+        });
+        if let Err(err) = scoped {
+            eprintln!("post-cycle refresh failed: {err:#}; full walk");
+            let out = scan_remote(cli, remote_root, filter)?;
+            if out.full {
+                publish_snapshot(cli, remote_root, filter, &out.tree);
+            }
+            remote2 = out.tree;
+        }
+    } else if !result.actions.is_empty() {
+        // Only downloads/local changes: the remote tree is unchanged, but the
+        // cached fingerprint still needs to be refreshed for the next peek.
+        let _ = crate::cli::with_cli_lock(|| -> Result<()> {
+            publish_snapshot(cli, remote_root, filter, &remote2);
+            Ok(())
+        });
+    }
 
     let acted: BTreeSet<String> = result.actions.iter().map(|a| a.rel().to_string()).collect();
     let options = RefreshOptions {
@@ -230,6 +307,42 @@ pub fn run_once_cycle(cli: &Cli, local_root: &str, remote_root: &str, filter: &F
 /// paint. Only an unfiltered walk is written: a selective-sync snapshot would
 /// omit folders the user can still browse in the cloud, and the GUI treats the
 /// snapshot as the whole folder list.
+/// Refresh only the folders named by the event stream, reusing the rest of
+/// the cached snapshot. Returns None when the snapshot cannot be trusted;
+/// the caller then falls back to the normal fingerprint/full walk.
+fn scoped_remote(
+    cli: &Cli,
+    remote_root: &str,
+    filter: &Filter,
+    push: &crate::events::PushContext<'_>,
+) -> Result<Option<crate::scan::RemoteScan>> {
+    let path = state_dir().join("remote-snapshot.json");
+    let Some(snapshot) = proton_core::snapshot::read(&path) else {
+        return Ok(None);
+    };
+    if snapshot.sig != filter.signature(remote_root) || snapshot.tree.is_empty() {
+        return Ok(None);
+    }
+    let mut tree = snapshot.view();
+    let (rels, unknown) = crate::events::resolve_scopes(
+        push.pending,
+        &tree,
+        push.volume,
+        push.root_uid,
+    );
+    if unknown > 0 || rels.is_empty() {
+        return Ok(None);
+    }
+    crate::cli::with_cli_lock(|| -> Result<()> {
+        for rel in &rels {
+            crate::scan::apply_scope(cli, remote_root, filter, &mut tree, rel)?;
+        }
+        publish_snapshot(cli, remote_root, filter, &tree);
+        Ok(())
+    })?;
+    Ok(Some(crate::scan::RemoteScan { tree, full: false }))
+}
+
 fn publish_snapshot(
     cli: &Cli,
     remote_root: &str,

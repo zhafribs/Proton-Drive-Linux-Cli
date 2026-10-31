@@ -68,10 +68,11 @@ tests/test_sync_*.py    parity reference for engine behaviour
 - Shadow-run both engines on a test account and diff plans/logs/health for at
   least a week, including restarts and a lost session.
 
-### Phase 4 - push listener
+### Phase 4 - push listener (done in 3.16.86)
 
-- Port the Proton event-stream poller (Secret Service session via `zbus`,
-  HTTP via `ureq`) and cursor persistence. Keep interval fallback.
+- Live event stream via the official CLI's Secret Service session (`zbus`),
+  HTTP (`ureq`) and the CLI's shared `events.json` cursor. Events re-list only
+  the changed folder. The fingerprint watcher and interval remain fallbacks.
 
 ### Phase 5 - cutover (done)
 

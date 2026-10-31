@@ -57,7 +57,14 @@ fn run() -> Result<()> {
             let propagate_deletes = values.get("PROTON_SYNC_DELETES").map(|v| v != "0").unwrap_or(true);
             let cli = Cli::new()?;
             let filter = Filter::new(&subfolders, &exclude);
-            proton_engine::loop_::run_once_cycle(&cli, &local_root, &remote_root, &filter, propagate_deletes)
+            proton_engine::loop_::run_once_cycle(
+            &cli,
+            &local_root,
+            &remote_root,
+            &filter,
+            propagate_deletes,
+            None,
+        )
         }
         Some("--loop") | Some("loop") => run_loop(),
         Some("help") | Some("--help") | Some("-h") | None => {

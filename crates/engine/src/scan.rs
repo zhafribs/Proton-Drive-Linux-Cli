@@ -81,7 +81,6 @@ fn mtime_ns(meta: &fs::Metadata) -> i64 {
 use crate::cli::{self, Cli};
 use anyhow::Result;
 use proton_core::snapshot::{RemoteEntry, RemoteTree};
-use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
 /// Result of a remote scan: the tree plus whether a full walk ran (false =
@@ -93,7 +92,7 @@ pub struct RemoteScan {
 
 /// `fs size` fingerprint of the remote root: `[size, numberOfDescendants]`.
 /// One CLI call replaces a per-folder walk when it matches the last one.
-fn remote_fp(cli: &Cli, remote_root: &str) -> Result<Vec<i64>> {
+pub fn remote_fingerprint(cli: &Cli, remote_root: &str) -> Result<Vec<i64>> {
     let v = cli.run_json(&["fs", "size", remote_root], false)?;
     let size = v.get("size").and_then(|s| s.as_i64()).unwrap_or(-1);
     let descendants = v
@@ -126,7 +125,7 @@ fn try_cached_tree(cli: &Cli, remote_root: &str, filter: &Filter) -> Result<Opti
     let Some(snap) = proton_core::snapshot::read(&snap_path) else {
         return Ok(None);
     };
-    let fp = remote_fp(cli, remote_root)?;
+    let fp = remote_fingerprint(cli, remote_root)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
@@ -141,6 +140,230 @@ fn try_cached_tree(cli: &Cli, remote_root: &str, filter: &Filter) -> Result<Opti
     updated.skips += 1;
     let _ = proton_core::snapshot::write(&snap_path, &updated);
     Ok(Some(snap.view()))
+}
+
+fn parse_listing(
+    value: &serde_json::Value,
+    rel: &str,
+    filter: &Filter,
+) -> Vec<(String, RemoteEntry)> {
+    let serde_json::Value::Array(arr) = value else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for e in arr {
+        let Some(obj) = e.as_object() else { continue };
+        if !obj.contains_key("type") {
+            continue;
+        }
+        let typ = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let name_obj = obj.get("name");
+        let ok = name_obj
+            .and_then(|n| n.get("ok"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let name = name_obj
+            .and_then(|n| n.get("value"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if !ok || name.is_empty() || Filter::skip_name(name) {
+            continue;
+        }
+        let child_rel = if rel.is_empty() {
+            name.to_string()
+        } else {
+            format!("{rel}/{name}")
+        };
+        if filter.excluded(&child_rel) {
+            continue;
+        }
+        let media = obj.get("mediaType").and_then(|v| v.as_str()).unwrap_or("");
+        let size = obj
+            .get("activeRevision")
+            .and_then(|r| r.get("claimedSize"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let uid = obj.get("uid").and_then(|v| v.as_str()).map(str::to_string);
+        let mtime = obj
+            .get("modificationTime")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        if typ == "folder" {
+            if !filter.allowed_dir(&child_rel) {
+                continue;
+            }
+            out.push((
+                child_rel,
+                RemoteEntry { uid, kind: "dir".to_string(), mtime, size: Some(0), doc: false },
+            ));
+        } else if typ == "file" {
+            if !filter.allowed_file(&child_rel) {
+                continue;
+            }
+            out.push((
+                child_rel,
+                RemoteEntry {
+                    uid,
+                    kind: "file".to_string(),
+                    mtime,
+                    size: Some(size),
+                    doc: media.starts_with("application/vnd.proton"),
+                },
+            ));
+        }
+    }
+    out
+}
+
+/// Direct children of one remote folder, already filtered and sorted by the
+/// CLI.
+pub fn list_children(
+    cli: &Cli,
+    remote_root: &str,
+    rel: &str,
+    filter: &Filter,
+) -> Result<Vec<(String, RemoteEntry)>> {
+    let rpath = cli::remote_path(remote_root, rel);
+    // Caller holds the app-wide CLI lock (see `scoped_remote`).
+    let value = cli.run_json(&["fs", "list", &rpath], false)?;
+    Ok(parse_listing(&value, rel, filter))
+}
+
+/// Recursively list a folder subtree (used for a folder that just appeared or
+/// was replaced). Returns descendants only; the caller inserts the folder node.
+pub fn scan_scope_tree(
+    cli: &Cli,
+    remote_root: &str,
+    rel: &str,
+    filter: &Filter,
+) -> Result<RemoteTree> {
+    let mut tree = RemoteTree::new();
+    let mut level = vec![rel.to_string()];
+    while !level.is_empty() {
+        let mut next = Vec::new();
+        for parent in level {
+            for (child_rel, entry) in list_children(cli, remote_root, &parent, filter)? {
+                if entry.kind == "dir" {
+                    next.push(child_rel.clone());
+                }
+                tree.insert(child_rel, entry);
+            }
+        }
+        level = next;
+    }
+    Ok(tree)
+}
+
+fn remove_subtree(tree: &mut RemoteTree, key: &str) {
+    let prefix = format!("{key}/");
+    let keys: Vec<String> = tree
+        .range(key.to_string()..)
+        .take_while(|(k, _)| *k == key || k.starts_with(&prefix))
+        .map(|(k, _)| k.clone())
+        .collect();
+    for k in keys {
+        tree.remove(&k);
+    }
+}
+
+fn move_subtree(tree: &mut RemoteTree, old: &str, new: &str) {
+    let prefix = format!("{old}/");
+    let keys: Vec<String> = tree
+        .range(old.to_string()..)
+        .take_while(|(k, _)| *k == old || k.starts_with(&prefix))
+        .map(|(k, _)| k.clone())
+        .collect();
+    for k in keys {
+        let Some(value) = tree.remove(&k) else { continue };
+        let new_key = if k == old {
+            new.to_string()
+        } else {
+            format!("{new}{}", &k[old.len()..])
+        };
+        tree.insert(new_key, value);
+    }
+}
+
+/// Refresh one changed folder in place, using its direct listing plus a scan
+/// of any newly appeared subfolders. Unchanged subtrees are reused. Returns
+/// an error so the caller can fall back to a full walk rather than ship a
+/// partial snapshot.
+pub fn apply_scope(
+    cli: &Cli,
+    remote_root: &str,
+    filter: &Filter,
+    tree: &mut RemoteTree,
+    rel: &str,
+) -> Result<()> {
+    let fresh = list_children(cli, remote_root, rel, filter)?;
+    let prefix = if rel.is_empty() {
+        String::new()
+    } else {
+        format!("{rel}/")
+    };
+
+    let mut old_children: std::collections::HashMap<String, (String, Option<String>)> =
+        std::collections::HashMap::new();
+    for (key, node) in tree.iter() {
+        if let Some(rest) = key.strip_prefix(&prefix)
+            && !rest.is_empty()
+            && !rest.contains('/')
+        {
+            old_children.insert(rest.to_string(), (key.clone(), node.uid.clone()));
+        }
+    }
+    let old_by_uid: std::collections::HashMap<String, String> = old_children
+        .iter()
+        .filter_map(|(name, (_, uid))| uid.as_ref().map(|u| (u.clone(), name.clone())))
+        .collect();
+    let fresh_names: std::collections::HashSet<String> = fresh
+        .iter()
+        .map(|(r, _)| r.rsplit('/').next().unwrap_or(r).to_string())
+        .collect();
+    let fresh_uids: std::collections::HashSet<String> = fresh
+        .iter()
+        .filter_map(|(_, n)| n.uid.clone())
+        .collect();
+
+    for (child_rel, node) in &fresh {
+        let name = child_rel.rsplit('/').next().unwrap_or(child_rel).to_string();
+        let uid = node.uid.clone();
+        let prev_name = uid.as_ref().and_then(|u| old_by_uid.get(u)).cloned();
+        let same_name = old_children.get(&name).cloned();
+
+        if let Some(prev) = prev_name
+            && prev != name
+        {
+            move_subtree(tree, &format!("{prefix}{prev}"), child_rel);
+        } else if let Some((old_key, old_uid)) = same_name
+            && uid.is_some()
+            && old_uid.is_some()
+            && uid != old_uid
+        {
+            remove_subtree(tree, &old_key);
+        }
+
+        let existed = tree.contains_key(child_rel);
+        tree.insert(child_rel.clone(), node.clone());
+        if node.kind == "dir" && !existed {
+            let subtree = scan_scope_tree(cli, remote_root, child_rel, filter)?;
+            tree.extend(subtree);
+        }
+    }
+
+    for (name, (key, uid)) in &old_children {
+        let present = fresh_names.contains(name)
+            || uid.as_ref().is_some_and(|u| fresh_uids.contains(u));
+        if !present {
+            remove_subtree(tree, key);
+        }
+    }
+    for (child_rel, _) in fresh {
+        if !tree.contains_key(&child_rel) {
+            anyhow::bail!("scope merge incomplete for {child_rel}");
+        }
+    }
+    Ok(())
 }
 
 pub fn scan_remote(cli: &Cli, remote_root: &str, filter: &Filter) -> Result<RemoteScan> {
@@ -187,45 +410,15 @@ pub fn scan_remote(cli: &Cli, remote_root: &str, filter: &Filter) -> Result<Remo
 
             let mut next: Vec<String> = Vec::new();
             for (rpath, rel, entries) in listed {
-                let Value::Array(arr) = entries? else { continue };
-                for e in arr {
-                    let Some(obj) = e.as_object() else { continue };
-                    if !obj.contains_key("type") { continue; }
-                    let typ = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                    let name_obj = obj.get("name");
-                    let ok = name_obj.and_then(|n| n.get("ok")).and_then(|v| v.as_bool()).unwrap_or(true);
-                    let name = name_obj.and_then(|n| n.get("value")).and_then(|v| v.as_str()).unwrap_or("");
-                    if !ok || name.is_empty() { continue; }
-                    if Filter::skip_name(name) { continue; }
-                    let child_rel = if rel.is_empty() { name.to_string() } else { format!("{}/{}", rel, name) };
-                    if filter.excluded(&child_rel) { continue; }
-                    let media = obj.get("mediaType").and_then(|v| v.as_str()).unwrap_or("");
-                    let size = obj.get("activeRevision")
-                        .and_then(|r| r.get("claimedSize"))
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0);
-                    if typ == "folder" {
-                        if !filter.allowed_dir(&child_rel) { continue; }
-                        tree.insert(child_rel.clone(), RemoteEntry {
-                            uid: obj.get("uid").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                            kind: "dir".to_string(),
-                            mtime: obj.get("modificationTime").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                            size: Some(0),
-                            doc: false,
-                        });
-                        let child_rpath = format!("{}/{}", rpath, cli::escape(name));
+                let entries = entries?;
+                for (child_rel, entry) in parse_listing(&entries, &rel, filter) {
+                    let is_dir = entry.kind == "dir";
+                    let name = child_rel.rsplit('/').next().unwrap_or(&child_rel).to_string();
+                    tree.insert(child_rel.clone(), entry);
+                    if is_dir {
+                        let child_rpath = format!("{}/{}", rpath, cli::escape(&name));
                         rel_of.insert(child_rpath.clone(), child_rel);
                         next.push(child_rpath);
-                    } else if typ == "file" {
-                        if !filter.allowed_file(&child_rel) { continue; }
-                        let doc = media.starts_with("application/vnd.proton");
-                        tree.insert(child_rel, RemoteEntry {
-                            uid: obj.get("uid").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                            kind: "file".to_string(),
-                            mtime: obj.get("modificationTime").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                            size: Some(size),
-                            doc,
-                        });
                     }
                 }
             }
@@ -326,5 +519,70 @@ mod tests {
         e.tree.clear();
         assert!(!cache_usable(&e, "/my-files||", &[100, 10], 2000.0, 21600.0, 6));
         assert!(!cache_usable(&snap(), "/other||", &[100, 10], 2000.0, 21600.0, 6));
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn entry(uid: &str, kind: &str) -> RemoteEntry {
+        RemoteEntry {
+            uid: Some(uid.into()),
+            kind: kind.into(),
+            mtime: Some("2026-10-31T00:00:00Z".into()),
+            size: Some(0),
+            doc: false,
+        }
+    }
+
+    #[test]
+    fn scope_merge_adds_renames_and_drops_children() {
+        let dir = std::env::temp_dir().join(format!("pd-scope-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("proton-drive");
+        std::fs::write(
+            &script,
+            r#"#!/bin/sh
+case "$3" in
+  /my-files/Docs)
+    cat <<'JSON'
+[
+ {"type":"folder","name":{"ok":true,"value":"Sub"},"uid":"vol~sub","modificationTime":"2026-10-31T00:00:00Z"},
+ {"type":"folder","name":{"ok":true,"value":"NewDir"},"uid":"vol~newdir","modificationTime":"2026-10-31T00:00:00Z"},
+ {"type":"file","name":{"ok":true,"value":"renamed.txt"},"uid":"vol~old","activeRevision":{"claimedSize":12},"modificationTime":"2026-10-31T00:00:00Z"},
+ {"type":"file","name":{"ok":true,"value":"new.txt"},"uid":"vol~new","activeRevision":{"claimedSize":7},"modificationTime":"2026-10-31T00:00:00Z"}
+]
+JSON
+    ;;
+  /my-files/Docs/NewDir)
+    echo '[{"type":"file","name":{"ok":true,"value":"inside.txt"},"uid":"vol~inside","activeRevision":{"claimedSize":3},"modificationTime":"2026-10-31T00:00:00Z"}]'
+    ;;
+  *) echo '[]' ;;
+esac
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut tree = RemoteTree::new();
+        tree.insert("Docs".into(), entry("vol~docs", "dir"));
+        tree.insert("Docs/old.txt".into(), entry("vol~old", "file"));
+        tree.insert("Docs/Sub".into(), entry("vol~sub", "dir"));
+        tree.insert("Docs/Sub/a.txt".into(), entry("vol~a", "file"));
+        tree.insert("Docs/gone.txt".into(), entry("vol~gone", "file"));
+
+        let cli = Cli::for_test(script);
+        let filter = Filter::new("", "");
+        apply_scope(&cli, "/my-files", &filter, &mut tree, "Docs").unwrap();
+
+        assert_eq!(tree.get("Docs/renamed.txt").unwrap().uid.as_deref(), Some("vol~old"));
+        assert!(!tree.contains_key("Docs/old.txt"));
+        assert!(tree.contains_key("Docs/new.txt"));
+        assert!(tree.contains_key("Docs/Sub/a.txt"));
+        assert!(!tree.contains_key("Docs/gone.txt"));
+        assert!(tree.contains_key("Docs/NewDir/inside.txt"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

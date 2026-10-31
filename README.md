@@ -48,9 +48,10 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
 ## Features
 
 - **Folder sync** — `~/ProtonDrive` mirrors `/my-files` both ways: local edits
-  upload within seconds (inotify), cloud changes are watched every 3 s with
-  the check interval as fallback (**Instant** = 30 s; **Off** = manual), and
-  renames/moves are followed server-side without re-uploading.
+  upload within seconds (inotify), cloud changes arrive in about a second from
+  Proton's event stream, and renames/moves are followed server-side without
+  re-uploading. The check interval (**Instant** = 30 s; **Off** = manual) and
+  a 3 s size fingerprint are fallbacks if the event listener cannot start.
 - **My files** — upload files/folders (or drag-and-drop them in), download,
   rename, move, multi-select, search, sortable columns, back/forward,
   breadcrumbs and a restorable **Trash**.

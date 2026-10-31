@@ -1,3 +1,19 @@
+## 3.16.86 — 2026-11-01
+
+- **Real-time cloud sync restored.** The engine subscribes to Proton's volume
+  event stream with the official CLI's own keyring session, shares the CLI's
+  event cursor, and re-lists only the folder that changed — the same design
+  the old Python engine used. Cloud adds, edits, renames and deletes no longer
+  trigger a full tree walk.
+- **Scoped post-upload refresh.** After a local upload, trash or move, only
+  the affected folders are re-listed instead of re-walking the whole cloud.
+- The 3 s `fs size` fingerprint watcher and the check interval are now
+  fallbacks: used when the event listener cannot start, or for fingerprint-
+  invisible changes if events are unavailable. `PROTON_SYNC_PUSH=0` disables
+  both push paths.
+- File contents and all mutations still go through the official Proton CLI;
+  the listener only reads the same event stream with the CLI's session.
+
 ## 3.16.85 — 2026-10-31
 
 - **Tray pulse updates only the icon.** A local ksni patch adds an icon-only
