@@ -193,7 +193,6 @@ pub fn execute(
     let done_files = std::sync::atomic::AtomicU64::new(0);
     report_transfer(0, total_files, &[]);
     let outcomes = cli::with_cli_lock(|| {
-        let _ = cli.run(&["fs", "info", remote_root], true, Some(120), false);
         Ok(cli::run_parallel(batches, transfers, |b| {
             let n = b.rels.len() as u64;
             let res = if b.upload {

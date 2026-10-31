@@ -22,7 +22,7 @@ use zbus::zvariant::{OwnedObjectPath, OwnedValue, Type, Value};
 
 const API: &str = "https://drive-api.proton.me";
 const SECRET_LABEL: &str = "ch.proton.drive/drive-sdk-cli/auth-session";
-const IDLE_POLL: f64 = 2.5;
+const IDLE_POLL: f64 = 1.0;
 
 pub struct EventWatch {
     pending: Arc<Mutex<BTreeSet<String>>>,

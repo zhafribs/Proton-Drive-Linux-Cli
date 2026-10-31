@@ -1,3 +1,13 @@
+## 3.16.87 — 2026-11-01
+
+- **Less CLI overhead.** Removed two ignored `fs info` calls that added ~3 s
+  to every transfer phase and full walk.
+- **Downloads start before the cache write.** The fallback fingerprint and
+  snapshot are written after planning/transfers, so a 3 s `fs size` call no
+  longer delays the file you are waiting for.
+- **Event polling tightened to 1 s** while idle (was 2.5 s), keeping the
+  existing rate-limit backoff.
+
 ## 3.16.86 — 2026-11-01
 
 - **Real-time cloud sync restored.** The engine subscribes to Proton's volume

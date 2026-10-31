@@ -183,6 +183,7 @@ pub fn run_once_cycle(
     let first = st.is_empty() && local.is_empty();
     let mut failed: BTreeSet<String> = BTreeSet::new();
     let mut downloaded: BTreeSet<String> = BTreeSet::new();
+    let mut snapshot_dirty = false;
     let remote = if first {
         let out = crate::firstsync::download_all(cli, remote_root, Path::new(local_root), filter)?;
         failed.extend(out.failed);
@@ -192,7 +193,10 @@ pub fn run_once_cycle(
         crate::scan::RemoteScan { tree: out.tree, full: true }
     } else if let Some(push) = push {
         match scoped_remote(cli, remote_root, filter, push) {
-            Ok(Some(scan)) => scan,
+            Ok(Some(scan)) => {
+                snapshot_dirty = true;
+                scan
+            }
             Ok(None) => scan_remote(cli, remote_root, filter)?,
             Err(err) => {
                 eprintln!("push: scoped refresh failed: {err:#}; full walk");
@@ -254,7 +258,6 @@ pub fn run_once_cycle(
             for parent in &parents {
                 crate::scan::apply_scope(cli, remote_root, filter, &mut remote2, parent)?;
             }
-            publish_snapshot(cli, remote_root, filter, &remote2);
             Ok(())
         });
         if let Err(err) = scoped {
@@ -264,14 +267,9 @@ pub fn run_once_cycle(
                 publish_snapshot(cli, remote_root, filter, &out.tree);
             }
             remote2 = out.tree;
+        } else {
+            snapshot_dirty = true;
         }
-    } else if !result.actions.is_empty() {
-        // Only downloads/local changes: the remote tree is unchanged, but the
-        // cached fingerprint still needs to be refreshed for the next peek.
-        let _ = crate::cli::with_cli_lock(|| -> Result<()> {
-            publish_snapshot(cli, remote_root, filter, &remote2);
-            Ok(())
-        });
     }
 
     let acted: BTreeSet<String> = result.actions.iter().map(|a| a.rel().to_string()).collect();
@@ -285,6 +283,12 @@ pub fn run_once_cycle(
     };
     let saved = refresh_state(&remote2, &local2, &st, &options);
     let _ = state::write(&state_path, &saved);
+
+    // Fingerprint/cache write is deliberately after planning and transfers:
+    // it must never delay the file the user is waiting for.
+    if snapshot_dirty {
+        publish_snapshot(cli, remote_root, filter, &remote2);
+    }
 
     let secs = t0.elapsed().unwrap_or_default().as_secs_f64();
     crate::health::write_health(&Health {
@@ -337,7 +341,6 @@ fn scoped_remote(
         for rel in &rels {
             crate::scan::apply_scope(cli, remote_root, filter, &mut tree, rel)?;
         }
-        publish_snapshot(cli, remote_root, filter, &tree);
         Ok(())
     })?;
     Ok(Some(crate::scan::RemoteScan { tree, full: false }))

@@ -382,8 +382,6 @@ pub fn scan_remote(cli: &Cli, remote_root: &str, filter: &Filter) -> Result<Remo
             return Ok(RemoteScan { tree, full: false });
         }
 
-        let _ = cli.run(&["fs", "info", remote_root], true, Some(120), false);
-
         let mut tree = RemoteTree::new();
         let mut visited: HashSet<String> = HashSet::new();
         let mut rel_of: HashMap<String, String> = HashMap::new();
