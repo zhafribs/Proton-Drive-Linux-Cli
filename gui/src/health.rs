@@ -72,7 +72,9 @@ pub fn derive_status(
     }
     // A lost session is only "expired" if this account was signed in before.
     // A fresh install (no last email) gets the welcome screen instead.
-    if (hstatus == "needs_login" || session_error) && !logged_in {
+    // Health wins over a stale identity probe: the probe can still say
+    // "logged in" while the engine's CLI calls fail with a login error.
+    if hstatus == "needs_login" || session_error {
         return if has_last_email {
             UiStatus::NeedsLogin
         } else {
@@ -98,9 +100,6 @@ pub fn derive_status(
         match hstatus {
             "ok" => UiStatus::Synced,
             "" => UiStatus::Starting,
-            // A stale needs-login from before a fresh sign-in: the wake cycle
-            // will replace it with "syncing" immediately.
-            "needs_login" => UiStatus::Starting,
             _ => UiStatus::Unknown,
         }
     } else if paused_by_user {
@@ -392,11 +391,12 @@ mod tests {
     }
 
     #[test]
-    fn stale_needs_login_after_sign_in_does_not_show_the_padlock() {
-        // The engine has not run its wake cycle yet; the identity is valid.
+    fn needs_login_health_beats_a_stale_identity() {
+        // The identity probe can still succeed from a cached session while
+        // the engine's CLI calls fail; the user must see the expiry.
         assert_eq!(
             derive_status(true, "needs_login", Some(true), false, false, true, false),
-            UiStatus::Starting
+            UiStatus::NeedsLogin
         );
         // While the sign-in terminal is open, show progress instead.
         assert_eq!(

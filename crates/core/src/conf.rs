@@ -24,7 +24,7 @@ pub const CONF_KEYS: [&str; 9] = [
 /// 0 is the manual mode: no timer-driven checks (push and local changes still
 /// wake the engine; Home -> Sync now forces a full walk).
 pub const INTERVAL_CHOICES: [(&str, u64); 7] = [
-    ("Off", 0),
+    ("Off (manual)", 0),
     ("Instant (30 seconds)", 30),
     ("Every minute", 60),
     ("Every 5 minutes", 300),

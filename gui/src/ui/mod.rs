@@ -968,8 +968,17 @@ impl App {
                         }
                         if was_signing_in || signed_in_now {
                             // A successful sign-in must start a cycle now, even
-                            // when interval=0 left the engine waiting.
+                            // when interval=0 left the engine waiting. Restart
+                            // an active service so it picks up the fresh CLI
+                            // session; never start one the user paused.
                             let _ = std::fs::write(&self.paths.wake_file, b"");
+                            if !self.paused_by_user {
+                                std::thread::spawn(|| {
+                                    if service::unit_exists() {
+                                        let _ = service::start();
+                                    }
+                                });
+                            }
                         }
                     }
                     self.identity = Some(id);
@@ -1370,14 +1379,10 @@ impl App {
         } else {
             "Checking your account..."
         };
-        let signed_in = self.logged_in()
-            || (self.last_email.is_some()
-                && !matches!(
-                    self.ui_status(),
-                    health::UiStatus::SignedOut
-                        | health::UiStatus::NeedsLogin
-                        | health::UiStatus::SigningIn
-                ));
+        let signed_in = !matches!(
+            self.ui_status(),
+            health::UiStatus::SignedOut | health::UiStatus::NeedsLogin | health::UiStatus::SigningIn
+        ) && (self.logged_in() || self.last_email.is_some());
         let hint = if signed_in {
             "Account \u{b7} click to sign out"
         } else {

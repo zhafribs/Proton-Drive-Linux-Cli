@@ -404,7 +404,9 @@ pub fn spawn(
                 std::thread::sleep(std::time::Duration::from_secs(1));
                 continue;
             }
-            std::thread::sleep(std::time::Duration::from_millis(120));
+            // 400 ms (~2.5 fps): smooth enough to read as a pulse, slow
+            // enough that a status bar does not starve while updating icons.
+            std::thread::sleep(std::time::Duration::from_millis(400));
             let phase = (start.elapsed().as_secs_f32() / 2.0) % 1.0;
             if pulse_handle.update(|t| t.pulse = phase).is_none() {
                 break;

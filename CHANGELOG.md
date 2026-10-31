@@ -1,3 +1,17 @@
+## 3.16.84 — 2026-10-31
+
+- **Expired sessions are visible.** When the engine reports `needs_login`, the
+  app now shows **Your session expired** and the Sign in action even if a
+  cached identity probe still says signed in; the tray shows the X instead of
+  a misleading “starting” pulse.
+- **Signing in restarts sync.** A fresh login starts the service if it was
+  stopped, unless you paused syncing yourself.
+- **Tray pulse no longer floods the bar.** The icon updates at ~2.5 fps
+  instead of ~8 fps, so other tray icons stay clickable.
+- **The check interval explains itself.** “Off” is now “Off (manual)”, and the
+  README states that cloud changes arrive on the chosen interval — 30 s on
+  **Instant**, while **Off** means local changes or **Sync now** only.
+
 ## 3.16.83 — 2026-10-31
 
 - **Sync waits for complete files.** The recursive watcher now wakes on
