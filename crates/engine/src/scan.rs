@@ -119,7 +119,7 @@ fn cache_usable(snap: &proton_core::snapshot::Snapshot, sig: &str, fp: &[i64], n
 /// snapshot's timestamp and skip counter are refreshed so the next cycle sees
 /// this reuse; `None` means a full walk must run.
 fn try_cached_tree(cli: &Cli, remote_root: &str, filter: &Filter) -> Result<Option<RemoteTree>> {
-    if cli::cfg_int("PROTON_SYNC_FAST_REMOTE", 1, 1) == 0 || !filter.is_unfiltered() {
+    if !cli::cfg_flag("PROTON_SYNC_FAST_REMOTE", true) || !filter.is_unfiltered() {
         return Ok(None);
     }
     let snap_path = crate::health::state_dir().join("remote-snapshot.json");

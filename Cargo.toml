@@ -11,3 +11,8 @@ lto = "thin"
 codegen-units = 16
 strip = true
 panic = "abort"
+
+# Local ksni patch: add an icon-only refresh so the tray pulse does not rebuild
+# the SNI menu on every animation frame. See vendor/ksni/PATCH.md.
+[patch.crates-io]
+ksni = { path = "vendor/ksni" }

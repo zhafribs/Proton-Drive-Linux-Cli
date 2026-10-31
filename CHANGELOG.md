@@ -1,3 +1,15 @@
+## 3.16.85 — 2026-10-31
+
+- **Tray pulse updates only the icon.** A local ksni patch adds an icon-only
+  refresh, so the pulse no longer rebuilds the StatusNotifier menu or the
+  other tray properties while it animates.
+- **Cloud changes are watched every 3 s.** The engine polls the remote
+  `fs size` fingerprint and wakes immediately on a change; the check interval
+  stays a fallback for fingerprint-invisible edits. `PROTON_SYNC_PUSH=0`
+  disables the watcher and `PROTON_SYNC_PUSH_INTERVAL` tunes it (1–30 s).
+- `PROTON_SYNC_FAST_REMOTE=0` and `PROTON_SYNC_PUSH=0` now actually disable
+  their features; integer parsing used to clamp 0 up to 1.
+
 ## 3.16.84 — 2026-10-31
 
 - **Expired sessions are visible.** When the engine reports `needs_login`, the

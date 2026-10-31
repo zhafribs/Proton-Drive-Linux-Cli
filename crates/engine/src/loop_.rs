@@ -89,8 +89,14 @@ pub fn run_loop() -> Result<()> {
         }
     });
 
-    // push listener (best-effort)
-    let _push = crate::push::PushListener::start(wake_event.clone(), wake_mutex.clone());
+    // Fast remote fingerprint watcher (the official CLI has no event stream).
+    crate::push::start(
+        cli.clone(),
+        remote_root.clone(),
+        wake.clone(),
+        wake_event.clone(),
+        wake_mutex.clone(),
+    );
 
     let mut last_cycle = Instant::now();
     let mut first = true;

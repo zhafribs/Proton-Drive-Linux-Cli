@@ -178,6 +178,24 @@ pub fn remote_path(remote_root: &str, rel: &str) -> String {
     parts.join("/")
 }
 
+/// Boolean setting from the environment or `proton-sync.conf`.
+pub fn cfg_flag(key: &str, default: bool) -> bool {
+    let raw = env::var(key).ok().or_else(|| {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+        let dir = dirs::config_dir().unwrap_or_else(|| home.join(".config"));
+        proton_core::conf::read(&dir.join("proton-sync.conf")).get(key).cloned()
+    });
+    parse_flag(raw.as_deref(), default)
+}
+
+fn parse_flag(raw: Option<&str>, default: bool) -> bool {
+    match raw.map(str::trim) {
+        Some("0" | "false" | "no" | "off") => false,
+        Some("1" | "true" | "yes" | "on") => true,
+        _ => default,
+    }
+}
+
 /// Integer setting from the environment or `proton-sync.conf`, clamped to `1..=max`.
 pub fn cfg_int(key: &str, default: usize, max: usize) -> usize {
     let raw = env::var(key).ok().or_else(|| {
@@ -212,4 +230,21 @@ where
         }
     });
     results.into_inner().unwrap().into_iter().map(|r| r.expect("every item runs")).collect()
+}
+
+#[cfg(test)]
+mod flag_tests {
+    use super::parse_flag;
+
+    #[test]
+    fn flags_accept_the_usual_spellings() {
+        assert!(!parse_flag(Some("0"), true));
+        assert!(!parse_flag(Some("false"), true));
+        assert!(!parse_flag(Some("off"), true));
+        assert!(parse_flag(Some("1"), false));
+        assert!(parse_flag(Some("true"), false));
+        assert!(parse_flag(Some("on"), false));
+        assert!(parse_flag(None, true));
+        assert!(!parse_flag(None, false));
+    }
 }

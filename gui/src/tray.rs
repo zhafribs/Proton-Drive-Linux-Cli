@@ -408,7 +408,9 @@ pub fn spawn(
             // enough that a status bar does not starve while updating icons.
             std::thread::sleep(std::time::Duration::from_millis(400));
             let phase = (start.elapsed().as_secs_f32() / 2.0) % 1.0;
-            if pulse_handle.update(|t| t.pulse = phase).is_none() {
+            // Icon-only refresh: rebuilding the SNI menu 2.5x/s starved
+            // Noctalia and made every tray icon unclickable.
+            if pulse_handle.update_icon(|t| t.pulse = phase).is_none() {
                 break;
             }
         }
