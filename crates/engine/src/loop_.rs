@@ -192,7 +192,7 @@ pub fn run_once_cycle(
         local = scan_local(Path::new(local_root), filter);
         crate::scan::RemoteScan { tree: out.tree, full: true }
     } else if let Some(push) = push {
-        match scoped_remote(cli, remote_root, filter, push) {
+        match scoped_remote(cli, local_root, remote_root, filter, push) {
             Ok(Some(scan)) => {
                 snapshot_dirty = true;
                 scan
@@ -213,6 +213,9 @@ pub fn run_once_cycle(
         publish_snapshot(cli, remote_root, filter, &remote.tree);
     }
     let remote = remote.tree;
+    // A fast-path edit already advanced state.json; reload it so the planner
+    // sees both sides matching instead of planning the same update again.
+    let st = state::read(&state_path);
 
     let config = PlanConfig { propagate_deletes, wipe_min: 5 };
     let result = plan_cycle(&remote, &local, &st, &config);
@@ -316,6 +319,7 @@ pub fn run_once_cycle(
 /// the caller then falls back to the normal fingerprint/full walk.
 fn scoped_remote(
     cli: &Cli,
+    local_root: &str,
     remote_root: &str,
     filter: &Filter,
     push: &crate::events::PushContext<'_>,
@@ -328,22 +332,174 @@ fn scoped_remote(
         return Ok(None);
     }
     let mut tree = snapshot.view();
-    let (rels, unknown) = crate::events::resolve_scopes(
+    let (groups, unknown) = crate::events::resolve_event_scopes(
         push.pending,
         &tree,
         push.volume,
         push.root_uid,
     );
-    if unknown > 0 || rels.is_empty() {
+    if unknown > 0 || groups.is_empty() {
         return Ok(None);
     }
+    let state_path = state_dir().join("state.json");
+    let mut state = proton_core::state::read(&state_path);
+    let mut state_dirty = false;
+    let fast = FastEdit { cli, remote_root, local_root };
     crate::cli::with_cli_lock(|| -> Result<()> {
-        for rel in &rels {
-            crate::scan::apply_scope(cli, remote_root, filter, &mut tree, rel)?;
+        for (rel, events) in &groups {
+            // A single content update of a file we already know can be
+            // downloaded straight by UID: no parent listing, one CLI call.
+            let handled = events.len() == 1
+                && fast.download(&mut state, &mut tree, &events[0], push.volume);
+            if handled {
+                state_dirty = true;
+            } else {
+                crate::scan::apply_scope(cli, remote_root, filter, &mut tree, rel)?;
+            }
         }
         Ok(())
     })?;
+    if state_dirty {
+        let _ = proton_core::state::write(&state_path, &state);
+    }
     Ok(Some(crate::scan::RemoteScan { tree, full: false }))
+}
+
+/// Safely fast-path one cloud update of a known file:
+/// - its UID is in the snapshot and is a file;
+/// - the local file still matches its saved state (no local edit);
+/// - the downloaded name is unchanged (not a rename/move).
+///
+/// Anything else falls back to the normal scoped list + planner, which keeps
+/// both sides on conflicts.
+struct FastEdit<'a> {
+    cli: &'a Cli,
+    remote_root: &'a str,
+    local_root: &'a str,
+}
+
+impl FastEdit<'_> {
+    fn download(
+        &self,
+        state: &mut proton_core::state::State,
+        tree: &mut proton_core::snapshot::RemoteTree,
+        event: &crate::events::PendingEvent,
+        volume: &str,
+    ) -> bool {
+        if event.event_type != 2 || event.trashed {
+            return false;
+        }
+        let child_uid = format!("{volume}~{}", event.child);
+        let Some((rel, node)) = tree
+            .iter()
+            .find(|(_, node)| node.uid.as_deref() == Some(child_uid.as_str()))
+            .map(|(rel, node)| (rel.clone(), node.clone()))
+        else {
+            return false;
+        };
+        if node.kind != "file" {
+            return false;
+        }
+        let local = Path::new(self.local_root).join(&rel);
+        let Ok(meta) = fs::metadata(&local) else {
+            return false;
+        };
+        if !meta.is_file() {
+            return false;
+        }
+        let Some(entry) = state.get(&rel) else {
+            return false;
+        };
+        if entry.l_size != Some(meta.len())
+            || entry.l_mtime_ns != Some(crate::scan::mtime_ns(&meta))
+        {
+            return false;
+        }
+        let parent_rel = rel.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
+        let parent_dir = Path::new(self.local_root).join(parent_rel);
+        if !parent_dir.is_dir() {
+            return false;
+        }
+        let parent_rpath = crate::cli::remote_path(self.remote_root, parent_rel);
+        let rpath = format!("{parent_rpath}/{child_uid}");
+        let temp = state_dir().join(format!(
+            ".incoming-edit-{}-{}",
+            std::process::id(),
+            event.child
+        ));
+        let _ = fs::remove_dir_all(&temp);
+        if fs::create_dir_all(&temp).is_err() {
+            return false;
+        }
+        let downloaded = self.cli.run(
+            &[
+                "fs",
+                "download",
+                &rpath,
+                &temp.to_string_lossy(),
+                "-f",
+                "remove",
+                "-d",
+                "merge",
+            ],
+            false,
+            Some(3600),
+            false,
+        );
+        if downloaded.is_err() {
+            let _ = fs::remove_dir_all(&temp);
+            return false;
+        }
+        let files: Vec<_> = fs::read_dir(&temp)
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+            .collect();
+        if files.len() != 1 {
+            let _ = fs::remove_dir_all(&temp);
+            return false;
+        }
+        let src = files[0].path();
+        let name = files[0].file_name().to_string_lossy().into_owned();
+        let expected = rel.rsplit('/').next().unwrap_or(&rel);
+        if name != expected {
+            // Rename/move: needs the parent listing so the local tree can be
+            // rebased safely.
+            let _ = fs::remove_dir_all(&temp);
+            return false;
+        }
+        let part = parent_dir.join(format!(
+            ".proton-edit-{}-{}.part",
+            std::process::id(),
+            event.child
+        ));
+        let copied = fs::copy(&src, &part).and_then(|_| fs::rename(&part, &local));
+        let _ = fs::remove_dir_all(&temp);
+        if copied.is_err() {
+            let _ = fs::remove_file(&part);
+            return false;
+        }
+        let Ok(new_meta) = fs::metadata(&local) else {
+            return false;
+        };
+        let new_size = new_meta.len();
+        state.insert(
+            rel.clone(),
+            proton_core::state::StateEntry {
+                l_mtime_ns: Some(crate::scan::mtime_ns(&new_meta)),
+                l_size: Some(new_size),
+                r_mtime: None,
+                r_uid: Some(child_uid),
+            },
+        );
+        if let Some(node) = tree.get_mut(&rel) {
+            node.size = Some(new_size);
+            node.mtime = None;
+        }
+        true
+    }
 }
 
 fn publish_snapshot(
@@ -664,6 +820,64 @@ mod tests {
             Some(Instant::now() + Duration::from_secs(5)),
         );
         assert!(started.elapsed() < Duration::from_millis(200));
+    }
+
+    #[test]
+    fn known_file_update_fast_downloads_by_uid() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "pd-fastedt-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let docs = root.join("Docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        let local = docs.join("a.txt");
+        std::fs::write(&local, b"old").unwrap();
+        let meta = std::fs::metadata(&local).unwrap();
+        let mut state = proton_core::state::State::new();
+        state.insert(
+            "Docs/a.txt".into(),
+            proton_core::state::StateEntry {
+                l_mtime_ns: Some(crate::scan::mtime_ns(&meta)),
+                l_size: Some(meta.len()),
+                r_mtime: None,
+                r_uid: Some("vol~child".into()),
+            },
+        );
+        let script = root.join("proton-drive");
+        std::fs::write(&script, "#!/bin/sh\nprintf 'new' > \"$4/a.txt\"\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cli = Cli::for_test(script);
+        let fast = FastEdit {
+            cli: &cli,
+            remote_root: "/my-files",
+            local_root: &root.to_string_lossy(),
+        };
+        let mut tree = proton_core::snapshot::RemoteTree::new();
+        tree.insert(
+            "Docs/a.txt".into(),
+            proton_core::snapshot::RemoteEntry {
+                uid: Some("vol~child".into()),
+                kind: "file".into(),
+                size: Some(3),
+                ..Default::default()
+            },
+        );
+        let event = crate::events::PendingEvent {
+            parent: "parent".into(),
+            child: "child".into(),
+            event_type: 2,
+            trashed: false,
+        };
+        assert!(fast.download(&mut state, &mut tree, &event, "vol"));
+        assert_eq!(std::fs::read_to_string(&local).unwrap(), "new");
+        assert_eq!(state["Docs/a.txt"].l_size, Some(3));
+        assert_eq!(tree["Docs/a.txt"].size, Some(3));
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// With an interval set, a quiet wait still ends at the deadline rather

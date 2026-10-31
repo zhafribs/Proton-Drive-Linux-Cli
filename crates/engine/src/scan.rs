@@ -67,7 +67,7 @@ fn walk(dir: &Path, rel_base: &str, filter: &Filter, tree: &mut LocalTree) {
     }
 }
 
-fn mtime_ns(meta: &fs::Metadata) -> i64 {
+pub fn mtime_ns(meta: &fs::Metadata) -> i64 {
     let Ok(modified) = meta.modified() else {
         return 0;
     };

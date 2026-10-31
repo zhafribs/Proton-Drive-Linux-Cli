@@ -1,3 +1,16 @@
+## 3.16.88 — 2026-11-01
+
+- **Known-file cloud updates skip the folder listing.** When the event is a
+  content update of a file already in the snapshot and the local file still
+  matches its saved state, it is downloaded directly by node UID: one CLI
+  call instead of two, saving ~3.5 s per edit. Anything ambiguous (rename,
+  move, trash, local edit, multiple events) falls back to the scoped list and
+  planner.
+- **CLI startup investigated.** The official CLI is a Bun/TypeScript bundle,
+  not .NET: `--version` alone costs ~1.3 s, and an authenticated `fs size`
+  ~3.8 s. A long-lived official CLI server is the only zero-key way to remove
+  that floor; the request is documented in `docs/UPSTREAM.md`.
+
 ## 3.16.87 — 2026-11-01
 
 - **Less CLI overhead.** Removed two ignored `fs info` calls that added ~3 s

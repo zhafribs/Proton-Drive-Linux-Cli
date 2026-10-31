@@ -17,3 +17,10 @@ item is a note for upstream.
 3. **arm64 Linux binary**: releases are x86_64-only because the official CLI
    ships no Linux arm64 build; an aarch64 AppImage cannot be produced without
    it (this project never bypasses the official CLI).
+
+4. **Persistent CLI / batch mode**: one long-lived `proton-drive` process
+   (stdin JSON-RPC or a private Unix socket) instead of one process per
+   command. Measured on this machine: `--version` ~1.3 s (Bun runtime),
+   `fs size` ~3.8 s, `fs list` ~3.5 s. A server would keep the runtime and
+   auth/session warm and remove the per-command startup without exporting
+   keys or bypassing the official CLI.

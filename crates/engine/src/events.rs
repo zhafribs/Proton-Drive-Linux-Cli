@@ -24,8 +24,16 @@ const API: &str = "https://drive-api.proton.me";
 const SECRET_LABEL: &str = "ch.proton.drive/drive-sdk-cli/auth-session";
 const IDLE_POLL: f64 = 1.0;
 
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct PendingEvent {
+    pub parent: String,
+    pub child: String,
+    pub event_type: i32,
+    pub trashed: bool,
+}
+
 pub struct EventWatch {
-    pending: Arc<Mutex<BTreeSet<String>>>,
+    pending: Arc<Mutex<BTreeSet<PendingEvent>>>,
     pub volume: String,
     pub root_uid: String,
 }
@@ -33,7 +41,7 @@ pub struct EventWatch {
 impl EventWatch {
     /// Take the parent LinkIDs collected since the last cycle and clear the
     /// wake flag under the same lock, so an event cannot be lost between them.
-    pub fn take(&self, wake: &AtomicBool) -> BTreeSet<String> {
+    pub fn take(&self, wake: &AtomicBool) -> BTreeSet<PendingEvent> {
         let mut pending = self.pending.lock().unwrap();
         let out = std::mem::take(&mut *pending);
         wake.store(false, Ordering::Relaxed);
@@ -105,47 +113,48 @@ pub fn start(
 
 /// What the loop needs to turn parent LinkIDs into folder rel-paths.
 pub struct PushContext<'a> {
-    pub pending: &'a BTreeSet<String>,
+    pub pending: &'a BTreeSet<PendingEvent>,
     pub volume: &'a str,
     pub root_uid: &'a str,
 }
 
-/// Parent LinkIDs -> snapshot rel paths. Unknown parents force a full walk,
-/// because a new folder chain may not be in the snapshot yet.
-pub fn resolve_scopes(
-    pending: &BTreeSet<String>,
+/// Group events by the snapshot path of their parent folder. Unknown
+/// parents force a full/fallback scan because a new folder chain may not be
+/// in the snapshot yet.
+pub fn resolve_event_scopes(
+    pending: &BTreeSet<PendingEvent>,
     tree: &proton_core::snapshot::RemoteTree,
     volume: &str,
     root_uid: &str,
-) -> (Vec<String>, usize) {
+) -> (Vec<(String, Vec<PendingEvent>)>, usize) {
     let root_link = root_uid.split('~').nth(1).unwrap_or("");
     let index: HashMap<&str, &str> = tree
         .iter()
         .filter_map(|(rel, node)| node.uid.as_deref().map(|uid| (uid, rel.as_str())))
         .collect();
-    let mut rels = BTreeSet::new();
+    let mut groups: std::collections::BTreeMap<String, Vec<PendingEvent>> =
+        std::collections::BTreeMap::new();
     let mut unknown = 0;
-    for parent in pending {
-        if parent == root_link {
-            rels.insert(String::new());
-            continue;
-        }
-        let uid = format!("{volume}~{parent}");
-        match index.get(uid.as_str()) {
-            Some(rel) => {
-                rels.insert((*rel).to_string());
-            }
+    for event in pending {
+        let rel = if event.parent == root_link {
+            Some(String::new())
+        } else {
+            let uid = format!("{volume}~{}", event.parent);
+            index.get(uid.as_str()).map(|rel| (*rel).to_string())
+        };
+        match rel {
+            Some(rel) => groups.entry(rel).or_default().push(event.clone()),
             None => unknown += 1,
         }
     }
-    (rels.into_iter().collect(), unknown)
+    (groups.into_iter().collect(), unknown)
 }
 
 fn run(
     mut session: Session,
     volume: String,
     mut cursor: String,
-    pending: Arc<Mutex<BTreeSet<String>>>,
+    pending: Arc<Mutex<BTreeSet<PendingEvent>>>,
     wake: Arc<AtomicBool>,
     wake_event: Arc<Condvar>,
     wake_mutex: Arc<Mutex<()>>,
@@ -190,21 +199,35 @@ fn run(
                         .cloned()
                         .unwrap_or_default();
                     if !events.is_empty() {
-                        let parents: BTreeSet<String> = events
+                        let pending_events: BTreeSet<PendingEvent> = events
                             .iter()
                             .filter_map(|event| {
-                                event
-                                    .get("Link")
-                                    .and_then(|l| l.get("ParentLinkID"))
+                                let link = event.get("Link")?;
+                                let parent = link
+                                    .get("ParentLinkID")
                                     .and_then(|v| v.as_str())
-                                    .filter(|v| !v.is_empty())
-                                    .map(str::to_string)
+                                    .filter(|v| !v.is_empty())?
+                                    .to_string();
+                                let child = link
+                                    .get("LinkID")
+                                    .and_then(|v| v.as_str())
+                                    .filter(|v| !v.is_empty())?
+                                    .to_string();
+                                let event_type = event
+                                    .get("EventType")
+                                    .and_then(|v| v.as_i64())
+                                    .unwrap_or(-1) as i32;
+                                let trashed = link
+                                    .get("IsTrashed")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false);
+                                Some(PendingEvent { parent, child, event_type, trashed })
                             })
                             .collect();
-                        if !parents.is_empty() {
+                        if !pending_events.is_empty() {
                             {
                                 let mut guard = pending.lock().unwrap();
-                                guard.extend(parents);
+                                guard.extend(pending_events);
                             }
                             wake.store(true, Ordering::Relaxed);
                             let _guard = wake_mutex.lock().unwrap();
@@ -401,7 +424,7 @@ mod tests {
     }
 
     #[test]
-    fn event_parents_resolve_to_relative_paths() {
+    fn event_parents_group_by_relative_path() {
         use proton_core::snapshot::{RemoteEntry, RemoteTree};
         let mut tree = RemoteTree::new();
         tree.insert(
@@ -420,53 +443,34 @@ mod tests {
                 ..Default::default()
             },
         );
-        let pending: BTreeSet<String> = ["b".to_string(), "a".to_string()].into();
-        let (rels, unknown) = resolve_scopes(&pending, &tree, "vol", "vol~root");
-        assert_eq!(rels, vec!["Docs".to_string(), "Docs/Sub".to_string()]);
+        let pending: BTreeSet<PendingEvent> = [
+            PendingEvent { parent: "a".into(), child: "f1".into(), event_type: 2, trashed: false },
+            PendingEvent { parent: "a".into(), child: "f2".into(), event_type: 2, trashed: false },
+            PendingEvent { parent: "b".into(), child: "f3".into(), event_type: 2, trashed: false },
+        ]
+        .into();
+        let (groups, unknown) = resolve_event_scopes(&pending, &tree, "vol", "vol~root");
         assert_eq!(unknown, 0);
-        let root: BTreeSet<String> = ["root".to_string()].into();
-        assert_eq!(
-            resolve_scopes(&root, &tree, "vol", "vol~root").0,
-            vec![String::new()]
-        );
-        let missing: BTreeSet<String> = ["zzz".to_string()].into();
-        assert_eq!(resolve_scopes(&missing, &tree, "vol", "vol~root").1, 1);
-    }
-
-    #[test]
-    #[ignore = "reads the live Secret Service and Proton API"]
-    fn live_event_endpoint_returns_events() {
-        let session = read_cli_session().expect("session");
-        let text = std::fs::read_to_string(events_file()).expect("events.json");
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let drive = value.get("drive").and_then(|v| v.as_object()).unwrap();
-        let (volume, cursor) = drive
-            .iter()
-            .filter(|(k, _)| k.as_str() != "core")
-            .find_map(|(k, v)| Some((k.as_str(), v.get("lastEventId")?.as_str()?)))
-            .expect("drive cursor");
-        let agent = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(30)))
-            .build();
-        let agent = ureq::Agent::new_with_config(agent);
-        let url = format!("{API}/drive/v2/volumes/{volume}/events/{cursor}");
-        let result = agent
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", session.access_token))
-            .header("x-pm-uid", &session.uid)
-            .header("x-pm-appversion", "Other")
-            .header("Accept", "application/json")
-            .header("User-Agent", "proton-drive-sync")
-            .call();
-        match result {
-            Ok(mut response) => {
-                let status = response.status().as_u16();
-                let body = response.body_mut().read_to_string().unwrap_or_default();
-                eprintln!("event endpoint status {status}, body bytes {}", body.len());
-                assert!(status == 200 || status == 204, "HTTP {status}");
-            }
-            Err(err) => panic!("event request failed: {err}"),
-        }
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].0, "Docs");
+        assert_eq!(groups[0].1.len(), 2);
+        assert_eq!(groups[1].0, "Docs/Sub");
+        let root: BTreeSet<PendingEvent> = [PendingEvent {
+            parent: "root".into(),
+            child: "f".into(),
+            event_type: 1,
+            trashed: false,
+        }]
+        .into();
+        assert_eq!(resolve_event_scopes(&root, &tree, "vol", "vol~root").0[0].0, "");
+        let missing: BTreeSet<PendingEvent> = [PendingEvent {
+            parent: "zzz".into(),
+            child: "f".into(),
+            event_type: 2,
+            trashed: false,
+        }]
+        .into();
+        assert_eq!(resolve_event_scopes(&missing, &tree, "vol", "vol~root").1, 1);
     }
 
     #[test]
