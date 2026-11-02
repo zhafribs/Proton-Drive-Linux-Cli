@@ -1,3 +1,14 @@
+## 3.16.89 — 2026-11-02
+
+- **No false “session expired” at boot.** The sync service starts before the
+  login keyring is unlocked. A login/keyring error now retries every 10 s for
+  the first minute instead of leaving `needs_login` on screen until the next
+  configured check (which could be an hour). Once a cycle succeeds, the event
+  listener starts normally.
+- The 3 s fingerprint watcher no longer starts at boot while the keyring is
+  locked; it starts only after a successful cycle if the event listener is
+  unavailable.
+
 ## 3.16.88 — 2026-11-01
 
 - **Known-file cloud updates skip the folder listing.** When the event is a

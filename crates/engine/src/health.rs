@@ -42,6 +42,20 @@ pub fn write_health(health: &Health) {
 }
 
 /// Record the schedule after a cycle: the interval and when the next check is due.
+/// Schedule the next check at a short retry interval (used after a
+/// login/keyring error at boot so the engine recovers as soon as the keyring
+/// is unlocked instead of waiting the configured interval).
+pub fn write_schedule_retry(interval: u64, retry_secs: u64) {
+    let mut h = proton_core::health::read(&health_path());
+    h.interval = Some(interval);
+    h.next_poll = Some(
+        (chrono::Local::now() + chrono::Duration::seconds(retry_secs as i64))
+            .format("%Y-%m-%dT%H:%M:%S%:z")
+            .to_string(),
+    );
+    write_health(&h);
+}
+
 pub fn write_schedule(interval: u64) {
     let mut h = proton_core::health::read(&health_path());
     h.interval = Some(interval);

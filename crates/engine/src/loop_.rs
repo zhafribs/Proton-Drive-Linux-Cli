@@ -92,29 +92,26 @@ pub fn run_loop() -> Result<()> {
     // Primary: Proton's real event stream with the CLI's own keyring
     // session. If that is unavailable, fall back to the 3 s fingerprint
     // watcher; the interval remains the final fallback.
-    let event_watch = crate::events::start(
+    let mut event_watch = crate::events::start(
         cli.clone(),
         remote_root.clone(),
         wake.clone(),
         wake_event.clone(),
         wake_mutex.clone(),
     );
-    if event_watch.is_none() {
-        crate::push::start(
-            cli.clone(),
-            remote_root.clone(),
-            wake.clone(),
-            wake_event.clone(),
-            wake_mutex.clone(),
-        );
-    }
+    let mut fingerprint_started = false;
 
+    let boot = Instant::now();
+    let mut retry_at: Option<Instant> = None;
     let mut last_cycle = Instant::now();
     let mut first = true;
     loop {
-        // the first cycle runs at once; later ones wait for the interval or a wake
+        // the first cycle runs at once; later ones wait for the interval, a
+        // wake, or a short auth retry after a boot-time keyring failure
         if !first {
-            let deadline = (interval > 0).then(|| last_cycle + Duration::from_secs(interval));
+            let deadline = retry_at.or_else(|| {
+                (interval > 0).then(|| last_cycle + Duration::from_secs(interval))
+            });
             wait_for_cycle(&wake, &wake_event, &wake_mutex, deadline);
         }
         first = false;
@@ -131,28 +128,69 @@ pub fn run_loop() -> Result<()> {
             root_uid: &watch.root_uid,
         });
         let cycle_start = Instant::now();
-        if let Err(err) = run_once_cycle(
+        let result = run_once_cycle(
             &cli,
             &local_root,
             &remote_root,
             &filter,
             propagate_deletes,
             push_ctx.as_ref(),
-        ) {
-            let message = format!("{err:#}");
-            let status = if proton_core::health::is_login_error(&message) {
-                "needs_login"
-            } else {
-                "error"
-            };
-            crate::health::write_health(&Health {
-                status: status.to_string(),
-                error: Some(message),
-                cycle_seconds: Some(cycle_start.elapsed().as_secs_f64()),
-                ..Default::default()
-            });
+        );
+        let mut retrying = false;
+        match result {
+            Ok(()) => {
+                retry_at = None;
+                // The keyring is often locked for a few seconds at boot. Once
+                // a cycle succeeds, start the event stream (or the slower
+                // fingerprint fallback) instead of doing that at startup.
+                if event_watch.is_none() {
+                    event_watch = crate::events::start(
+                        cli.clone(),
+                        remote_root.clone(),
+                        wake.clone(),
+                        wake_event.clone(),
+                        wake_mutex.clone(),
+                    );
+                }
+                if event_watch.is_none() && !fingerprint_started {
+                    crate::push::start(
+                        cli.clone(),
+                        remote_root.clone(),
+                        wake.clone(),
+                        wake_event.clone(),
+                        wake_mutex.clone(),
+                    );
+                    fingerprint_started = true;
+                }
+            }
+            Err(err) => {
+                let message = format!("{err:#}");
+                let login = proton_core::health::is_login_error(&message);
+                // At boot the keyring can still be locked. Retry quietly for
+                // a short grace period instead of flashing "session expired".
+                let in_grace = login && boot.elapsed() < Duration::from_secs(60);
+                if !in_grace {
+                    let status = if login { "needs_login" } else { "error" };
+                    crate::health::write_health(&Health {
+                        status: status.to_string(),
+                        error: Some(message),
+                        cycle_seconds: Some(cycle_start.elapsed().as_secs_f64()),
+                        ..Default::default()
+                    });
+                }
+                if login {
+                    retry_at = Some(Instant::now() + Duration::from_secs(10));
+                    retrying = true;
+                } else {
+                    retry_at = None;
+                }
+            }
         }
-        crate::health::write_schedule(interval);
+        if retrying {
+            crate::health::write_schedule_retry(interval, 10);
+        } else {
+            crate::health::write_schedule(interval);
+        }
         last_cycle = Instant::now();
     }
 }
