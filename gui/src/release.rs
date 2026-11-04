@@ -96,6 +96,29 @@ pub fn check(paths: &Paths) -> Result<(Release, bool), String> {
         .map_err(|e| format!("release check failed: {e}"))?;
     let status = resp.status().as_u16();
 
+    if status == 403 || status == 429 {
+        // GitHub's unauthenticated quota is 60 requests per hour per IP, and
+        // this app has no token: say what happened instead of a bare 403.
+        let minutes = resp
+            .headers()
+            .get("x-ratelimit-reset")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<i64>().ok())
+            .map(|reset| {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                (reset - now).max(0) / 60 + 1
+            });
+        return Err(match minutes {
+            Some(m) => format!(
+                "release check: GitHub is rate-limiting update checks - try again in ~{m} min"
+            ),
+            None => "release check: GitHub is rate-limiting update checks - try again later".into(),
+        });
+    }
+
     if status == 304 {
         if let Some(rel) = cached.get("release").and_then(parse_release) {
             return Ok((rel, true));
@@ -180,11 +203,29 @@ pub fn has_update(cur_cli: &str, rel: &Release) -> bool {
 // swap records a marker so a version that fails to start is rolled back
 // automatically on the next launch.
 
-/// The running AppImage's own path (set by the runtime), when it is one.
-pub fn appimage_target() -> Option<std::path::PathBuf> {
-    let t = std::env::var_os("APPIMAGE")?;
-    let p = std::path::PathBuf::from(t);
-    p.is_file().then_some(p)
+/// The `APPIMAGE` path whether or not that file still exists: an update can
+/// install the new build under a new name, and then the running app's own path
+/// is stale (see [`install_target`]).
+fn appimage_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("APPIMAGE").map(std::path::PathBuf::from)
+}
+
+/// Where a downloaded update should be installed.
+///
+/// Normally the running AppImage is replaced in place, so the user keeps their
+/// file name. If that file is gone (a previous update installed a different
+/// name), the build is placed beside it instead of failing the whole update
+/// with "not running as an AppImage".
+fn install_target(
+    recorded: Option<&std::path::Path>,
+    asset: &str,
+) -> Option<std::path::PathBuf> {
+    let recorded = recorded?;
+    if recorded.is_file() {
+        return Some(recorded.to_path_buf());
+    }
+    let dir = recorded.parent()?;
+    dir_writable(dir).then(|| dir.join(asset))
 }
 
 fn http_get_text(url: &str, timeout_s: u64) -> Result<String, String> {
@@ -274,11 +315,12 @@ pub fn download_update(rel: &Release, arch: &str) -> Result<std::path::PathBuf, 
         .asset_url("SHA256SUMS")
         .ok_or_else(|| format!("no checksums in release {}", rel.tag))?;
 
-    // Download beside the running AppImage, not into /tmp: /tmp is usually a
-    // tmpfs and the final swap is a rename(), which cannot cross filesystems.
-    let base = appimage_target()
-        .filter(|t| t.parent().is_some_and(dir_writable))
-        .and_then(|t| t.parent().map(std::path::Path::to_path_buf))
+    // Download beside the install target, not into /tmp: /tmp is usually a
+    // tmpfs and the final move is a rename(), which cannot cross filesystems.
+    // The target's own directory still counts when the file itself is gone.
+    let base = appimage_path()
+        .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+        .filter(|d| dir_writable(d))
         .unwrap_or_else(std::env::temp_dir);
     let dest = base.join(format!("proton-update-{name}"));
 
@@ -435,7 +477,17 @@ pub fn install_update_and_restart(
     dl: &std::path::Path,
     tag: &str,
 ) -> Result<std::path::PathBuf, String> {
-    let target = appimage_target().ok_or("not running as an AppImage")?;
+    // `download_update` names the file `proton-update-<asset>`; the asset name
+    // is what the new build is called when it cannot replace an existing file.
+    let asset = dl
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.strip_prefix("proton-update-"))
+        .ok_or_else(|| "unexpected download name".to_string())?;
+    let recorded = appimage_path();
+    let target = install_target(recorded.as_deref(), asset)
+        .ok_or_else(|| "not running as an AppImage".to_string())?;
+    let in_place = target.is_file();
     let stage = sidecar(&target, ".new");
     let old = sidecar(&target, ".old");
     // Same directory: one atomic rename; a /tmp staging falls back to copy.
@@ -453,6 +505,16 @@ pub fn install_update_and_restart(
         return Err(
             "the new version failed its start-up check - you keep the current one".to_string(),
         );
+    }
+    if !in_place {
+        // Nothing is being replaced, so there is nothing to roll back: just
+        // put the verified build where the launcher can start it.
+        return std::fs::rename(&stage, &target)
+            .map(|()| target)
+            .map_err(|e| {
+                let _ = std::fs::remove_file(&stage);
+                format!("could not place the update ({e})")
+            });
     }
     let mark = serde_json::json!({
         "old": old.to_string_lossy(),
@@ -480,6 +542,34 @@ pub fn install_update_and_restart(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An update must still install when the running AppImage's file is gone
+    /// (a previous update installed a different name); before 3.16.93 that
+    /// failed with "not running as an AppImage".
+    #[test]
+    fn install_target_follows_a_vanished_appimage() {
+        let dir = std::env::temp_dir().join(format!("pd-install-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let current = dir.join("ProtonDrive-CLI-0.9.0-GUI-3.13.0-x86_64.AppImage");
+        std::fs::write(&current, b"x").unwrap();
+
+        // An existing AppImage is replaced in place, keeping its name.
+        assert_eq!(
+            install_target(Some(&current), "new.AppImage"),
+            Some(current.clone())
+        );
+        // A vanished one gets the new build beside it, under the asset name.
+        let gone = dir.join("ProtonDrive-CLI-0.9.0-GUI-3.12.0-x86_64.AppImage");
+        assert_eq!(
+            install_target(Some(&gone), "new.AppImage"),
+            Some(dir.join("new.AppImage"))
+        );
+        // Not an AppImage at all: nothing to install into.
+        assert_eq!(install_target(None, "new.AppImage"), None);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn parses_release_tag() {

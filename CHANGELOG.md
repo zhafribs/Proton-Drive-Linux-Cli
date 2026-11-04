@@ -1,3 +1,15 @@
+## 3.16.93 — 2026-11-04
+
+- **The update button survives a moved AppImage.** When the running file had been
+  replaced by one with a new name, `APPIMAGE` pointed at a path that no longer
+  existed and the whole update aborted with "not running as an AppImage" even
+  though the download itself was fine. The build is now placed beside the old
+  path when it cannot replace it, and the download is staged in that same
+  directory, so an update always lands where the launcher can run it.
+- **A rate-limited update check says what it is.** GitHub's unauthenticated API
+  allows 60 requests an hour per IP; hitting the limit showed a bare "HTTP 403".
+  It now reads "GitHub is rate-limiting update checks - try again in ~N min".
+
 ## 3.16.92 — 2026-11-04
 
 - **A stale service unit no longer kills syncing.** When an update installed the
