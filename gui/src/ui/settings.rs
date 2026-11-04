@@ -23,6 +23,7 @@ pub struct Draft {
     /// Photos: sync on/off and where they land locally.
     pub photos: bool,
     pub photos_local: String,
+    pub photos_deletes: bool,
     pub selective: bool,
     pub env_text: String,
 
@@ -80,6 +81,7 @@ impl Draft {
             exclude: get("PROTON_SYNC_EXCLUDE", ""),
             photos: get("PROTON_SYNC_PHOTOS", "1") != "0",
             photos_local: get("PROTON_SYNC_PHOTOS_LOCAL", ""),
+            photos_deletes: get("PROTON_SYNC_PHOTOS_DELETES", "1") != "0",
             selective: !selection.is_empty(),
             env_text: extras.join("\n"),
             nodes: HashMap::from([(String::new(), selection.is_empty())]),
@@ -398,6 +400,7 @@ pub fn do_save(app: &mut App) {
     values.insert("PROTON_SYNC_EXCLUDE".into(), d.exclude.clone());
     values.insert("PROTON_SYNC_PHOTOS".into(), flag(d.photos));
     values.insert("PROTON_SYNC_PHOTOS_LOCAL".into(), d.photos_local.trim().to_string());
+    values.insert("PROTON_SYNC_PHOTOS_DELETES".into(), flag(d.photos_deletes));
     let extras: Vec<String> = d
         .env_text
         .lines()
@@ -545,6 +548,18 @@ fn photos_card(app: &mut App, ui: &mut egui::Ui) {
         ui.label(
             egui::RichText::new(
                 "New files in this folder upload to My Photos; photos that are only in                  the cloud download here. Nothing is deleted or overwritten.",
+            )
+            .size(11.5)
+            .weak(),
+        );
+        ui.add_space(6.0);
+        let mut del = app.draft.photos_deletes;
+        if widgets::toggle(ui, "Propagate deletions", &mut del, None) {
+            app.draft.photos_deletes = del;
+        }
+        ui.label(
+            egui::RichText::new(
+                "A photo deleted on one side is deleted on the other: cloud copies go to                  the Proton trash, local copies are removed. Only photos already synced                  are affected, and a folder that looks unmounted is never emptied.",
             )
             .size(11.5)
             .weak(),

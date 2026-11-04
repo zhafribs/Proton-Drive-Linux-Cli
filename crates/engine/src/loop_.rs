@@ -198,7 +198,12 @@ pub fn run_loop() -> Result<()> {
                 if crate::photos::enabled(&values)
                     && let Some(dir) = crate::photos::local_dir(&values)
                     && dir.is_dir()
-                    && let Err(e) = crate::photos::sync(&cli, &dir, &state_dir())
+                    && let Err(e) = crate::photos::sync(
+                        &cli,
+                        &dir,
+                        &state_dir(),
+                        crate::photos::deletes_enabled(&values),
+                    )
                 {
                     eprintln!("photos: {e:#}");
                 }

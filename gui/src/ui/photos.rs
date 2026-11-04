@@ -85,6 +85,10 @@ struct SyncSummary {
     local: u64,
     uploaded: u64,
     downloaded: u64,
+    #[serde(default)]
+    trashed: u64,
+    #[serde(default)]
+    removed: u64,
     conflicts: u64,
     error: String,
 }
@@ -107,10 +111,10 @@ fn read_summary(app: &mut App) -> String {
         "In sync \u{b7} {} in the cloud, {} on disk",
         s.remote, s.local
     );
-    if s.uploaded > 0 || s.downloaded > 0 {
+    if s.uploaded + s.downloaded + s.trashed + s.removed > 0 {
         line.push_str(&format!(
-            " \u{b7} last pass {} up, {} down",
-            s.uploaded, s.downloaded
+            " \u{b7} last pass {} up, {} down, {} trashed, {} removed",
+            s.uploaded, s.downloaded, s.trashed, s.removed
         ));
     }
     if s.conflicts > 0 {

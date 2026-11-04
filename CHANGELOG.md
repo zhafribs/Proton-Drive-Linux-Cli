@@ -1,3 +1,20 @@
+## 3.20.0 — 2026-11-05
+
+- **Photo deletions now travel both ways.** Delete a file in `~/ProtonPhotos` and
+  the cloud photo goes to the Proton trash; trash a photo in any Proton app and
+  the local copy is removed. It only touches photos the engine has *seen in
+  sync* (recorded in `photos-state.json`), so a first run can never delete
+  anything.
+- **Guards.** Nothing is deleted when the photo folder looks like an unmounted
+  disk (it is empty but photos are known to be synced), deletions obey a new
+  **Settings → Photos → Propagate deletions** switch
+  (`PROTON_SYNC_PHOTOS_DELETES=0`), and at most 25 deletions run per cycle - a
+  mass delete crawls instead of wiping the library.
+- The page reports deletions too: "last pass 1 up, 0 down, 1 trashed, 1 removed".
+- Fixed on the way: a photo uploaded in one cycle was not recorded as synced
+  (the timeline snapshot predated the upload), so the next cycle downloaded it
+  back instead of propagating a local delete.
+
 ## 3.19.1 — 2026-11-05
 
 - **The day label hands over later.** It now stays put while any part of that

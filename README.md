@@ -59,10 +59,14 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
   real thumbnails** (PNG and JPEG decoded in-process, downscaled and cached),
   with the day label pinned while you scroll. Select tiles to **Download** or
   **Delete** (moves to the Proton photos trash and removes the local copy).
-  **Two-way sync with `~/ProtonPhotos`**: new files in that folder upload, new
-  cloud photos download (`PROTON_SYNC_PHOTOS=0` turns it off,
-  `PROTON_SYNC_PHOTOS_LOCAL` moves it). Nothing is overwritten — a name whose
-  size differs on both sides keeps both copies and is reported once.
+  **Two-way sync with `~/ProtonPhotos`**: new files upload, new cloud photos
+  download, and deletions travel both ways — a local delete trashes the cloud
+  copy, a cloud trash removes the local file — but only for photos the engine
+  has already seen in sync, with an unmounted-folder guard and a 25-deletions
+  cap per cycle. Nothing is overwritten: a name whose size differs on both sides
+  keeps both copies and is reported once. `PROTON_SYNC_PHOTOS=0` (or
+  `PROTON_SYNC_PHOTOS_DELETES=0` for deletions only) and
+  `PROTON_SYNC_PHOTOS_LOCAL` are settable in Settings → Photos.
 - **Home** — one plain-language status orb with pause (15 min, 1 h, until
   resumed), file count and disk usage in the sidebar, a live transfer progress
   bar and queue, and the activity feed (uploads, downloads, removals,
