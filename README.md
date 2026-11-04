@@ -62,10 +62,12 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
 - **Settings** — selective sync, never-sync patterns, instant upload, check
   intervals, notifications, light/dark/system theme, interface size, tray,
   start-at-login, menu install and **in-app updates** (SHA-256 verified).
-- **Tray + notifications** — a plain icon when synced, a pulse while starting,
-  syncing or signing in, and a red X when paused, signed out, stopped or in
-  error. Click it to reopen the window (it floats on Hyprland). Closing the
-  window keeps syncing in the background.
+- **Tray + notifications** — a status dot tells you the state at a glance:
+  green when synced, cyan while syncing or signing in, blue while the engine
+  starts, magenta on the welcome screen, amber when paused or your session
+  expired, grey when the engine is stopped, red on error. Hovering names the
+  exact state. Click it to reopen the window (it floats on Hyprland). Closing
+  the window keeps syncing in the background.
 - **Account** — the bottom-left pill shows your email and live status; sign in
   or sign out from its menu.
 

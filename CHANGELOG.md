@@ -1,3 +1,18 @@
+## 3.16.90 — 2026-11-04
+
+- **The tray icon shows the state as a coloured dot again.** The fade-in/out
+  pulse and the red X badge are gone: one dot in the lower-right corner is
+  green when synced, cyan while syncing or signing in, blue while the engine
+  starts, magenta on the welcome screen, amber when paused or your session
+  expired, grey when the engine is stopped and red on error. The colours are
+  the ones the Home orb and the sidebar dot already use, apart from two the
+  panel forced: the working states take cyan because their purple would vanish
+  into the purple cloud, and the welcome screen takes magenta because blue
+  there means "engine booting". The tooltip still names the exact state.
+- **The tray no longer animates.** The 400 ms pulse thread and its icon-only
+  refreshes are deleted, so the icon is repainted only when the status
+  changes.
+
 ## 3.16.89 — 2026-11-02
 
 - **No false “session expired” at boot.** The sync service starts before the

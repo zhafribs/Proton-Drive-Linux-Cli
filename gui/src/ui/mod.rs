@@ -775,11 +775,12 @@ impl App {
     }
 
     /// Push status/tooltip/menu state to the tray (Qt refreshed the icon,
-    /// tooltip and action enablement on every status refresh).
+    /// tooltip and action enablement on every status refresh). The icon needs
+    /// no timer any more: the dot's colour is the state, so one `update` per
+    /// status change repaints it.
     fn tray_sync(&self) {
         let Some(tray) = &self.tray else { return };
         let status_key = self.status_key().to_string();
-        tray.set_pulsing(tray::pulses(&status_key));
         let title = self.side_label().to_string();
         let active = self.active;
         let recent = tray::recent_labels(&self.changes);

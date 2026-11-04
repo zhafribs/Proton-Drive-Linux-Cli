@@ -7,32 +7,28 @@
 use crate::journal::ChangeRow;
 use crate::ui::Back;
 use crate::util::rel_time;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 
-/// What the tray icon should communicate.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum IconMode {
-    /// Synced: the plain app icon.
-    Normal,
-    /// Work in progress: fade the icon in and out.
-    Pulse,
-    /// Not syncing, paused, signed out or an error: app icon with an X.
-    Error,
-}
-
-pub fn icon_mode(status_key: &str) -> IconMode {
-    match status_key {
-        "synced" => IconMode::Normal,
-        // Starting, checking and signing in are still working states.
-        "syncing" | "starting" | "signing_in" | "unknown" => IconMode::Pulse,
-        _ => IconMode::Error,
-    }
-}
-
-pub fn pulses(status_key: &str) -> bool {
-    icon_mode(status_key) == IconMode::Pulse
+/// The dot's colour *is* the state. It comes from `theme::status_color` - the
+/// same value the Home orb, the sidebar presence dot and the account menu
+/// paint - so the panel cannot disagree with the window, with two exceptions
+/// where the in-app hue would be illegible or ambiguous on the panel:
+///
+/// - the working states are `ACCENT` purple, the tray artwork's own colour, so
+///   they take the palette's cyan (which the app already uses for transfers);
+/// - `signed_out` shares blue with `starting` in the app, but "welcome, sign in"
+///   and "engine booting" are opposites, so it gets the palette's magenta.
+///
+/// Ten states collapse to seven readable dots (busy, ok, booting, welcome,
+/// attention, stopped, broken); the tooltip still spells out the exact state.
+pub fn dot_color(status_key: &str) -> [u8; 3] {
+    let c = match status_key {
+        "syncing" | "signing_in" => crate::theme::CYAN,
+        "signed_out" => crate::theme::MAGENTA,
+        other => crate::theme::status_color(other),
+    };
+    let [r, g, b, _] = c.to_array();
+    [r, g, b]
 }
 
 fn smooth(edge0: f32, edge1: f32, x: f32) -> f32 {
@@ -61,24 +57,24 @@ fn alpha_bounds(rgba: &[u8], w: usize, h: usize) -> Option<(usize, usize, usize,
     (x1 > x0 && y1 > y0).then_some((x0, y0, x1, y1))
 }
 
-/// Qt drew a 72x72 canvas: the 64px icon scaled to 66px at (2,2), then a
-/// status dot `drawEllipse(52, 52, 18, 18)` with a 4px white pen (so the
-/// color fill shows to r=7 and the white ring covers 7..11, center (61,61)).
+/// A 72x72 canvas: the cloud, cropped to its alpha bounds and scaled into the
+/// top 72x66, plus a status dot in the strip below it.
 ///
-/// The dot is deliberately larger than Qt's: at a 22px tray size the old
-/// 14px fill became ~4px, making green (synced) and purple (syncing) hard to
-/// tell apart.
+/// The crop exists because the cloud PNG has ~19% transparent padding, which
+/// made the tray icon look much smaller than a full-bleed icon like ZapFast.
 ///
-/// The cloud PNG has ~19% transparent padding, which made the tray icon look
-/// much smaller than a full-bleed icon like ZapFast. Crop to the alpha bounds
-/// and scale that content to 72x66, so the cloud fills the slot; the badge
-/// stays bottom-right in the remaining strip.
-/// Returns ARGB32 bytes, which is what `ksni::Icon` wants.
-pub fn compose_icon(base_rgba: &[u8], base_w: usize, status_key: &str, pulse: f32) -> Vec<u8> {
+/// Qt drew the dot as `drawEllipse(52, 52, 18, 18)` with a 4px white pen
+/// (colour fill to r=7, ring 7..11). Ours is bigger - r=17 with a 12px fill -
+/// because a 22px panel slot shrinks it to ~10px, and the white ring is what
+/// keeps it legible on light, dark and tinted panels.
+///
+/// Returns ARGB32 bytes, which is what `ksni::Icon` wants. `status_key` is
+/// `health::UiStatus::key()`; the dot colour comes from [`dot_color`], so the
+/// state is read from hue alone - nothing animates.
+pub fn compose_icon(base_rgba: &[u8], base_w: usize, status_key: &str) -> Vec<u8> {
     const C: usize = 72;
     const ICON_W: usize = 72;
     const ICON_H: usize = 66;
-    let mode = icon_mode(status_key);
     let mut canvas: Vec<[f32; 4]> = vec![[0.0; 4]; C * C]; // premultiplied RGBA
 
     let base_h = if base_w > 0 && base_rgba.len() >= base_w * base_w * 4 {
@@ -135,65 +131,41 @@ pub fn compose_icon(base_rgba: &[u8], base_w: usize, status_key: &str, pulse: f3
         dst[3] = a + dst[3] * ia;
     };
 
-    // Error badge: a red disc with a white X over the lower-right corner.
-    // There is no status dot any more; this is the only badge.
-    if mode == IconMode::Error {
-        const BX: f32 = 54.0;
-        const BY: f32 = 54.0;
-        const BR: f32 = 17.0;
-        const ARM: f32 = 7.5;
-        for y in 0..C {
-            for x in 0..C {
-                let px = x as f32 + 0.5;
-                let py = y as f32 + 0.5;
-                let d = ((px - BX).powi(2) + (py - BY).powi(2)).sqrt();
-                let idx = y * C + x;
-                let disc = 1.0 - smooth(BR - 0.5, BR + 0.5, d);
-                if disc > 0.0 {
-                    over(idx, [0xdc, 0x26, 0x26], disc);
-                }
-                if d <= BR - 2.0 {
-                    let a = segment_distance(px, py, BX - ARM, BY - ARM, BX + ARM, BY + ARM);
-                    let b = segment_distance(px, py, BX + ARM, BY - ARM, BX - ARM, BY + ARM);
-                    let x = 1.0 - smooth(2.1, 2.7, a.min(b));
-                    if x > 0.0 {
-                        over(idx, [0xff; 3], x);
-                    }
-                }
+    // Status dot: the state's colour inside a white ring, bottom-right.
+    const BX: f32 = 54.0;
+    const BY: f32 = 54.0;
+    const BR: f32 = 17.0;
+    const FILL: f32 = 12.0;
+    let dot = dot_color(status_key);
+    for y in 0..C {
+        for x in 0..C {
+            let px = x as f32 + 0.5;
+            let py = y as f32 + 0.5;
+            let d = ((px - BX).powi(2) + (py - BY).powi(2)).sqrt();
+            let idx = y * C + x;
+            let ring = 1.0 - smooth(BR - 0.5, BR + 0.5, d);
+            if ring > 0.0 {
+                over(idx, [0xff; 3], ring);
+            }
+            let fill = 1.0 - smooth(FILL - 0.5, FILL + 0.5, d);
+            if fill > 0.0 {
+                over(idx, dot, fill);
             }
         }
     }
 
-    // Unpremultiply into ARGB32. The pulse dims the whole icon; the badge
-    // only exists in Error mode, which never pulses.
-    let dim = if mode == IconMode::Pulse {
-        0.35 + 0.65 * (0.5 - 0.5 * (std::f32::consts::TAU * pulse.clamp(0.0, 1.0)).cos())
-    } else {
-        1.0
-    };
+    // Unpremultiply into ARGB32.
     let mut out = vec![0u8; C * C * 4];
     for (i, px) in canvas.iter().enumerate() {
         let a = px[3];
         let (r, g, b) = (px[0] / a.max(1e-6), px[1] / a.max(1e-6), px[2] / a.max(1e-6));
         let o = i * 4;
-        out[o] = (a * dim * 255.0).round().clamp(0.0, 255.0) as u8;
+        out[o] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
         out[o + 1] = (r * 255.0).round().clamp(0.0, 255.0) as u8;
         out[o + 2] = (g * 255.0).round().clamp(0.0, 255.0) as u8;
         out[o + 3] = (b * 255.0).round().clamp(0.0, 255.0) as u8;
     }
     out
-}
-
-/// Shortest distance from a point to a line segment (for the badge X).
-fn segment_distance(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
-    let (dx, dy) = (bx - ax, by - ay);
-    let len2 = dx * dx + dy * dy;
-    let t = if len2 <= f32::EPSILON {
-        0.0
-    } else {
-        (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0)
-    };
-    ((px - (ax + t * dx)).powi(2) + (py - (ay + t * dy)).powi(2)).sqrt()
 }
 
 /// "Recent files" entries: last 5 changes, newest first, Qt's label shape
@@ -215,7 +187,6 @@ pub fn recent_labels(changes: &[ChangeRow]) -> Vec<(String, String)> {
 
 pub struct AppTray {
     status_key: String,
-    pulse: f32,
     title: String,
     active: bool,
     recent: Vec<(String, String)>,
@@ -277,7 +248,7 @@ impl ksni::Tray for AppTray {
         vec![ksni::Icon {
             width: 72,
             height: 72,
-            data: compose_icon(&self.base_rgba, self.base_w, &self.status_key, self.pulse),
+            data: compose_icon(&self.base_rgba, self.base_w, &self.status_key),
         }]
     }
 
@@ -347,19 +318,15 @@ impl ksni::Tray for AppTray {
     }
 }
 
-/// A live tray handle plus the flag the pulse thread watches.
+/// A live tray handle. Every change arrives through `Handle::update`, which
+/// is also what tells the host to re-read the icon - nothing ticks any more.
 pub struct Tray {
     handle: ksni::blocking::Handle<AppTray>,
-    pulsing: Arc<AtomicBool>,
 }
 
 impl Tray {
     pub fn update<R>(&self, f: impl FnOnce(&mut AppTray) -> R) -> Option<R> {
         self.handle.update(f)
-    }
-
-    pub fn set_pulsing(&self, on: bool) {
-        self.pulsing.store(on, Ordering::Relaxed);
     }
 }
 
@@ -374,7 +341,6 @@ pub fn spawn(
     use ksni::blocking::TrayMethods;
     let tray = AppTray {
         status_key: "unknown".into(),
-        pulse: 1.0,
         title: "Checking your files...".into(),
         active: false,
         recent: Vec::new(),
@@ -390,90 +356,95 @@ pub fn spawn(
         }
     };
 
-    // The tray host only re-reads the icon on `update`, so the fade needs its
-    // own clock. It runs only while the status is a pulsing one; otherwise
-    // the loop just checks an atomic.
-    let pulsing = Arc::new(AtomicBool::new(false));
-    let pulse_handle = handle.clone();
-    let pulse_flag = pulsing.clone();
-    std::thread::spawn(move || {
-        let start = std::time::Instant::now();
-        loop {
-            // Do not tick at animation rate while the icon is idle.
-            if !pulse_flag.load(Ordering::Relaxed) {
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                continue;
-            }
-            // 400 ms (~2.5 fps): smooth enough to read as a pulse, slow
-            // enough that a status bar does not starve while updating icons.
-            std::thread::sleep(std::time::Duration::from_millis(400));
-            let phase = (start.elapsed().as_secs_f32() / 2.0) % 1.0;
-            // Icon-only refresh: rebuilding the SNI menu 2.5x/s starved
-            // Noctalia and made every tray icon unclickable.
-            if pulse_handle.update_icon(|t| t.pulse = phase).is_none() {
-                break;
-            }
-        }
-    });
-
-    Some(Tray { handle, pulsing })
+    Some(Tray { handle })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Every state `health::UiStatus::key()` can produce, all ten of them.
+    const STATES: [&str; 10] = [
+        "synced",
+        "syncing",
+        "paused",
+        "needs_login",
+        "signed_out",
+        "signing_in",
+        "engine_stopped",
+        "starting",
+        "error",
+        "unknown",
+    ];
+
+    /// The tray dot follows the window's palette, except where that hue would
+    /// be invisible or ambiguous on the icon: the working states take the cyan
+    /// and the welcome screen the magenta.
     #[test]
-    fn icon_modes_match_the_sync_state() {
-        assert_eq!(icon_mode("synced"), IconMode::Normal);
-        assert_eq!(icon_mode("syncing"), IconMode::Pulse);
-        assert_eq!(icon_mode("starting"), IconMode::Pulse);
-        assert_eq!(icon_mode("signing_in"), IconMode::Pulse);
-        for bad in ["error", "needs_login", "paused", "signed_out", "engine_stopped"] {
-            assert_eq!(icon_mode(bad), IconMode::Error, "{bad}");
+    fn dot_colour_is_the_app_palette_for_every_state() {
+        for key in STATES {
+            let expected = match key {
+                "syncing" | "signing_in" => crate::theme::CYAN,
+                "signed_out" => crate::theme::MAGENTA,
+                other => crate::theme::status_color(other),
+            };
+            let [r, g, b, a] = expected.to_array();
+            assert_eq!(a, 0xff, "{key} palette colour must be opaque");
+            assert_eq!(dot_color(key), [r, g, b], "{key}");
+        }
+        // No dot may be the cloud's own purple, or it would vanish on it.
+        let [ar, ag, ab, _] = crate::theme::ACCENT.to_array();
+        for key in STATES {
+            assert_ne!(dot_color(key), [ar, ag, ab], "{key} must not be the cloud colour");
+        }
+        // The opposites must never look alike: welcome vs booting, or vs paused.
+        assert_ne!(dot_color("signed_out"), dot_color("starting"));
+        assert_ne!(dot_color("signed_out"), dot_color("paused"));
+    }
+
+    #[test]
+    fn every_state_paints_its_dot() {
+        for key in STATES {
+            let argb = compose_icon(&[], 0, key);
+            let o = (54 * 72 + 54) * 4;
+            let [r, g, b] = dot_color(key);
+            assert_eq!(&argb[o..o + 4], &[0xff, r, g, b], "{key} dot centre");
         }
     }
 
+    /// The white ring is what keeps the dot readable on any panel background.
     #[test]
-    fn synced_icon_has_no_badge() {
-        let argb = compose_icon(&[], 0, "synced", 1.0);
-        let o = (56 * 72 + 56) * 4;
-        assert_eq!(&argb[o..o + 4], &[0, 0, 0, 0]);
-    }
-
-    #[test]
-    fn error_icon_draws_a_white_x_on_red() {
-        let argb = compose_icon(&[], 0, "error", 1.0);
-        // The two strokes cross at the badge center: white.
-        let o = (54 * 72 + 54) * 4;
+    fn dot_sits_on_a_white_ring() {
+        let argb = compose_icon(&[], 0, "error");
+        // ~14.5px out: past the 12px fill, inside the 17px disc.
+        let o = ((54 - 15) * 72 + 54) * 4;
         assert_eq!(&argb[o..o + 4], &[0xff, 0xff, 0xff, 0xff]);
-        // Left of the arms, still on the red disc.
-        let o = (54 * 72 + 40) * 4;
+        // Inside the fill: the state colour, not a glyph.
+        let o = ((54 - 8) * 72 + 54) * 4;
         assert_eq!(&argb[o..o + 4], &[0xff, 0xdc, 0x26, 0x26]);
     }
 
+    /// No animation: the same key always composes byte-identical pixels.
     #[test]
-    fn pulse_fades_the_whole_icon() {
+    fn the_icon_is_static() {
         let base = vec![255u8; 64 * 64 * 4];
-        let full = compose_icon(&base, 64, "syncing", 0.5);
-        let dim = compose_icon(&base, 64, "syncing", 0.0);
-        let o = 0;
-        assert_eq!(full[o], 0xff, "pulse peak should be opaque");
-        assert!(dim[o] < 0x60, "pulse trough should be faded: {}", dim[o]);
-        assert_eq!(&full[o + 1..o + 4], &[0xff, 0xff, 0xff]);
+        assert_eq!(
+            compose_icon(&base, 64, "syncing"),
+            compose_icon(&base, 64, "syncing")
+        );
     }
 
     #[test]
     fn base_icon_fills_the_slot_and_crops_padding() {
         // A solid 64px base fills 72x66, leaving only the strip below for the
-        // badge.
+        // dot.
         let base = vec![255u8; 64 * 64 * 4];
-        let argb = compose_icon(&base, 64, "synced", 1.0);
+        let argb = compose_icon(&base, 64, "synced");
         for (x, y) in [(0, 0), (71, 0), (0, 65), (71, 65)] {
             let o = (y * 72 + x) * 4;
             assert_eq!(&argb[o..o + 4], &[0xff, 0xff, 0xff, 0xff], "({x},{y})");
         }
-        // Below the icon and clear of the badge.
+        // Below the icon and clear of the dot.
         let o = (71 * 72) * 4;
         assert_eq!(&argb[o..o + 4], &[0, 0, 0, 0]);
     }
@@ -489,7 +460,7 @@ mod tests {
                 base[i..i + 4].copy_from_slice(&[0xff, 0xff, 0xff, 0xff]);
             }
         }
-        let argb = compose_icon(&base, 64, "synced", 1.0);
+        let argb = compose_icon(&base, 64, "synced");
         for (x, y) in [(0, 0), (71, 0), (0, 65), (71, 65)] {
             let o = (y * 72 + x) * 4;
             assert_eq!(&argb[o..o + 4], &[0xff, 0xff, 0xff, 0xff], "({x},{y})");
