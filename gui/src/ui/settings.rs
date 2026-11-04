@@ -20,6 +20,9 @@ pub struct Draft {
     pub auto_workers: bool,
     pub transfers: i32,
     pub exclude: String,
+    /// Photos: sync on/off and where they land locally.
+    pub photos: bool,
+    pub photos_local: String,
     pub selective: bool,
     pub env_text: String,
 
@@ -75,6 +78,8 @@ impl Draft {
             auto_workers: get("PROTON_SYNC_AUTO_WORKERS", "1") == "1",
             transfers: parse_transfers(&get("PROTON_SYNC_TRANSFERS", "4")),
             exclude: get("PROTON_SYNC_EXCLUDE", ""),
+            photos: get("PROTON_SYNC_PHOTOS", "1") != "0",
+            photos_local: get("PROTON_SYNC_PHOTOS_LOCAL", ""),
             selective: !selection.is_empty(),
             env_text: extras.join("\n"),
             nodes: HashMap::from([(String::new(), selection.is_empty())]),
@@ -224,6 +229,7 @@ const COLUMN_A: &[CardFn] = &[
     folder_card,
     what_syncs_card,
     how_often_card,
+    photos_card,
     performance_card,
     fine_tuning_card,
 ];
@@ -240,6 +246,7 @@ const COLUMN_ALL: &[CardFn] = &[
     folder_card,
     what_syncs_card,
     how_often_card,
+    photos_card,
     performance_card,
     notifications_card,
     background_card,
@@ -254,7 +261,7 @@ const COLUMN_ALL: &[CardFn] = &[
 // How often across, so no single column runs far past the others. The
 // advanced/troubleshooting cards join the same packing, not a separate block.
 const COLUMN_3A: &[CardFn] =
-    &[folder_card, what_syncs_card, performance_card, fine_tuning_card];
+    &[folder_card, what_syncs_card, photos_card, performance_card, fine_tuning_card];
 const COLUMN_3B: &[CardFn] = &[
     how_often_card,
     notifications_card,
@@ -389,6 +396,8 @@ pub fn do_save(app: &mut App) {
     values.extend(performance_values(d.fast_start, d.auto_workers, d.transfers));
     values.insert("PROTON_SYNC_SUBFOLDERS".into(), selection.join(","));
     values.insert("PROTON_SYNC_EXCLUDE".into(), d.exclude.clone());
+    values.insert("PROTON_SYNC_PHOTOS".into(), flag(d.photos));
+    values.insert("PROTON_SYNC_PHOTOS_LOCAL".into(), d.photos_local.trim().to_string());
     let extras: Vec<String> = d
         .env_text
         .lines()
@@ -523,6 +532,31 @@ fn what_syncs_card(app: &mut App, ui: &mut egui::Ui) {
                 .hint_text("For example:  *.tmp, .cache, *.iso")
                 .desired_width(f32::INFINITY),
         );
+    });
+}
+
+fn photos_card(app: &mut App, ui: &mut egui::Ui) {
+    widgets::card(ui, Some("Photos"), |ui| {
+        let mut on = app.draft.photos;
+        if widgets::toggle(ui, "Sync my photos with this computer", &mut on, None) {
+            app.draft.photos = on;
+        }
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(
+                "New files in this folder upload to My Photos; photos that are only in                  the cloud download here. Nothing is deleted or overwritten.",
+            )
+            .size(11.5)
+            .weak(),
+        );
+        ui.add_space(8.0);
+        labeled_control(ui, "Photo folder", |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut app.draft.photos_local)
+                    .hint_text("~/ProtonPhotos")
+                    .desired_width(f32::INFINITY),
+            );
+        });
     });
 }
 

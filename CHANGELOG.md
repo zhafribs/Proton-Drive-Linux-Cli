@@ -1,3 +1,21 @@
+## 3.19.1 — 2026-11-05
+
+- **The day label hands over later.** It now stays put while any part of that
+  day's card is still on screen, and is only replaced once the card has scrolled
+  completely out of view. (The first cut compared content coordinates with
+  screen coordinates, so it switched far too early.)
+- **No date inside the day card.** The label is only the pinned one at the top.
+- **Thumbnails retry after a file comes back.** A photo deleted locally and
+  restored kept a stale "failed to decode" mark, so it never showed a picture;
+  failures now remember the file's stamp and retry when the file changes.
+- **Settings → Photos.** New card with "Sync my photos with this computer" and
+  the photo folder (blank = `~/ProtonPhotos`); saving it restarts the sync
+  service, so it applies immediately.
+- **No more flicker.** "Loading the photo timeline..." now appears only on the
+  first load; background re-reads are silent, and they only happen when the
+  folder or the cloud set actually changed - the summary file is rewritten every
+  engine cycle, which used to trigger a reload each time.
+
 ## 3.19.0 — 2026-11-05
 
 - **Delete photos.** Select tiles and press Delete: they go to the Proton photos

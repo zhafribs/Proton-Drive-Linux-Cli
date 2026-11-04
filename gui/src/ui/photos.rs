@@ -29,18 +29,19 @@ pub struct PhotoState {
     pub tex: std::collections::HashMap<String, (f64, egui::TextureHandle)>,
     /// Thumbnails being decoded right now.
     pub in_flight: std::collections::HashSet<String>,
-    /// Names that failed to decode (unsupported format, broken file).
-    pub failed: std::collections::HashSet<String>,
+    /// Names that failed to decode, with the file stamp at that moment: a file
+    /// that comes back (or is restored) retries with its new stamp.
+    pub failed: std::collections::HashMap<String, f64>,
     /// "In sync · N in the cloud, M on disk" line from the engine's last cycle.
     pub last_sync: String,
     /// Epoch seconds of the last timeline fetch, so a revisit can re-list.
     pub fetched_at: f64,
     /// A delete is in flight.
     pub deleting: bool,
-    /// Change detection: last seen stamps of the folder and the engine summary,
-    /// plus when we last looked (so this costs two `stat`s per second).
+    /// Change detection: last seen folder stamp, the engine summary we already
+    /// acted on, and when we last looked (two `stat`s per second at most).
     pub dir_stamp: f64,
-    pub summary_stamp: f64,
+    pub summary_ts: String,
     pub probed_at: f64,
 }
 
@@ -68,9 +69,9 @@ pub fn on_shown(app: &mut App) {
     // The folder existing is what turns the engine's photo sync on, so create
     // it the first time the page is opened.
     let _ = std::fs::create_dir_all(local_dir(app));
-    // Re-read the list on a revisit: the engine syncs on every cycle (Home's
-    // "Sync now" included), so a list older than a minute may be out of date.
-    if !app.photos.loaded || app.now() - app.photos.fetched_at > 60.0 {
+    // Later re-reads come from `tick` (folder or engine summary changed), not
+    // from a timer: a background reload every minute only flickered.
+    if !app.photos.loaded {
         refresh(app);
     }
 }
@@ -129,7 +130,12 @@ pub fn refresh(app: &mut App) {
     app.photos.loading = true;
     app.photos.fetched_at = app.now();
     app.photos.error.clear();
-    app.photos.status = "Loading the photo timeline...".to_string();
+    // Only the first load says so: a background re-read must not flash text.
+    app.photos.status = if app.photos.items.is_empty() {
+        "Loading the photo timeline...".to_string()
+    } else {
+        String::new()
+    };
     let tx = app.tx.clone();
     std::thread::spawn(move || {
         let _ = tx.send(super::Back::Photos(cli::fetch_photos()));
@@ -247,11 +253,23 @@ pub fn tick(app: &mut App) {
     }
     app.photos.probed_at = now;
     let dir_stamp = file_stamp(&local_dir(app));
-    let summary_stamp = file_stamp(&app.paths.state_dir.join("photos-sync.json"));
-    let changed = (app.photos.dir_stamp != 0.0 && dir_stamp != app.photos.dir_stamp)
-        || (app.photos.summary_stamp != 0.0 && summary_stamp != app.photos.summary_stamp);
+    // Files appearing or disappearing on disk (a download, a delete, a drop).
+    let mut changed = app.photos.dir_stamp != 0.0 && dir_stamp != app.photos.dir_stamp;
     app.photos.dir_stamp = dir_stamp;
-    app.photos.summary_stamp = summary_stamp;
+    // A finished engine cycle, but only when it moved something or the cloud no
+    // longer matches what we show - the summary is rewritten every cycle, and
+    // reloading on that alone flickered.
+    let summary = std::fs::read_to_string(app.paths.state_dir.join("photos-sync.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<SyncSummary>(&t).ok());
+    if let Some(s) = summary
+        && s.ts != app.photos.summary_ts
+    {
+        if s.uploaded + s.downloaded > 0 || s.remote as usize != app.photos.items.len() {
+            changed = true;
+        }
+        app.photos.summary_ts = s.ts;
+    }
     if changed {
         refresh(app);
     }
@@ -501,12 +519,12 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                 return;
             }
 
+            // The day label is only painted once, pinned at the top: the card
+            // itself carries no date. It hands over when that day's card has
+            // scrolled completely out of sight, not when the next one appears.
             let mut current: Option<String> = None;
             for (day, group) in days(&app.photos.items) {
-                let start = ui.cursor().top();
                 ui.add_space(12.0);
-                ui.label(egui::RichText::new(&day).strong().size(13.5));
-                ui.add_space(4.0);
                 widgets::card(ui, None, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         for p in &group {
@@ -514,8 +532,10 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                         }
                     });
                 });
-                // This header is above the fold: it is the one to pin.
-                if start <= viewport.min.y {
+                // `viewport` is in content space, `min_rect` in screen space:
+                // convert the top edge once, then compare like with like.
+                let visible_top = ui.min_rect().top() + viewport.min.y;
+                if current.is_none() && ui.min_rect().bottom() > visible_top {
                     current = Some(day);
                 }
             }
@@ -549,8 +569,13 @@ fn tile(ui: &mut egui::Ui, app: &mut App, p: &cli::PhotoEntry, dir: &std::path::
     let path = dir.join(&p.name);
     let local = path.is_file();
     let stamp = if local { file_stamp(&path) } else { 0.0 };
+    let blocked = app
+        .photos
+        .failed
+        .get(&p.name)
+        .is_some_and(|s| (*s - stamp).abs() < 0.5);
     if local
-        && !app.photos.failed.contains(&p.name)
+        && !blocked
         && app.photos.tex.get(&p.name).is_none_or(|(s, _)| (*s - stamp).abs() >= 0.5)
     {
         request_thumb(app, &p.name, path.clone(), stamp);

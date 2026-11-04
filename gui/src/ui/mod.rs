@@ -1064,7 +1064,7 @@ impl App {
                             self.photos.tex.insert(name, (stamp, tex));
                         }
                         Err(_) => {
-                            self.photos.failed.insert(name);
+                            self.photos.failed.insert(name, stamp);
                         }
                     }
                 }
