@@ -661,7 +661,7 @@ fn performance_card(app: &mut App, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             if ui.button("Run full check now").clicked() {
                 match service::request_full_check(&app.paths) {
-                    Ok(()) => app.toast("Full check requested. Deletes stay held until it finishes."),
+                    Ok(()) => app.toast("Full check requested - checking now."),
                     Err(e) => app.toast(format!("Could not request a full check: {e}")),
                 }
             }

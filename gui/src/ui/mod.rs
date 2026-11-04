@@ -46,6 +46,8 @@ pub enum Back {
     SelFolders { parent: String, folders: Vec<(String, String)> },
     /// Whether the sync unit is enabled at login (slow systemctl call).
     UnitEnabled(bool),
+    /// "Restart syncing now" finished; `false` = systemctl refused.
+    ServiceRestarted(bool),
     /// Cloud browser: a folder listing landed (key + serial guard staleness).
     CloudEntries { key: String, serial: u64, result: Result<Vec<cli::RemoteEntry>, String> },
     /// A sidebar tree listing (never touches the visible folder).
@@ -870,11 +872,14 @@ impl App {
         self.paused_at = None;
         let _ = std::fs::remove_file(self.paths.state_dir.join("paused"));
         let appimage = self.paths.appimage.clone();
+        let tx = self.tx.clone();
         std::thread::spawn(move || {
             let _ = service::ensure_service_unit(appimage.as_deref(), false);
-            let _ = service::restart();
+            // Report the real outcome: `systemctl` can fail (no unit, no
+            // systemd session) and the old code toasted success regardless.
+            let _ = tx.send(Back::ServiceRestarted(service::restart()));
         });
-        self.toast("Syncing restarted.");
+        self.toast("Restarting syncing...");
     }
 
     pub fn action_check_updates(&mut self) {
@@ -1014,6 +1019,11 @@ impl App {
                     }
                 }
                 Back::UnitEnabled(b) => self.draft.autostart = b,
+                Back::ServiceRestarted(ok) => self.toast(if ok {
+                    "Syncing restarted."
+                } else {
+                    "Could not restart syncing - run: systemctl --user restart proton-sync"
+                }),
                 Back::CloudEntries { key, serial, result } => {
                     cloud::on_entries(self, key, serial, result)
                 }

@@ -170,8 +170,9 @@ pub fn unit_has_environment_file() -> bool {
         .unwrap_or(false)
 }
 
-/// Ask the running engine to start a fresh background audit. The file is a
-/// signal only; the engine removes it once it has started the audit.
+/// Ask the running engine to check now. The file is a signal only: the engine
+/// consumes it within a second, runs a full cloud walk and removes it. Without
+/// that reader the button was a no-op (fixed in 3.16.91).
 pub fn request_full_check(paths: &crate::paths::Paths) -> std::io::Result<()> {
     std::fs::create_dir_all(&paths.state_dir)?;
     std::fs::write(paths.state_dir.join("audit-request"), b"")

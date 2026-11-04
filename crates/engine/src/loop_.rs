@@ -74,15 +74,21 @@ pub fn run_loop() -> Result<()> {
         }
     }
 
-    // wake file
-    let wake_file = state_dir().join("wake");
+    // Wake requests: `wake` (Home/Tray "Sync now") and `audit-request`
+    // ("Run full check now"). Both are empty files written by the GUI; every
+    // cycle is already a full cloud walk, so a full-check request is just a
+    // wake - but the engine must be the one to delete it, or a request left
+    // behind would fire again on the next restart.
+    let requests = [
+        state_dir().join("wake"),
+        state_dir().join("audit-request"),
+    ];
     let w2 = wake.clone();
     let we2 = wake_event.clone();
     let wm2 = wake_mutex.clone();
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(1));
-        if wake_file.exists() {
-            let _ = fs::remove_file(&wake_file);
+        if requests.iter().any(|p| take_request(p)) {
             w2.store(true, std::sync::atomic::Ordering::Relaxed);
             let _guard = wm2.lock().unwrap();
             we2.notify_all();
@@ -722,6 +728,13 @@ fn acquire_process_lock() -> anyhow::Result<std::fs::File> {
     Ok(fh)
 }
 
+/// Take a GUI request file: `true` only when one was there and is now gone,
+/// so a request wakes the engine exactly once.
+fn take_request(path: &Path) -> bool {
+    path.exists() && fs::remove_file(path).is_ok()
+}
+
+
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
@@ -937,5 +950,22 @@ mod tests {
             elapsed >= Duration::from_millis(50) && elapsed < Duration::from_secs(2),
             "unexpected wait: {elapsed:?}"
         );
+    }
+
+    /// "Run full check now" is only a file drop, so the engine has to consume
+    /// it - otherwise the request sits there forever and the button does
+    /// nothing (3.16.90 and earlier).
+    #[test]
+    fn a_gui_request_is_consumed_exactly_once() {
+        let dir = std::env::temp_dir().join(format!("pd-engine-request-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("audit-request");
+        let _ = std::fs::remove_file(&path);
+        assert!(!take_request(&path), "a missing file is not a request");
+        std::fs::write(&path, b"").unwrap();
+        assert!(take_request(&path), "a written request wakes the engine");
+        assert!(!path.exists(), "the engine removes what it consumed");
+        assert!(!take_request(&path), "one request wakes once");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

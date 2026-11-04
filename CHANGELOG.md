@@ -1,3 +1,16 @@
+## 3.16.91 — 2026-11-04
+
+- **"Run full check now" does something again.** It wrote `audit-request` into
+  the state directory and the Rust engine never read it, so the button only
+  showed a toast (the file from the last press was still sitting there). The
+  engine now treats that file as a wake request, consumes it within a second
+  and runs a full walk. The toast no longer promises a delete hold the engine
+  does not implement.
+- **"Restart syncing now" reports what really happened.** A failing `systemctl`
+  was discarded and the toast always claimed success; it now says
+  "Syncing restarted." only when the restart succeeded, and names the command
+  to run otherwise.
+
 ## 3.16.90 — 2026-11-04
 
 - **The tray icon shows the state as a coloured dot again.** The fade-in/out
