@@ -387,6 +387,31 @@ fn photo_download_args(uids: &[String], dir: &std::path::Path) -> Vec<String> {
     args
 }
 
+/// The argv for `fs trash`: photo uids become `/photos/<uid>` paths, which stay
+/// unambiguous when two photos share a file name.
+fn photo_trash_args(uids: &[String]) -> Vec<String> {
+    let mut args: Vec<String> = ["fs", "trash"].iter().map(|s| s.to_string()).collect();
+    args.extend(uids.iter().map(|u| format!("/photos/{u}")));
+    args
+}
+
+/// Move photos to the Proton photos trash (by uid: names can repeat).
+pub fn trash_photos(uids: &[String]) -> Result<usize, String> {
+    if uids.is_empty() {
+        return Ok(0);
+    }
+    let Some(cli) = resolve_cli() else {
+        return Err("proton-drive CLI not found".into());
+    };
+    let args = photo_trash_args(uids);
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let o = run_cli(&cli, &refs, Duration::from_secs(180))?;
+    if !o.ok() {
+        return Err(cli_err(&o));
+    }
+    Ok(uids.len())
+}
+
 /// Download photos by node uid into `dir`, creating it. Duplicate names are
 /// renamed: the timeline can hold several photos with the same file name.
 pub fn download_photos(uids: &[String], dir: &std::path::Path) -> Result<usize, String> {
@@ -607,6 +632,16 @@ mod tests {
         assert_eq!(out[1].width, 0); // no Media block: unknown, not fatal
         assert_eq!(out[1].size, 25, "falls back to totalStorageSize");
         assert!(parse_photos("").unwrap().is_empty());
+    }
+
+    /// `fs trash` takes `/photos/<node>` paths, not bare uids.
+    #[test]
+    fn photo_trash_argv_uses_photo_paths() {
+        let uids = vec!["uid-a".to_string(), "uid-b".to_string()];
+        assert_eq!(
+            photo_trash_args(&uids),
+            vec!["fs", "trash", "/photos/uid-a", "/photos/uid-b"]
+        );
     }
 
     /// `photo download` takes `/photos/<node>` paths, not bare uids (the CLI

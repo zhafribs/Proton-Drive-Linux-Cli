@@ -1,3 +1,17 @@
+## 3.19.0 — 2026-11-05
+
+- **Delete photos.** Select tiles and press Delete: they go to the Proton photos
+  trash (`fs trash /photos/<uid>`, uid paths because timeline names repeat) and
+  their copies in the photo folder are removed, so the next sync cannot bring
+  them back. Confirmation dialog; restorable from Photos in any Proton app.
+- **Photos are grouped by day, and the day stays on screen.** The grid is split
+  per capture day; its label pins to the top of the list as you scroll and hands
+  over when the next day arrives.
+- **No Reload button.** The page re-reads the timeline itself when the photo
+  folder or the engine's sync summary changes, and the engine now watches that
+  folder, so dropping a file in uploads it on that cycle instead of waiting for
+  the next scheduled check.
+
 ## 3.18.1 — 2026-11-05
 
 - **One sync button.** Photos no longer has its own "Sync now": Home's (and the

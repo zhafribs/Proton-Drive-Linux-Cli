@@ -35,6 +35,13 @@ pub struct PhotoState {
     pub last_sync: String,
     /// Epoch seconds of the last timeline fetch, so a revisit can re-list.
     pub fetched_at: f64,
+    /// A delete is in flight.
+    pub deleting: bool,
+    /// Change detection: last seen stamps of the folder and the engine summary,
+    /// plus when we last looked (so this costs two `stat`s per second).
+    pub dir_stamp: f64,
+    pub summary_stamp: f64,
+    pub probed_at: f64,
 }
 
 /// Where downloaded photos land: `PROTON_SYNC_PHOTOS_LOCAL`, else
@@ -182,29 +189,97 @@ pub fn on_downloaded(app: &mut App, r: Result<usize, String>) {
     }
 }
 
-/// "2026-08-21 12:55" -> "August 2026", for the month headers.
-fn month_of(capture: &str) -> String {
+/// Move photos to the Proton photos trash and drop their local copies.
+///
+/// Both halves are needed: trashing only the cloud copy would let the next
+/// sync upload the local file again, and removing only the local file would
+/// download the photo back.
+pub fn delete(app: &mut App, uids: Vec<String>) {
+    if uids.is_empty() || app.photos.deleting || app.photos.busy {
+        return;
+    }
+    let dir = local_dir(app);
+    // Names to remove locally, resolved before the trash runs.
+    let names: Vec<String> = app
+        .photos
+        .items
+        .iter()
+        .filter(|p| uids.contains(&p.uid))
+        .map(|p| p.name.clone())
+        .collect();
+    app.photos.deleting = true;
+    app.photos.error.clear();
+    app.photos.status = format!("Moving {} photo(s) to the trash...", uids.len());
+    let tx = app.tx.clone();
+    std::thread::spawn(move || {
+        let r = cli::trash_photos(&uids).inspect(|_| {
+            for name in &names {
+                let _ = std::fs::remove_file(dir.join(name));
+            }
+        });
+        let _ = tx.send(super::Back::PhotosDeleted(r));
+    });
+}
+
+pub fn on_deleted(app: &mut App, r: Result<usize, String>) {
+    app.photos.deleting = false;
+    match r {
+        Ok(n) => {
+            app.photos.sel.clear();
+            app.photos.status.clear();
+            app.toast(format!("Moved {n} photo(s) to the trash."));
+            refresh(app);
+        }
+        Err(e) => {
+            app.photos.status.clear();
+            app.photos.error = e;
+        }
+    }
+}
+
+/// Watch for changes instead of making the user reload: the engine writes
+/// `photos-sync.json` after every photo cycle, and the folder's own mtime moves
+/// when files appear or disappear. Either one re-reads the list.
+pub fn tick(app: &mut App) {
+    let now = app.now();
+    if now - app.photos.probed_at < 1.0 {
+        return;
+    }
+    app.photos.probed_at = now;
+    let dir_stamp = file_stamp(&local_dir(app));
+    let summary_stamp = file_stamp(&app.paths.state_dir.join("photos-sync.json"));
+    let changed = (app.photos.dir_stamp != 0.0 && dir_stamp != app.photos.dir_stamp)
+        || (app.photos.summary_stamp != 0.0 && summary_stamp != app.photos.summary_stamp);
+    app.photos.dir_stamp = dir_stamp;
+    app.photos.summary_stamp = summary_stamp;
+    if changed {
+        refresh(app);
+    }
+}
+
+/// "2026-08-21 12:55" -> "Fri, 21 Aug 2026", the sticky day header.
+fn day_of(capture: &str) -> String {
     chrono::NaiveDateTime::parse_from_str(capture, "%Y-%m-%d %H:%M")
-        .map(|dt| dt.format("%B %Y").to_string())
+        .map(|dt| dt.format("%a, %d %b %Y").to_string())
         .unwrap_or_else(|_| "Undated".to_string())
 }
 
-/// "2026-08-21 12:55" -> "21 Aug 2026, 12:55" (the row's date column).
+/// "2026-08-21 12:55" -> "21 Aug 2026, 12:55" (a tile's caption).
 fn pretty_date(capture: &str) -> String {
     chrono::NaiveDateTime::parse_from_str(capture, "%Y-%m-%d %H:%M")
         .map(|dt| dt.format("%d %b %Y, %H:%M").to_string())
         .unwrap_or_else(|_| capture.to_string())
 }
 
-/// Timeline order (newest first) grouped into months, newest month first.
+/// Timeline order (newest first) grouped into days, newest day first.
 /// Cloned so rows can be drawn while the app borrows mutably.
-fn months(items: &[cli::PhotoEntry]) -> Vec<(String, Vec<cli::PhotoEntry>)> {
+fn days(items: &[cli::PhotoEntry]) -> Vec<(String, Vec<cli::PhotoEntry>)> {
     let mut out: Vec<(String, Vec<cli::PhotoEntry>)> = Vec::new();
     for p in items {
-        let m = month_of(&p.capture);
+        let d = day_of(&p.capture);
         match out.last_mut() {
-            Some((name, group)) if *name == m => group.push(p.clone()),
-            _ => out.push((m, vec![p.clone()])),
+            Some((name, group)) if *name == d => group.push(p.clone()),
+            _ => out.push((d, vec![p.clone()])),
         }
     }
     out
@@ -317,7 +392,7 @@ fn request_thumb(app: &mut App, name: &str, path: std::path::PathBuf, stamp: f64
 pub fn draw(app: &mut App, ui: &mut egui::Ui) {
     let dir = local_dir(app);
 
-    // --- pinned header: title, sync state and actions never scroll away ---
+    // --- pinned header: never scrolls away ---
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Photos").strong().size(24.0));
         if !app.photos.items.is_empty() {
@@ -351,23 +426,14 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
     }
     ui.add_space(10.0);
 
-    // No Sync now here on purpose: Home's (and the tray's) Sync now drives the
-    // engine, which syncs files and photos in the same cycle.
+    // No Sync now and no Reload button: Home's (and the tray's) Sync now drives
+    // the engine, and the page re-reads itself when the folder or the engine's
+    // summary changes (photos::tick).
     ui.horizontal_wrapped(|ui| {
-        if ui
-            .add_enabled(
-                !app.photos.loading && !app.photos.busy,
-                egui::Button::new("Reload list"),
-            )
-            .on_hover_text("Re-read the photo list from Proton Drive; uploads and downloads happen on sync")
-            .clicked()
-        {
-            refresh(app);
-        }
         if app.photos.sel.is_empty() {
             if ui
                 .add_enabled(
-                    !app.photos.busy && !app.photos.items.is_empty(),
+                    !app.photos.busy && !app.photos.deleting && !app.photos.items.is_empty(),
                     egui::Button::new("Download all"),
                 )
                 .clicked()
@@ -378,13 +444,20 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
         } else {
             let sel = app.photos.sel.clone();
             if ui
-                .add_enabled(
-                    !app.photos.busy,
-                    egui::Button::new(format!("Download {} selected", sel.len())),
-                )
+                .add_enabled(!app.photos.busy && !app.photos.deleting, egui::Button::new(format!("Download {} selected", sel.len())))
                 .clicked()
             {
-                download(app, sel);
+                download(app, sel.clone());
+            }
+            if ui
+                .add_enabled(
+                    !app.photos.busy && !app.photos.deleting,
+                    egui::Button::new(format!("Delete {} selected", sel.len())),
+                )
+                .on_hover_text("Move to the Proton photos trash and remove the local copy")
+                .clicked()
+            {
+                app.dialog = Some(super::Dialog::ConfirmPhotoDelete { uids: sel });
             }
             if ui.button("Clear selection").clicked() {
                 app.photos.sel.clear();
@@ -405,11 +478,11 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
         ui.label(egui::RichText::new(&app.photos.status).weak());
     }
 
-    // --- only the grid scrolls ---
+    // --- only the grid scrolls, with the day header pinned to its top ---
     egui::ScrollArea::vertical()
         .id_salt("photos-scroll")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
+        .show_viewport(ui, |ui, viewport| {
             if app.photos.items.is_empty() {
                 if !app.photos.loading && app.photos.error.is_empty() {
                     ui.add_space(18.0);
@@ -428,17 +501,43 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                 return;
             }
 
-            for (month, group) in months(&app.photos.items) {
-                ui.add_space(10.0);
-                widgets::card(ui, Some(&month), |ui| {
+            let mut current: Option<String> = None;
+            for (day, group) in days(&app.photos.items) {
+                let start = ui.cursor().top();
+                ui.add_space(12.0);
+                ui.label(egui::RichText::new(&day).strong().size(13.5));
+                ui.add_space(4.0);
+                widgets::card(ui, None, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         for p in &group {
                             tile(ui, app, p, &dir);
                         }
                     });
                 });
+                // This header is above the fold: it is the one to pin.
+                if start <= viewport.min.y {
+                    current = Some(day);
+                }
             }
-            ui.add_space(10.0);
+            ui.add_space(12.0);
+
+            // Sticky day header: drawn last so it sits over the tiles, at the
+            // top edge of the visible area, until the next day replaces it.
+            if let Some(day) = current {
+                let content = ui.min_rect();
+                let rect = egui::Rect::from_min_size(
+                    egui::pos2(content.left(), content.top() + viewport.min.y),
+                    egui::vec2(content.width(), 20.0),
+                );
+                ui.painter().rect_filled(rect, 0.0, ui.visuals().panel_fill);
+                ui.painter().text(
+                    rect.left_center() + egui::vec2(6.0, 0.0),
+                    egui::Align2::LEFT_CENTER,
+                    day,
+                    egui::FontId::proportional(13.5),
+                    ui.visuals().strong_text_color(),
+                );
+            }
         });
 }
 
@@ -559,18 +658,21 @@ mod tests {
         }
     }
 
-    /// The timeline is grouped into month cards, newest month first.
+    /// The timeline is grouped into day cards, newest day first.
     #[test]
-    fn timeline_groups_by_month() {
+    fn timeline_groups_by_day() {
         let items = vec![
-            photo("c.png", "2026-08-21 12:55"),
-            photo("b.png", "2026-08-02 09:00"),
-            photo("a.jpg", "2026-07-31 23:59"),
+            photo("c.png", "2026-08-21 18:00"),
+            photo("b.png", "2026-08-21 09:00"),
+            photo("a.jpg", "2026-08-20 23:59"),
             photo("old.jpg", ""),
         ];
-        let groups = months(&items);
-        let names: Vec<&str> = groups.iter().map(|(m, _)| m.as_str()).collect();
-        assert_eq!(names, vec!["August 2026", "July 2026", "Undated"]);
+        let groups = days(&items);
+        let names: Vec<&str> = groups.iter().map(|(d, _)| d.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["Fri, 21 Aug 2026", "Thu, 20 Aug 2026", "Undated"]
+        );
         assert_eq!(groups[0].1.len(), 2);
         assert_eq!(groups[0].1[0].name, "c.png");
         assert_eq!(groups[2].1[0].name, "old.jpg");

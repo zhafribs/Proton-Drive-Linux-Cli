@@ -55,13 +55,14 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
 - **My files** — upload files/folders (or drag-and-drop them in), download,
   rename, move, multi-select, search, sortable columns, back/forward,
   breadcrumbs and a restorable **Trash**.
-- **Photos** — the account's photo timeline as a month-grouped **tile grid with
+- **Photos** — the account's photo timeline as a **day-grouped tile grid with
   real thumbnails** (PNG and JPEG decoded in-process, downscaled and cached),
-  plus resolution, size and capture date. **Two-way sync with
-  `~/ProtonPhotos`**: new files in that folder upload, new cloud photos
-  download (`PROTON_SYNC_PHOTOS=0` turns it off, `PROTON_SYNC_PHOTOS_LOCAL`
-  moves it). Nothing is deleted or overwritten — a name whose size differs on
-  both sides keeps both copies and is reported once.
+  with the day label pinned while you scroll. Select tiles to **Download** or
+  **Delete** (moves to the Proton photos trash and removes the local copy).
+  **Two-way sync with `~/ProtonPhotos`**: new files in that folder upload, new
+  cloud photos download (`PROTON_SYNC_PHOTOS=0` turns it off,
+  `PROTON_SYNC_PHOTOS_LOCAL` moves it). Nothing is overwritten — a name whose
+  size differs on both sides keeps both copies and is reported once.
 - **Home** — one plain-language status orb with pause (15 min, 1 h, until
   resumed), file count and disk usage in the sidebar, a live transfer progress
   bar and queue, and the activity feed (uploads, downloads, removals,

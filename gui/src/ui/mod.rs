@@ -54,6 +54,8 @@ pub enum Back {
     Photos(Result<Vec<cli::PhotoEntry>, String>),
     /// Photo download finished; Ok is how many were asked for.
     PhotosDownloaded(Result<usize, String>),
+    /// Photos moved to the trash; Ok is how many.
+    PhotosDeleted(Result<usize, String>),
     /// A thumbnail was decoded: (name, file stamp, w, h, RGBA).
     PhotoThumb {
         name: String,
@@ -106,6 +108,9 @@ pub enum Dialog {
     /// Empty the whole Proton trash (cannot be undone).
     ConfirmEmptyTrash,
     ConfirmClearCache,
+    /// Move the selected photos to the Proton photos trash (also removes the
+    /// local copies in the photo folder).
+    ConfirmPhotoDelete { uids: Vec<String> },
     /// The "Move to..." cloud folder picker.
     CloudMove,
 }
@@ -129,6 +134,7 @@ enum DlgAct {
     NewFolder(String),
     TrashConfirm,
     DeleteConfirm,
+    PhotoDeleteConfirm(Vec<String>),
     EmptyTrashConfirm,
     ClearCache,
     MoveSel(String), // picker row clicked
@@ -1040,6 +1046,7 @@ impl App {
                 }),
                 Back::Photos(r) => photos::on_fetched(self, r),
                 Back::PhotosDownloaded(r) => photos::on_downloaded(self, r),
+                Back::PhotosDeleted(r) => photos::on_deleted(self, r),
                 Back::PhotoThumb { name, stamp, result } => {
                     self.photos.in_flight.remove(&name);
                     match result {
@@ -1802,6 +1809,35 @@ impl App {
                         });
                     });
             }
+            Dialog::ConfirmPhotoDelete { uids } => {
+                let n = uids.len();
+                let word = if n == 1 {
+                    "this photo".to_string()
+                } else {
+                    format!("these {n} photos")
+                };
+                egui::Window::new("Move to the photos trash?")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .open(&mut open)
+                    .show(ctx, |ui| {
+                        ui.label(format!(
+                            "Move {word} to the Proton photos trash? They leave the \
+                             timeline, and their copies in the photo folder are removed \
+                             too. You can restore them from Photos in any Proton app."
+                        ));
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() || escape {
+                                act = Some(DlgAct::Close);
+                            }
+                            if widgets::primary_button(ui, "Move to trash") {
+                                act = Some(DlgAct::PhotoDeleteConfirm(uids.clone()));
+                            }
+                        });
+                    });
+            }
             Dialog::ConfirmDelete { n } => {
                 let word = if *n == 1 { "this item".to_string() } else { format!("these {n} items") };
                 egui::Window::new("Delete permanently?")
@@ -2000,6 +2036,10 @@ impl App {
                 self.dialog = None;
                 cloud::action_trash(self);
             }
+            DlgAct::PhotoDeleteConfirm(uids) => {
+                self.dialog = None;
+                photos::delete(self, uids);
+            }
             DlgAct::DeleteConfirm => {
                 self.dialog = None;
                 cloud::action_delete_permanent(self);
@@ -2064,9 +2104,11 @@ impl eframe::App for App {
             cloud::on_shown(self);
         }
 
-        // Photos: same idea - the timeline is fetched once, on first show.
+        // Photos: same idea - the timeline is fetched once, on first show,
+        // then re-read whenever the folder or the engine's summary changes.
         if self.page == Page::Photos {
             photos::on_shown(self);
+            photos::tick(self);
         }
 
         // Updates: automatic check 5s after start, then every 6h (Qt's

@@ -74,6 +74,21 @@ pub fn run_loop() -> Result<()> {
         }
     }
 
+    // Photos folder: a file dropped there must reach the cloud on this cycle,
+    // so watch it exactly like the sync root.
+    if crate::photos::enabled(&values)
+        && let Some(dir) = crate::photos::local_dir(&values)
+        && dir.is_dir()
+    {
+        let path = dir.to_string_lossy().into_owned();
+        let w = wake.clone();
+        let we = wake_event.clone();
+        let wm = wake_mutex.clone();
+        std::thread::spawn(move || {
+            let _ = inotify_watch(&path, w, we, wm);
+        });
+    }
+
     // Wake requests: `wake` (Home/Tray "Sync now") and `audit-request`
     // ("Run full check now", which also has to skip the cached-tree fast
     // path). Both are empty files written by the GUI; the engine must be the
