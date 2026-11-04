@@ -544,26 +544,11 @@ fn photos_card(app: &mut App, ui: &mut egui::Ui) {
         if widgets::toggle(ui, "Sync my photos with this computer", &mut on, None) {
             app.draft.photos = on;
         }
-        ui.add_space(4.0);
-        ui.label(
-            egui::RichText::new(
-                "New files in this folder upload to My Photos; photos that are only in                  the cloud download here. Nothing is deleted or overwritten.",
-            )
-            .size(11.5)
-            .weak(),
-        );
         ui.add_space(6.0);
         let mut del = app.draft.photos_deletes;
         if widgets::toggle(ui, "Propagate deletions", &mut del, None) {
             app.draft.photos_deletes = del;
         }
-        ui.label(
-            egui::RichText::new(
-                "A photo deleted on one side is deleted on the other: cloud copies go to                  the Proton trash, local copies are removed. Only photos already synced                  are affected, and a folder that looks unmounted is never emptied.",
-            )
-            .size(11.5)
-            .weak(),
-        );
         ui.add_space(8.0);
         labeled_control(ui, "Photo folder", |ui| {
             ui.add(

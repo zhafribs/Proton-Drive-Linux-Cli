@@ -1,3 +1,9 @@
+## 3.20.2 — 2026-11-05
+
+- **Settings → Photos is just the controls.** The two explanatory paragraphs are
+  gone: the card is now the sync switch, the "Propagate deletions" switch and the
+  photo folder field.
+
 ## 3.20.1 — 2026-11-05
 
 - **Each day card has its date back on top.** The label sits above its card and
