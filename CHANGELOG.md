@@ -1,3 +1,20 @@
+## 3.16.92 — 2026-11-04
+
+- **A stale service unit no longer kills syncing.** When an update installed the
+  new build under a different file name, the systemd unit kept naming the file
+  that had just been replaced, so every start failed with `203/EXEC` and Home
+  sat on "Sync engine isn't running". Writing the unit now follows the build
+  that is really on disk: the version being run first, else the newest Drive
+  AppImage beside the old path.
+- **"Restart syncing now" checks that it worked.** `systemctl restart` exits 0
+  even when the unit dies right after exec, so the toast claimed success over a
+  dead engine. It now waits for the unit to report active and says so when it
+  does not.
+- **"Run full check now" really checks everything.** The request also skips the
+  cached-snapshot fast path for that cycle, so every folder is listed instead of
+  the `fs size` fingerprint answering the request. The one-shot engine commands
+  (`--once`, `--dry-run`) consume a pending request too.
+
 ## 3.16.91 — 2026-11-04
 
 - **"Run full check now" does something again.** It wrote `audit-request` into

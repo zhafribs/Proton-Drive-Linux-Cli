@@ -33,14 +33,14 @@ fn run() -> Result<()> {
         Some("dry-run") => dry_run_cmd(&args[1..]),
         Some("--once") | Some("once") => {
             // run single cycle
+            let sd = {
+                if let Some(xdg) = std::env::var_os("XDG_STATE_HOME") {
+                    std::path::PathBuf::from(xdg).join("proton-sync")
+                } else {
+                    dirs::home_dir().unwrap_or_else(|| std::path::Path::new("/").to_path_buf()).join(".local/state/proton-sync")
+                }
+            };
             let _lock = {
-                let sd = {
-                    if let Some(xdg) = std::env::var_os("XDG_STATE_HOME") {
-                        std::path::PathBuf::from(xdg).join("proton-sync")
-                    } else {
-                        dirs::home_dir().unwrap_or_else(|| std::path::Path::new("/").to_path_buf()).join(".local/state/proton-sync")
-                    }
-                };
                 std::fs::create_dir_all(&sd)?;
                 let lock_path = sd.join("sync.lock");
                 let fh = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(&lock_path)?;
@@ -64,6 +64,8 @@ fn run() -> Result<()> {
             &filter,
             propagate_deletes,
             None,
+            // A pending "Run full check now" applies to a one-shot run too.
+            proton_engine::loop_::take_request(&sd.join("audit-request")),
         )
         }
         Some("--loop") | Some("loop") => run_loop(),
@@ -152,7 +154,10 @@ fn dry_run_cmd(_args: &[String]) -> Result<()> {
     let filter = Filter::new(&subfolders, &exclude);
 
     let local = scan_local(Path::new(&local_root), &filter);
-    let remote = scan_remote(&cli, &remote_root, &filter)
+    // A pending "Run full check now" applies to a one-shot run too: it forces
+    // the walk and consumes the request.
+    let force_full = proton_engine::loop_::take_request(&state_dir.join("audit-request"));
+    let remote = scan_remote(&cli, &remote_root, &filter, force_full)
         .context("scanning remote tree")?
         .tree;
     let st = state::read(&state_dir.join("state.json"));

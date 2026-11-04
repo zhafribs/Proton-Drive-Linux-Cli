@@ -366,7 +366,14 @@ pub fn apply_scope(
     Ok(())
 }
 
-pub fn scan_remote(cli: &Cli, remote_root: &str, filter: &Filter) -> Result<RemoteScan> {
+/// `force_full` skips the cached fast path: "Run full check now" must list
+/// every folder, or the snapshot would answer the request instead.
+pub fn scan_remote(
+    cli: &Cli,
+    remote_root: &str,
+    filter: &Filter,
+    force_full: bool,
+) -> Result<RemoteScan> {
     let start_rpath = cli::remote_path(remote_root, "");
     let workers = cli::cfg_int("PROTON_SYNC_WORKERS", 12, 32);
     let retries = cli::cfg_int("PROTON_SYNC_RETRIES", 3, 10);
@@ -378,7 +385,9 @@ pub fn scan_remote(cli: &Cli, remote_root: &str, filter: &Filter) -> Result<Remo
         // cached tree is authoritative and no per-folder listing runs. The
         // periodic forced full walk bounds same-size renames the totals
         // cannot see.
-        if let Some(tree) = try_cached_tree(cli, remote_root, filter)? {
+        if !force_full
+            && let Some(tree) = try_cached_tree(cli, remote_root, filter)?
+        {
             return Ok(RemoteScan { tree, full: false });
         }
 

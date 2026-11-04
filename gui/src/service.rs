@@ -53,6 +53,23 @@ pub fn restart() -> bool {
     systemctl(&["--user", "restart", JOURNAL_UNIT])
 }
 
+/// Restart the unit and confirm it stayed up. `systemctl restart` reports
+/// success even when the unit dies immediately after exec - a stale
+/// `ExecStart` does exactly that (status=203/EXEC) and used to leave "Sync
+/// engine isn't running" on screen while the toast claimed success.
+pub fn restart_and_confirm() -> bool {
+    if !restart() {
+        return false;
+    }
+    for _ in 0..10 {
+        if is_active() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+    false
+}
+
 pub fn enable() -> bool {
     systemctl(&["--user", "enable", JOURNAL_UNIT])
 }
@@ -104,6 +121,38 @@ fn quote_for_unit(v: &str) -> String {
     }
 }
 
+/// The AppImage the unit should run. The recorded path can be gone - an update
+/// may install the new build under a new file name - and then every start dies
+/// with `203/EXEC` while the unit still names the old file, which is what left
+/// "Sync engine isn't running" stuck on screen in 3.16.91 and earlier. Fall back
+/// to the build we are actually running, else the newest Drive AppImage beside
+/// the old one.
+fn unit_appimage(recorded: Option<&Path>) -> Option<std::path::PathBuf> {
+    let recorded = recorded?;
+    if recorded.is_file() {
+        return Some(recorded.to_path_buf());
+    }
+    let dir = recorded.parent()?;
+    let want = format!("GUI-{}-", crate::GUI_VERSION);
+    let mut best: Option<(bool, std::time::SystemTime, std::path::PathBuf)> = None;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !(name.starts_with("ProtonDrive-CLI-") && name.ends_with(".AppImage")) {
+            continue;
+        }
+        let mtime = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::UNIX_EPOCH);
+        let ours = name.contains(&want);
+        if best.as_ref().is_none_or(|(b, t, _)| (ours, mtime) > (*b, *t)) {
+            best = Some((ours, mtime, entry.path()));
+        }
+    }
+    best.map(|(_, _, p)| p)
+}
+
 /// Keep the sync service pointing at THIS copy of the app - byte-identical
 /// to the PyQt app's unit (which this app reuses rather than rewrites).
 /// Writes + daemon-reload only; callers restart as needed.
@@ -114,9 +163,9 @@ pub fn ensure_service_unit(appimage: Option<&Path>, smoke: bool) -> String {
     if smoke {
         return String::new();
     }
-    let exe = match appimage {
-        Some(p) if p.is_file() => p.to_string_lossy().into_owned(),
-        _ => return String::new(),
+    let exe = match unit_appimage(appimage) {
+        Some(p) => p.to_string_lossy().into_owned(),
+        None => return String::new(),
     };
     // Qt ran Path.resolve() - the symlink ~/.local/bin/proton-drive stays
     // valid either way, but the canonical path is what the unit records.
@@ -257,6 +306,37 @@ mod tests {
         // Quoting applies to paths with spaces (this repo lives in one).
         assert_eq!(quote_for_unit("plain"), "plain");
         assert_eq!(quote_for_unit("a b"), "\"a b\"");
+    }
+
+    /// An update can leave the unit naming a file that no longer exists
+    /// (203/EXEC forever); the next write must follow the build we run.
+    #[test]
+    fn unit_appimage_follows_a_renamed_update() {
+        let dir = std::env::temp_dir().join(format!(
+            "pdservice-image-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let gone = dir.join("ProtonDrive-CLI-0.9.0-GUI-3.13.0-x86_64.AppImage");
+        let current = dir.join(format!(
+            "ProtonDrive-CLI-0.9.0-GUI-{}-x86_64.AppImage",
+            crate::GUI_VERSION
+        ));
+        std::fs::write(&current, b"appimage").unwrap();
+        // Unrelated AppImages in the same folder are never picked up.
+        std::fs::write(dir.join("ZapFast-0.21.0-x86_64.AppImage"), b"x").unwrap();
+
+        // An existing path is used as-is; a vanished one resolves to the
+        // build we are running.
+        assert_eq!(unit_appimage(Some(&current)), Some(current.clone()));
+        assert_eq!(unit_appimage(Some(&gone)), Some(current.clone()));
+        assert_eq!(unit_appimage(None), None);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

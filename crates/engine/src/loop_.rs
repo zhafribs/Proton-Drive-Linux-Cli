@@ -75,20 +75,25 @@ pub fn run_loop() -> Result<()> {
     }
 
     // Wake requests: `wake` (Home/Tray "Sync now") and `audit-request`
-    // ("Run full check now"). Both are empty files written by the GUI; every
-    // cycle is already a full cloud walk, so a full-check request is just a
-    // wake - but the engine must be the one to delete it, or a request left
-    // behind would fire again on the next restart.
-    let requests = [
-        state_dir().join("wake"),
-        state_dir().join("audit-request"),
-    ];
+    // ("Run full check now", which also has to skip the cached-tree fast
+    // path). Both are empty files written by the GUI; the engine must be the
+    // one to delete them, or a request left behind would fire again on the
+    // next restart.
+    let wake_file = state_dir().join("wake");
+    let audit_file = state_dir().join("audit-request");
+    let full = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let full_flag = full.clone();
     let w2 = wake.clone();
     let we2 = wake_event.clone();
     let wm2 = wake_mutex.clone();
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(1));
-        if requests.iter().any(|p| take_request(p)) {
+        let mut woke = take_request(&wake_file);
+        if take_request(&audit_file) {
+            full_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+            woke = true;
+        }
+        if woke {
             w2.store(true, std::sync::atomic::Ordering::Relaxed);
             let _guard = wm2.lock().unwrap();
             we2.notify_all();
@@ -134,6 +139,9 @@ pub fn run_loop() -> Result<()> {
             root_uid: &watch.root_uid,
         });
         let cycle_start = Instant::now();
+        // A "Run full check now" request also disables the cached fast path
+        // for exactly this cycle.
+        let force_full = full.swap(false, std::sync::atomic::Ordering::Relaxed);
         let result = run_once_cycle(
             &cli,
             &local_root,
@@ -141,6 +149,7 @@ pub fn run_loop() -> Result<()> {
             &filter,
             propagate_deletes,
             push_ctx.as_ref(),
+            force_full,
         );
         let mut retrying = false;
         match result {
@@ -208,6 +217,7 @@ pub fn run_once_cycle(
     filter: &Filter,
     propagate_deletes: bool,
     push: Option<&crate::events::PushContext<'_>>,
+    force_full: bool,
 ) -> Result<()> {
     let t0 = SystemTime::now();
     let started = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
@@ -235,20 +245,24 @@ pub fn run_once_cycle(
         // the tree on disk changed: plan against what actually landed
         local = scan_local(Path::new(local_root), filter);
         crate::scan::RemoteScan { tree: out.tree, full: true }
+    } else if force_full {
+        // "Run full check now": neither the event scopes nor the cached tree
+        // may answer this cycle - list every folder.
+        scan_remote(cli, remote_root, filter, true)?
     } else if let Some(push) = push {
         match scoped_remote(cli, local_root, remote_root, filter, push) {
             Ok(Some(scan)) => {
                 snapshot_dirty = true;
                 scan
             }
-            Ok(None) => scan_remote(cli, remote_root, filter)?,
+            Ok(None) => scan_remote(cli, remote_root, filter, false)?,
             Err(err) => {
                 eprintln!("push: scoped refresh failed: {err:#}; full walk");
-                scan_remote(cli, remote_root, filter)?
+                scan_remote(cli, remote_root, filter, false)?
             }
         }
     } else {
-        scan_remote(cli, remote_root, filter)?
+        scan_remote(cli, remote_root, filter, false)?
     };
     // Publish the fresh walk immediately, before any transfers, so the GUI's
     // folder tree goes instant as soon as the scan finishes. A reused cached
@@ -309,7 +323,7 @@ pub fn run_once_cycle(
         });
         if let Err(err) = scoped {
             eprintln!("post-cycle refresh failed: {err:#}; full walk");
-            let out = scan_remote(cli, remote_root, filter)?;
+            let out = scan_remote(cli, remote_root, filter, false)?;
             if out.full {
                 publish_snapshot(cli, remote_root, filter, &out.tree);
             }
@@ -729,8 +743,9 @@ fn acquire_process_lock() -> anyhow::Result<std::fs::File> {
 }
 
 /// Take a GUI request file: `true` only when one was there and is now gone,
-/// so a request wakes the engine exactly once.
-fn take_request(path: &Path) -> bool {
+/// so a request wakes the engine exactly once. Public because the one-shot
+/// engine commands consume a pending request too.
+pub fn take_request(path: &Path) -> bool {
     path.exists() && fs::remove_file(path).is_ok()
 }
 

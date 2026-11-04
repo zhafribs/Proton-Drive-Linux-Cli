@@ -877,7 +877,7 @@ impl App {
             let _ = service::ensure_service_unit(appimage.as_deref(), false);
             // Report the real outcome: `systemctl` can fail (no unit, no
             // systemd session) and the old code toasted success regardless.
-            let _ = tx.send(Back::ServiceRestarted(service::restart()));
+            let _ = tx.send(Back::ServiceRestarted(service::restart_and_confirm()));
         });
         self.toast("Restarting syncing...");
     }
