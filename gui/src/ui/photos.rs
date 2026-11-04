@@ -33,8 +33,8 @@ pub struct PhotoState {
     pub failed: std::collections::HashSet<String>,
     /// "In sync · N in the cloud, M on disk" line from the engine's last cycle.
     pub last_sync: String,
-    /// When to re-list automatically (after asking the engine to sync).
-    pub refresh_at: Option<f64>,
+    /// Epoch seconds of the last timeline fetch, so a revisit can re-list.
+    pub fetched_at: f64,
 }
 
 /// Where downloaded photos land: `PROTON_SYNC_PHOTOS_LOCAL`, else
@@ -61,12 +61,15 @@ pub fn on_shown(app: &mut App) {
     // The folder existing is what turns the engine's photo sync on, so create
     // it the first time the page is opened.
     let _ = std::fs::create_dir_all(local_dir(app));
-    if !app.photos.loaded {
+    // Re-read the list on a revisit: the engine syncs on every cycle (Home's
+    // "Sync now" included), so a list older than a minute may be out of date.
+    if !app.photos.loaded || app.now() - app.photos.fetched_at > 60.0 {
         refresh(app);
     }
 }
 
 /// What the engine's last photo cycle did (`photos-sync.json`).
+
 #[derive(serde::Deserialize, Default)]
 struct SyncSummary {
     ts: String,
@@ -111,25 +114,13 @@ fn read_summary(app: &mut App) -> String {
     line
 }
 
-/// Ask the engine for a cycle now (it syncs the folder), then re-list.
-pub fn sync_now(app: &mut App) {
-    let dir = local_dir(app);
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        app.photos.error = format!("cannot create {}: {e}", dir.display());
-        return;
-    }
-    let _ = std::fs::write(&app.paths.wake_file, b"");
-    app.photos.error.clear();
-    app.photos.status = "Syncing photos with the cloud...".to_string();
-    app.photos.refresh_at = Some(app.now() + 10.0);
-}
-
 pub fn refresh(app: &mut App) {
     if app.photos.loading || app.photos.busy {
         return;
     }
     app.photos.loaded = true;
     app.photos.loading = true;
+    app.photos.fetched_at = app.now();
     app.photos.error.clear();
     app.photos.status = "Loading the photo timeline...".to_string();
     let tx = app.tx.clone();
@@ -324,108 +315,101 @@ fn request_thumb(app: &mut App, name: &str, path: std::path::PathBuf, stamp: f64
 }
 
 pub fn draw(app: &mut App, ui: &mut egui::Ui) {
-    if let Some(t) = app.photos.refresh_at
-        && app.now() >= t
-    {
-        app.photos.refresh_at = None;
-        app.photos.status.clear();
-        refresh(app);
-    }
     let dir = local_dir(app);
+
+    // --- pinned header: title, sync state and actions never scroll away ---
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Photos").strong().size(24.0));
+        if !app.photos.items.is_empty() {
+            let total: u64 = app.photos.items.iter().map(|p| p.size).sum();
+            ui.add_space(10.0);
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} photo(s)  \u{b7}  {}",
+                    app.photos.items.len(),
+                    size_label(total)
+                ))
+                .weak(),
+            );
+        }
+    });
+    ui.add_space(2.0);
+    ui.label(
+        egui::RichText::new(format!(
+            "Two-way sync with /photos \u{b7} {}",
+            dir.display()
+        ))
+        .weak()
+        .size(12.0),
+    );
+    if !app.photos.last_sync.is_empty() {
+        ui.label(
+            egui::RichText::new(&app.photos.last_sync)
+                .weak()
+                .size(12.0),
+        );
+    }
+    ui.add_space(10.0);
+
+    // No Sync now here on purpose: Home's (and the tray's) Sync now drives the
+    // engine, which syncs files and photos in the same cycle.
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .add_enabled(
+                !app.photos.loading && !app.photos.busy,
+                egui::Button::new("Reload list"),
+            )
+            .on_hover_text("Re-read the photo list from Proton Drive; uploads and downloads happen on sync")
+            .clicked()
+        {
+            refresh(app);
+        }
+        if app.photos.sel.is_empty() {
+            if ui
+                .add_enabled(
+                    !app.photos.busy && !app.photos.items.is_empty(),
+                    egui::Button::new("Download all"),
+                )
+                .clicked()
+            {
+                let all: Vec<String> = app.photos.items.iter().map(|p| p.uid.clone()).collect();
+                download(app, all);
+            }
+        } else {
+            let sel = app.photos.sel.clone();
+            if ui
+                .add_enabled(
+                    !app.photos.busy,
+                    egui::Button::new(format!("Download {} selected", sel.len())),
+                )
+                .clicked()
+            {
+                download(app, sel);
+            }
+            if ui.button("Clear selection").clicked() {
+                app.photos.sel.clear();
+            }
+        }
+        if ui.button("Open folder").clicked() {
+            let _ = std::fs::create_dir_all(&dir);
+            App::open_url(&dir.to_string_lossy());
+        }
+    });
+
+    if !app.photos.error.is_empty() {
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new(&app.photos.error).color(theme::ERROR));
+    }
+    if !app.photos.status.is_empty() {
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new(&app.photos.status).weak());
+    }
+
+    // --- only the grid scrolls ---
     egui::ScrollArea::vertical()
         .id_salt("photos-scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Photos").strong().size(24.0));
-                if !app.photos.items.is_empty() {
-                    let total: u64 = app.photos.items.iter().map(|p| p.size).sum();
-                    ui.add_space(10.0);
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{} photo(s)  \u{b7}  {}",
-                            app.photos.items.len(),
-                            size_label(total)
-                        ))
-                        .weak(),
-                    );
-                }
-            });
-            ui.add_space(2.0);
-            ui.label(
-                egui::RichText::new(format!("Two-way sync with /photos \u{b7} {}", dir.display()))
-                    .weak()
-                    .size(12.0),
-            );
-            if !app.photos.last_sync.is_empty() {
-                ui.label(
-                    egui::RichText::new(&app.photos.last_sync)
-                        .weak()
-                        .size(12.0),
-                );
-            }
-            ui.add_space(10.0);
-
-            ui.horizontal_wrapped(|ui| {
-                if ui
-                    .add_enabled(!app.photos.busy, egui::Button::new("Sync now"))
-                    .on_hover_text(
-                        "Upload new files from this folder and download new cloud photos",
-                    )
-                    .clicked()
-                {
-                    sync_now(app);
-                }
-                if ui
-                    .add_enabled(
-                        !app.photos.loading && !app.photos.busy,
-                        egui::Button::new("Refresh"),
-                    )
-                    .clicked()
-                {
-                    refresh(app);
-                }
-                if app.photos.sel.is_empty() {
-                    if ui
-                        .add_enabled(
-                            !app.photos.busy && !app.photos.items.is_empty(),
-                            egui::Button::new("Download all"),
-                        )
-                        .clicked()
-                    {
-                        let all: Vec<String> =
-                            app.photos.items.iter().map(|p| p.uid.clone()).collect();
-                        download(app, all);
-                    }
-                } else {
-                    let sel = app.photos.sel.clone();
-                    if ui
-                        .add_enabled(
-                            !app.photos.busy,
-                            egui::Button::new(format!("Download {} selected", sel.len())),
-                        )
-                        .clicked()
-                    {
-                        download(app, sel);
-                    }
-                    if ui.button("Clear selection").clicked() {
-                        app.photos.sel.clear();
-                    }
-                }
-                if ui.button("Open folder").clicked() {
-                    let _ = std::fs::create_dir_all(&dir);
-                    App::open_url(&dir.to_string_lossy());
-                }
-            });
-
-            if !app.photos.error.is_empty() {
-                ui.add_space(10.0);
-                ui.label(egui::RichText::new(&app.photos.error).color(theme::ERROR));
-            }
-            if !app.photos.status.is_empty() {
-                ui.add_space(10.0);
-                ui.label(egui::RichText::new(&app.photos.status).weak());
-            }
             if app.photos.items.is_empty() {
                 if !app.photos.loading && app.photos.error.is_empty() {
                     ui.add_space(18.0);

@@ -1,3 +1,17 @@
+## 3.18.1 — 2026-11-05
+
+- **One sync button.** Photos no longer has its own "Sync now": Home's (and the
+  tray's) Sync now drives the engine, which syncs files and photos in the same
+  cycle. The page keeps a **Reload list** button, which only re-reads the photo
+  list from Proton Drive.
+- **The Photos header stays put.** Title, sync state and actions are pinned;
+  only the tile grid scrolls, so nothing you might click scrolls away.
+- The list also re-reads itself when you come back to the page after more than a
+  minute, so a sync started from Home shows up without pressing anything.
+- Measured while investigating "local photos did not upload": the upload path is
+  fine (`photo upload -c rename` uploaded a test image in 300 B), the engine on
+  that machine was still 3.17.0, which has no photo sync at all.
+
 ## 3.18.0 — 2026-11-05
 
 - **Photos show as pictures.** The timeline is a month-grouped tile grid with
