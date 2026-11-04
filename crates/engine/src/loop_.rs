@@ -177,6 +177,16 @@ pub fn run_loop() -> Result<()> {
                     );
                     fingerprint_started = true;
                 }
+                // Photos: additive two-way sync of the photo folder with
+                // /photos. Only once the folder exists - the Photos page
+                // creates it, so nobody gets a library they did not ask for.
+                if crate::photos::enabled(&values)
+                    && let Some(dir) = crate::photos::local_dir(&values)
+                    && dir.is_dir()
+                    && let Err(e) = crate::photos::sync(&cli, &dir, &state_dir())
+                {
+                    eprintln!("photos: {e:#}");
+                }
             }
             Err(err) => {
                 let message = format!("{err:#}");

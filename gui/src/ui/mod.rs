@@ -54,6 +54,12 @@ pub enum Back {
     Photos(Result<Vec<cli::PhotoEntry>, String>),
     /// Photo download finished; Ok is how many were asked for.
     PhotosDownloaded(Result<usize, String>),
+    /// A thumbnail was decoded: (name, file stamp, w, h, RGBA).
+    PhotoThumb {
+        name: String,
+        stamp: f64,
+        result: Result<(usize, usize, Vec<u8>), String>,
+    },
     /// Cloud browser: a folder listing landed (key + serial guard staleness).
     CloudEntries { key: String, serial: u64, result: Result<Vec<cli::RemoteEntry>, String> },
     /// A sidebar tree listing (never touches the visible folder).
@@ -1034,6 +1040,27 @@ impl App {
                 }),
                 Back::Photos(r) => photos::on_fetched(self, r),
                 Back::PhotosDownloaded(r) => photos::on_downloaded(self, r),
+                Back::PhotoThumb { name, stamp, result } => {
+                    self.photos.in_flight.remove(&name);
+                    match result {
+                        Ok((w, h, rgba)) => {
+                            let tex = ctx.load_texture(
+                                format!("photo-thumb-{name}"),
+                                egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba),
+                                egui::TextureOptions::LINEAR,
+                            );
+                            // Bound the cache: a big timeline must not keep
+                            // every thumbnail on the GPU.
+                            if self.photos.tex.len() >= 256 {
+                                self.photos.tex.clear();
+                            }
+                            self.photos.tex.insert(name, (stamp, tex));
+                        }
+                        Err(_) => {
+                            self.photos.failed.insert(name);
+                        }
+                    }
+                }
                 Back::CloudEntries { key, serial, result } => {
                     cloud::on_entries(self, key, serial, result)
                 }

@@ -1,3 +1,22 @@
+## 3.18.0 — 2026-11-05
+
+- **Photos show as pictures.** The timeline is a month-grouped tile grid with
+  real thumbnails: PNG through the bundled `png` decoder and JPEG through
+  `zune-jpeg` (pure Rust, no C). Decoding runs off the UI thread, each photo
+  becomes one texture downscaled to 256px, and the cache is capped so a big
+  library cannot fill the GPU. Formats with no decoder (HEIC) keep the
+  placeholder tile and a Download button.
+- **Photos sync both ways.** The engine uploads new files found in
+  `~/ProtonPhotos` and downloads photos that are only in the cloud (batched
+  `photo upload` / `photo download -c rename`), and the page reports the result:
+  "In sync · 15 in the cloud, 15 on disk". Additive on purpose: nothing is
+  deleted or overwritten, and a name whose size differs on both sides is
+  reported once and left alone. `PROTON_SYNC_PHOTOS=0` turns it off;
+  `PROTON_SYNC_PHOTOS_LOCAL` moves the folder; it only runs once that folder
+  exists (the page creates it).
+- Sizes shown and compared are the original `claimedSize`, not the encrypted
+  `totalStorageSize` - otherwise every synced photo looked like a conflict.
+
 ## 3.17.0 — 2026-11-05
 
 - **New Photos page.** The sidebar is now Home, My files, Photos, Settings,

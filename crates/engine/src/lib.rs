@@ -12,6 +12,7 @@ pub mod filter;
 pub mod firstsync;
 pub mod health;
 pub mod loop_;
+pub mod photos;
 pub mod plan;
 pub mod policy;
 pub mod push;

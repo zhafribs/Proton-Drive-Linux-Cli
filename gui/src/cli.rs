@@ -328,14 +328,13 @@ fn parse_photos(json: &str) -> Result<Vec<PhotoEntry>, String> {
                 .and_then(Value::as_u64)
                 .unwrap_or(0) as u32
         };
+        // `claimedSize` is the original file size; `totalStorageSize` is the
+        // encrypted size, which is what the GUI shows when in doubt.
         let size = e
-            .get("totalStorageSize")
+            .get("activeRevision")
+            .and_then(|r| r.get("claimedSize"))
             .and_then(Value::as_u64)
-            .or_else(|| {
-                e.get("activeRevision")
-                    .and_then(|r| r.get("claimedSize"))
-                    .and_then(Value::as_u64)
-            })
+            .or_else(|| e.get("totalStorageSize").and_then(Value::as_u64))
             .unwrap_or(0);
         let capture: String = e
             .get("photo")
@@ -584,15 +583,16 @@ mod tests {
         assert!(parse_entries("", "x", false).unwrap().is_empty());
     }
 
-    /// The timeline JSON the CLI emits with `-d`: name, stored size, capture
-    /// time and pixel size, newest capture first.
+    /// The timeline JSON the CLI emits with `-d`: name, size, capture time and
+    /// pixel size, newest capture first. The size compared with disk is
+    /// `claimedSize` (the original file), not `totalStorageSize` (encrypted).
     #[test]
     fn photo_timeline_parses_and_sorts() {
         let json = r#"[
-            {"uid":"u1","name":{"ok":true,"value":"b.png"},"totalStorageSize":10,
+            {"uid":"u1","name":{"ok":true,"value":"b.png"},"totalStorageSize":12,
              "photo":{"captureTime":"2026-08-21T12:55:54.000Z"},
-             "activeRevision":{"claimedAdditionalMetadata":{"Media":{"Width":1920,"Height":1080}}}},
-            {"uid":"u2","name":{"ok":true,"value":"a.jpg"},"totalStorageSize":20,
+             "activeRevision":{"claimedSize":10,"claimedAdditionalMetadata":{"Media":{"Width":1920,"Height":1080}}}},
+            {"uid":"u2","name":{"ok":true,"value":"a.jpg"},"totalStorageSize":25,
              "photo":{"captureTime":"2025-01-02T03:04:05.000Z"}},
             {"uid":"u3","name":{"ok":false,"value":"locked.png"},"photo":{"captureTime":"2024-01-01T00:00:00.000Z"}},
             {"name":{"value":"no-uid.png"}}
@@ -602,9 +602,10 @@ mod tests {
         assert_eq!(out[0].name, "b.png"); // newest capture first
         assert_eq!(out[0].capture, "2026-08-21 12:55");
         assert_eq!((out[0].width, out[0].height), (1920, 1080));
-        assert_eq!(out[0].size, 10);
+        assert_eq!(out[0].size, 10, "claimedSize, not the encrypted total");
         assert_eq!(out[1].capture, "2025-01-02 03:04");
         assert_eq!(out[1].width, 0); // no Media block: unknown, not fatal
+        assert_eq!(out[1].size, 25, "falls back to totalStorageSize");
         assert!(parse_photos("").unwrap().is_empty());
     }
 

@@ -2615,6 +2615,7 @@ dependencies = [
  "sha2",
  "ureq",
  "zbus",
+ "zune-jpeg",
 ]
 
 [[package]]
