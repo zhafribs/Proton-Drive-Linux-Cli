@@ -284,6 +284,130 @@ fn parse_entries(json: &str, rel_path: &str, trash: bool) -> Result<Vec<RemoteEn
     Ok(out)
 }
 
+/// One entry of the Proton photo timeline (`photo timeline -d --json`).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PhotoEntry {
+    /// Node uid - what `photo download` accepts as a remote path.
+    pub uid: String,
+    pub name: String,
+    pub size: u64,
+    /// Capture time as `YYYY-MM-DD HH:MM` (the CLI's ISO timestamp, trimmed).
+    pub capture: String,
+    /// Pixel size when the CLI reports it, else 0.
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Parse `photo timeline -d --json` into timeline rows, newest capture first.
+fn parse_photos(json: &str) -> Result<Vec<PhotoEntry>, String> {
+    let raw: Vec<Value> = serde_json::from_str(if json.trim().is_empty() { "[]" } else { json })
+        .map_err(|e| format!("bad JSON from CLI: {e}"))?;
+    let mut out: Vec<PhotoEntry> = Vec::new();
+    for e in &raw {
+        let uid = e.get("uid").and_then(Value::as_str).unwrap_or("");
+        let name_ok = e
+            .get("name")
+            .and_then(|n| n.get("ok"))
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let name = e
+            .get("name")
+            .and_then(|n| n.get("value"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if uid.is_empty() || !name_ok || name.is_empty() {
+            continue;
+        }
+        let media = e
+            .get("activeRevision")
+            .and_then(|r| r.get("claimedAdditionalMetadata"))
+            .and_then(|m| m.get("Media"));
+        let dim = |k: &str| {
+            media
+                .and_then(|m| m.get(k))
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as u32
+        };
+        let size = e
+            .get("totalStorageSize")
+            .and_then(Value::as_u64)
+            .or_else(|| {
+                e.get("activeRevision")
+                    .and_then(|r| r.get("claimedSize"))
+                    .and_then(Value::as_u64)
+            })
+            .unwrap_or(0);
+        let capture: String = e
+            .get("photo")
+            .and_then(|p| p.get("captureTime"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .replace('T', " ")
+            .chars()
+            .take(16)
+            .collect();
+        out.push(PhotoEntry {
+            uid: uid.to_string(),
+            name: name.to_string(),
+            size,
+            capture,
+            width: dim("Width"),
+            height: dim("Height"),
+        });
+    }
+    // The timeline is "newest capture first"; the CLI makes no promise.
+    out.sort_by(|a, b| b.capture.cmp(&a.capture));
+    Ok(out)
+}
+
+/// The account's photo timeline (My Photos), with names and sizes.
+pub fn fetch_photos() -> Result<Vec<PhotoEntry>, String> {
+    let Some(cli) = resolve_cli() else {
+        return Err("proton-drive CLI not found".into());
+    };
+    let o = run_cli(
+        &cli,
+        &["photo", "timeline", "-d", "--json"],
+        Duration::from_secs(180),
+    )?;
+    if !o.ok() {
+        return Err(cli_err(&o));
+    }
+    parse_photos(&o.stdout)
+}
+
+/// The argv for `photo download`: uids become `/photos/<uid>` paths, which
+/// stay unambiguous when two photos share a file name.
+fn photo_download_args(uids: &[String], dir: &std::path::Path) -> Vec<String> {
+    let mut args: Vec<String> = ["photo", "download", "-c", "rename"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    args.extend(uids.iter().map(|u| format!("/photos/{u}")));
+    args.push(dir.to_string_lossy().into_owned());
+    args
+}
+
+/// Download photos by node uid into `dir`, creating it. Duplicate names are
+/// renamed: the timeline can hold several photos with the same file name.
+pub fn download_photos(uids: &[String], dir: &std::path::Path) -> Result<usize, String> {
+    if uids.is_empty() {
+        return Ok(0);
+    }
+    std::fs::create_dir_all(dir)
+        .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    let Some(cli) = resolve_cli() else {
+        return Err("proton-drive CLI not found".into());
+    };
+    let args = photo_download_args(uids, dir);
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let o = run_cli(&cli, &refs, Duration::from_secs(900))?;
+    if !o.ok() {
+        return Err(cli_err(&o));
+    }
+    Ok(uids.len())
+}
+
 fn cli_err(o: &exec::Output) -> String {
     let src = if o.stderr.trim().is_empty() { &o.stdout } else { &o.stderr };
     let s: String = src.trim().chars().take(200).collect();
@@ -458,5 +582,49 @@ mod tests {
         assert_eq!(rpath("/my-files", "docs/a"), "/my-files/docs/a");
         // parse-level sanity: empty stdout is an empty listing, not an error
         assert!(parse_entries("", "x", false).unwrap().is_empty());
+    }
+
+    /// The timeline JSON the CLI emits with `-d`: name, stored size, capture
+    /// time and pixel size, newest capture first.
+    #[test]
+    fn photo_timeline_parses_and_sorts() {
+        let json = r#"[
+            {"uid":"u1","name":{"ok":true,"value":"b.png"},"totalStorageSize":10,
+             "photo":{"captureTime":"2026-08-21T12:55:54.000Z"},
+             "activeRevision":{"claimedAdditionalMetadata":{"Media":{"Width":1920,"Height":1080}}}},
+            {"uid":"u2","name":{"ok":true,"value":"a.jpg"},"totalStorageSize":20,
+             "photo":{"captureTime":"2025-01-02T03:04:05.000Z"}},
+            {"uid":"u3","name":{"ok":false,"value":"locked.png"},"photo":{"captureTime":"2024-01-01T00:00:00.000Z"}},
+            {"name":{"value":"no-uid.png"}}
+        ]"#;
+        let out = parse_photos(json).unwrap();
+        assert_eq!(out.len(), 2, "undecryptable names and uid-less rows are skipped");
+        assert_eq!(out[0].name, "b.png"); // newest capture first
+        assert_eq!(out[0].capture, "2026-08-21 12:55");
+        assert_eq!((out[0].width, out[0].height), (1920, 1080));
+        assert_eq!(out[0].size, 10);
+        assert_eq!(out[1].capture, "2025-01-02 03:04");
+        assert_eq!(out[1].width, 0); // no Media block: unknown, not fatal
+        assert!(parse_photos("").unwrap().is_empty());
+    }
+
+    /// `photo download` takes `/photos/<node>` paths, not bare uids (the CLI
+    /// answers "not supported" for those).
+    #[test]
+    fn photo_download_argv_uses_photo_paths() {
+        let uids = vec!["uid-a".to_string(), "uid-b".to_string()];
+        let args = photo_download_args(&uids, std::path::Path::new("/home/me/ProtonPhotos"));
+        assert_eq!(
+            args,
+            vec![
+                "photo",
+                "download",
+                "-c",
+                "rename",
+                "/photos/uid-a",
+                "/photos/uid-b",
+                "/home/me/ProtonPhotos",
+            ]
+        );
     }
 }

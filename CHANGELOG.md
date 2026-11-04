@@ -1,3 +1,14 @@
+## 3.17.0 — 2026-11-05
+
+- **New Photos page.** The sidebar is now Home, My files, Photos, Settings,
+  Trash, About. Photos lists the account's photo timeline (`photo timeline -d`)
+  grouped by month with resolution, size and capture date, and downloads a
+  single photo, a selection or the whole timeline into `~/ProtonPhotos`
+  (`PROTON_SYNC_PHOTOS_LOCAL` overrides it). Downloads go through
+  `photo download -c rename`, so two photos with the same name both land.
+  No thumbnails: the CLI exposes no image bytes, and decoding JPEG would mean
+  bundling an image codec for a nicety.
+
 ## 3.16.94 — 2026-11-04
 
 - **The tray dot keeps its colour at panel size.** The badge was a 12px fill

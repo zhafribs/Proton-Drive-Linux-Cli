@@ -451,6 +451,7 @@ pub fn move_row(ui: &mut egui::Ui, row: &ChangeRow, parent: &str, when: &str) {
 pub enum NavIcon {
     Home,
     Folder,
+    Photos,
     Settings,
     Trash,
     About,
@@ -490,6 +491,20 @@ pub fn nav_icon(painter: &egui::Painter, r: egui::Rect, kind: NavIcon, c: egui::
                 egui::CornerRadius::same(4),
                 c,
             );
+        }
+        NavIcon::Photos => {
+            // Photo frame: rounded canvas, a sun and a horizon line.
+            painter.rect_stroke(
+                egui::Rect::from_min_max(p(0.09, 0.19), p(0.91, 0.81)),
+                egui::CornerRadius::same(3),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.circle_stroke(p(0.34, 0.38), 0.08 * r.width(), stroke);
+            painter.add(egui::Shape::line(
+                vec![p(0.16, 0.72), p(0.42, 0.47), p(0.60, 0.66), p(0.73, 0.55), p(0.85, 0.68)],
+                stroke,
+            ));
         }
         NavIcon::Settings => {
             // Gear: teeth fused to the spindle ring, so it reads as a gear

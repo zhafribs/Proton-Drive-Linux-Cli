@@ -6,6 +6,7 @@ pub mod about;
 pub mod activity;
 pub mod cloud;
 pub mod home;
+pub mod photos;
 pub mod settings;
 pub mod widgets;
 
@@ -25,6 +26,7 @@ use std::time::{Duration, Instant};
 pub enum Page {
     Home,
     Cloud,
+    Photos,
     Settings,
     About,
 }
@@ -48,6 +50,10 @@ pub enum Back {
     UnitEnabled(bool),
     /// "Restart syncing now" finished; `false` = systemctl refused.
     ServiceRestarted(bool),
+    /// Photo timeline for the Photos page.
+    Photos(Result<Vec<cli::PhotoEntry>, String>),
+    /// Photo download finished; Ok is how many were asked for.
+    PhotosDownloaded(Result<usize, String>),
     /// Cloud browser: a folder listing landed (key + serial guard staleness).
     CloudEntries { key: String, serial: u64, result: Result<Vec<cli::RemoteEntry>, String> },
     /// A sidebar tree listing (never touches the visible folder).
@@ -175,6 +181,7 @@ pub struct App {
     pub log_lines: Vec<String>,
     pub act: activity::ActivityState,
     pub cloud: cloud::CloudState,
+    pub photos: photos::PhotoState,
     /// Buffer of the open text-input dialog (rename / new folder).
     pub input_buf: String,
     pub input_focus: bool,
@@ -652,6 +659,7 @@ impl App {
             log_lines: Vec::new(),
             act: activity::ActivityState::default(),
             cloud: cloud::CloudState::default(),
+            photos: photos::PhotoState::default(),
             input_buf: String::new(),
             input_focus: false,
             cool: notify::Cooldowns::default(),
@@ -1024,6 +1032,8 @@ impl App {
                 } else {
                     "Could not restart syncing - run: systemctl --user restart proton-sync"
                 }),
+                Back::Photos(r) => photos::on_fetched(self, r),
+                Back::PhotosDownloaded(r) => photos::on_downloaded(self, r),
                 Back::CloudEntries { key, serial, result } => {
                     cloud::on_entries(self, key, serial, result)
                 }
@@ -1531,6 +1541,7 @@ impl App {
             .show(ui, |ui| match self.page {
                 Page::Home => home::draw(self, ui),
                 Page::Cloud => cloud::draw(self, ui),
+                Page::Photos => photos::draw(self, ui),
                 Page::Settings => settings::draw(self, ui),
                 Page::About => about::draw(self, ui),
             });
@@ -2024,6 +2035,11 @@ impl eframe::App for App {
         if self.page == Page::Cloud && !self.cloud.opened {
             self.cloud.opened = true;
             cloud::on_shown(self);
+        }
+
+        // Photos: same idea - the timeline is fetched once, on first show.
+        if self.page == Page::Photos {
+            photos::on_shown(self);
         }
 
         // Updates: automatic check 5s after start, then every 6h (Qt's

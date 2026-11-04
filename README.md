@@ -55,6 +55,11 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
 - **My files** — upload files/folders (or drag-and-drop them in), download,
   rename, move, multi-select, search, sortable columns, back/forward,
   breadcrumbs and a restorable **Trash**.
+- **Photos** — the account's photo timeline grouped by month, with resolution,
+  size and capture date. Download one, the selection, or all of them into
+  `~/ProtonPhotos` (override with `PROTON_SYNC_PHOTOS_LOCAL`); duplicates are
+  renamed, never overwritten. Thumbnails are not shown: the official CLI
+  exposes no image bytes, and decoding JPEG/HEIC would mean bundling a codec.
 - **Home** — one plain-language status orb with pause (15 min, 1 h, until
   resumed), file count and disk usage in the sidebar, a live transfer progress
   bar and queue, and the activity feed (uploads, downloads, removals,

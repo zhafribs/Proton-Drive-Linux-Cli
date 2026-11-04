@@ -1994,6 +1994,15 @@ pub fn nav_ui(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(8.0);
     if widgets::nav_row(
         ui,
+        widgets::NavIcon::Photos,
+        "Photos",
+        app.page == super::Page::Photos,
+    ) {
+        app.page = super::Page::Photos;
+    }
+    ui.add_space(8.0);
+    if widgets::nav_row(
+        ui,
         widgets::NavIcon::Settings,
         "Settings",
         app.page == super::Page::Settings,
