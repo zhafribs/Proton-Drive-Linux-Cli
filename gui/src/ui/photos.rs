@@ -533,11 +533,18 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                 ui.label(egui::RichText::new(&day).strong().size(13.5));
                 ui.add_space(4.0);
                 widgets::card(ui, None, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        for p in &group {
-                            tile(ui, app, p, &dir);
-                        }
-                    });
+                    // One grid for every card: the size depends on the width
+                    // alone, so a sparse card keeps the same thumbnails as a
+                    // crowded one, and a full row spans the card exactly.
+                    let (cols, size) = grid_metrics(ui.available_width());
+                    ui.spacing_mut().item_spacing.x = GAP;
+                    for row in group.chunks(cols.max(1)) {
+                        ui.horizontal(|ui| {
+                            for p in row {
+                                tile(ui, app, p, &dir, size);
+                            }
+                        });
+                    }
                 });
                 // `viewport` is in content space, `min_rect` in screen space:
                 // convert the top edge once, then compare like with like.
@@ -572,10 +579,45 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
 }
 
 /// One tile of the grid: the picture when it is on disk, a placeholder while it
-/// is not (with a Download button), name and date underneath.
-const TILE: f32 = 148.0;
+/// is not (with a Download button), and the name underneath. The size comes
+/// from [`grid_metrics`] so every card lines up on the same grid.
+const TARGET_TILE: f32 = 160.0;
+/// Never so small that a photo stops reading, never so large that a row holds
+/// two pictures on a wide window.
+const MIN_TILE: f32 = 110.0;
+const MAX_TILE: f32 = 220.0;
+const GAP: f32 = 8.0;
 
-fn tile(ui: &mut egui::Ui, app: &mut App, p: &cli::PhotoEntry, dir: &std::path::Path) {
+/// Columns and tile width for an available width: the row is filled exactly
+/// (no leftover strip on a full row), tiles stay between [`MIN_TILE`] and
+/// [`MAX_TILE`], and the result depends only on the width - so a card with
+/// three photos uses the same tile size as one with twenty.
+fn grid_metrics(avail: f32) -> (usize, f32) {
+    if avail <= MIN_TILE {
+        return (1, avail.max(1.0));
+    }
+    let mut cols = ((avail + GAP) / (TARGET_TILE + GAP)).round().max(1.0) as usize;
+    loop {
+        let t = (avail - (cols.saturating_sub(1)) as f32 * GAP) / cols as f32;
+        if t < MIN_TILE && cols > 1 {
+            cols -= 1;
+            continue;
+        }
+        if t > MAX_TILE && cols < 64 {
+            cols += 1;
+            continue;
+        }
+        return (cols, t.min(MAX_TILE));
+    }
+}
+
+fn tile(
+    ui: &mut egui::Ui,
+    app: &mut App,
+    p: &cli::PhotoEntry,
+    dir: &std::path::Path,
+    size: f32,
+) {
     let path = dir.join(&p.name);
     let local = path.is_file();
     let stamp = if local { file_stamp(&path) } else { 0.0 };
@@ -594,11 +636,11 @@ fn tile(ui: &mut egui::Ui, app: &mut App, p: &cli::PhotoEntry, dir: &std::path::
     let selected = app.photos.sel.iter().any(|u| u == &p.uid);
 
     ui.allocate_ui_with_layout(
-        egui::vec2(TILE, TILE + 30.0),
+        egui::vec2(size, size + 30.0),
         egui::Layout::top_down(egui::Align::Center),
         |ui| {
             let (rect, resp) =
-                ui.allocate_exact_size(egui::vec2(TILE, TILE), egui::Sense::click());
+                ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
             ui.painter().rect_filled(
                 rect,
                 egui::CornerRadius::same(10),
@@ -706,6 +748,25 @@ mod tests {
         assert_eq!(groups[0].1.len(), 2);
         assert_eq!(groups[0].1[0].name, "c.png");
         assert_eq!(groups[2].1[0].name, "old.jpg");
+    }
+
+    /// Every card uses the same grid, rows fill the width exactly, and the tile
+    /// size stays within the bounds whatever the window width.
+    #[test]
+    fn the_grid_fills_the_width_within_bounds() {
+        for avail in [260.0f32, 400.0, 700.0, 1000.0, 1400.0, 2600.0, 3200.0] {
+            let (cols, tile) = grid_metrics(avail);
+            assert!(cols >= 1, "{avail}: at least one column");
+            assert!(
+                (MIN_TILE..=MAX_TILE).contains(&tile),
+                "{avail}: tile {tile} outside bounds"
+            );
+            // A full row uses the available width (within rounding).
+            let row = cols as f32 * tile + (cols - 1) as f32 * GAP;
+            assert!((row - avail).abs() < 0.5, "{avail}: row {row} vs {avail}");
+        }
+        // Size depends on width alone: two "cards" of different length agree.
+        assert_eq!(grid_metrics(1000.0), grid_metrics(1000.0));
     }
 
     #[test]

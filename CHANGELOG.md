@@ -1,3 +1,11 @@
+## 3.20.3 — 2026-11-05
+
+- **The tile grid fills its card.** Columns are computed from the card width and
+  the thumbnails are sized so a full row spans it exactly - no leftover strip -
+  with tiles kept between 110 and 220 px. The size depends only on the width, so
+  a card with three photos uses the same thumbnails as one with twenty instead of
+  stretching to fill.
+
 ## 3.20.2 — 2026-11-05
 
 - **Settings → Photos is just the controls.** The two explanatory paragraphs are
