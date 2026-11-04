@@ -523,12 +523,15 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                 return;
             }
 
-            // The day label is only painted once, pinned at the top: the card
-            // itself carries no date. It hands over when that day's card has
-            // scrolled completely out of sight, not when the next one appears.
-            let mut current: Option<String> = None;
+            // Every day card carries its own header. Once that header scrolls
+            // off the top it is re-painted pinned (see below), so the date is
+            // never drawn twice at the same time.
+            let mut current: Option<(String, f32)> = None;
             for (day, group) in days(&app.photos.items) {
                 ui.add_space(12.0);
+                let header_y = ui.cursor().top();
+                ui.label(egui::RichText::new(&day).strong().size(13.5));
+                ui.add_space(4.0);
                 widgets::card(ui, None, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         for p in &group {
@@ -540,17 +543,20 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                 // convert the top edge once, then compare like with like.
                 let visible_top = ui.min_rect().top() + viewport.min.y;
                 if current.is_none() && ui.min_rect().bottom() > visible_top {
-                    current = Some(day);
+                    current = Some((day, header_y));
                 }
             }
             ui.add_space(12.0);
 
             // Sticky day header: drawn last so it sits over the tiles, at the
             // top edge of the visible area, until the next day replaces it.
-            if let Some(day) = current {
-                let content = ui.min_rect();
+            let content = ui.min_rect();
+            let visible_top = content.top() + viewport.min.y;
+            if let Some((day, header_y)) = current
+                && header_y < visible_top - 1.0
+            {
                 let rect = egui::Rect::from_min_size(
-                    egui::pos2(content.left(), content.top() + viewport.min.y),
+                    egui::pos2(content.left(), visible_top),
                     egui::vec2(content.width(), 20.0),
                 );
                 ui.painter().rect_filled(rect, 0.0, ui.visuals().panel_fill);
@@ -588,7 +594,7 @@ fn tile(ui: &mut egui::Ui, app: &mut App, p: &cli::PhotoEntry, dir: &std::path::
     let selected = app.photos.sel.iter().any(|u| u == &p.uid);
 
     ui.allocate_ui_with_layout(
-        egui::vec2(TILE, TILE + 40.0),
+        egui::vec2(TILE, TILE + 30.0),
         egui::Layout::top_down(egui::Align::Center),
         |ui| {
             let (rect, resp) =
@@ -652,19 +658,14 @@ fn tile(ui: &mut egui::Ui, app: &mut App, p: &cli::PhotoEntry, dir: &std::path::
 
             let label = widgets::elide(&p.name, 17);
             ui.label(egui::RichText::new(label).size(11.0));
-            if local {
-                ui.label(
-                    egui::RichText::new(when)
-                        .weak()
-                        .size(10.0),
-                );
-            } else {
-                if ui
+            // No date under the photo: the day header carries it (and the tile's
+            // tooltip repeats it). Only a cloud-only photo needs a button here.
+            if !local
+                && ui
                     .add_enabled(!app.photos.busy, egui::Button::new("Download"))
                     .clicked()
-                {
-                    download(app, vec![p.uid.clone()]);
-                }
+            {
+                download(app, vec![p.uid.clone()]);
             }
         },
     );

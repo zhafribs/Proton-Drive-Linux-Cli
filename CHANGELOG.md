@@ -1,3 +1,11 @@
+## 3.20.1 — 2026-11-05
+
+- **Each day card has its date back on top.** The label sits above its card and
+  only becomes the pinned one once it scrolls off the top, so the date is never
+  drawn twice.
+- The date is gone from **under every photo** - that is what was noise. It is
+  still in the day header and in a tile's hover tooltip.
+
 ## 3.20.0 — 2026-11-05
 
 - **Photo deletions now travel both ways.** Delete a file in `~/ProtonPhotos` and
