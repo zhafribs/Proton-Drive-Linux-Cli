@@ -64,9 +64,12 @@ fn alpha_bounds(rgba: &[u8], w: usize, h: usize) -> Option<(usize, usize, usize,
 /// made the tray icon look much smaller than a full-bleed icon like ZapFast.
 ///
 /// Qt drew the dot as `drawEllipse(52, 52, 18, 18)` with a 4px white pen
-/// (colour fill to r=7, ring 7..11). Ours is bigger - r=17 with a 12px fill -
-/// because a 22px panel slot shrinks it to ~10px, and the white ring is what
-/// keeps it legible on light, dark and tinted panels.
+/// (colour fill to r=7, ring 7..11). That pen is a trap: a panel renders this
+/// at 16-22px, so a thick light ring ends up half the visible dot and dilutes
+/// the hue - amber read as pink, cyan as light green. The badge is therefore
+/// mostly solid colour (fill to r=16.5 of 18) with a thin dark edge, which
+/// keeps the state readable at panel size and still defines the edge on light
+/// panels while disappearing on dark ones.
 ///
 /// Returns ARGB32 bytes, which is what `ksni::Icon` wants. `status_key` is
 /// `health::UiStatus::key()`; the dot colour comes from [`dot_color`], so the
@@ -131,11 +134,11 @@ pub fn compose_icon(base_rgba: &[u8], base_w: usize, status_key: &str) -> Vec<u8
         dst[3] = a + dst[3] * ia;
     };
 
-    // Status dot: the state's colour inside a white ring, bottom-right.
+    // Status dot: the state's colour, bottom-right, mostly solid fill.
     const BX: f32 = 54.0;
     const BY: f32 = 54.0;
-    const BR: f32 = 17.0;
-    const FILL: f32 = 12.0;
+    const BR: f32 = 18.0;
+    const FILL: f32 = 16.5;
     let dot = dot_color(status_key);
     for y in 0..C {
         for x in 0..C {
@@ -143,9 +146,9 @@ pub fn compose_icon(base_rgba: &[u8], base_w: usize, status_key: &str) -> Vec<u8
             let py = y as f32 + 0.5;
             let d = ((px - BX).powi(2) + (py - BY).powi(2)).sqrt();
             let idx = y * C + x;
-            let ring = 1.0 - smooth(BR - 0.5, BR + 0.5, d);
-            if ring > 0.0 {
-                over(idx, [0xff; 3], ring);
+            let edge = 1.0 - smooth(BR - 0.5, BR + 0.5, d);
+            if edge > 0.0 {
+                over(idx, [0x0a, 0x0b, 0x1a], edge);
             }
             let fill = 1.0 - smooth(FILL - 0.5, FILL + 0.5, d);
             if fill > 0.0 {
@@ -412,16 +415,25 @@ mod tests {
         }
     }
 
-    /// The white ring is what keeps the dot readable on any panel background.
+    /// The badge must stay the state's colour when a panel shrinks it: a thick
+    /// white ring used to wash the hue out (amber read as pink, cyan as mint).
     #[test]
-    fn dot_sits_on_a_white_ring() {
+    fn the_dot_is_mostly_solid_colour() {
         let argb = compose_icon(&[], 0, "error");
-        // ~14.5px out: past the 12px fill, inside the 17px disc.
-        let o = ((54 - 15) * 72 + 54) * 4;
-        assert_eq!(&argb[o..o + 4], &[0xff, 0xff, 0xff, 0xff]);
-        // Inside the fill: the state colour, not a glyph.
-        let o = ((54 - 8) * 72 + 54) * 4;
+        // Pure state colour almost to the edge.
+        let o = ((54 - 14) * 72 + 54) * 4;
         assert_eq!(&argb[o..o + 4], &[0xff, 0xdc, 0x26, 0x26]);
+        // A dark edge, not a white one, at the outer boundary.
+        let o = ((54 - 18) * 72 + 54) * 4;
+        assert!(argb[o] > 0xf0, "edge should be opaque: {}", argb[o]);
+        assert!(
+            argb[o + 1] < 0x30 && argb[o + 2] < 0x30 && argb[o + 3] < 0x30,
+            "edge should be dark: {:?}",
+            &argb[o..o + 4]
+        );
+        // Outside the badge the canvas is untouched.
+        let o = ((54 - 20) * 72 + 54) * 4;
+        assert_eq!(&argb[o..o + 4], &[0, 0, 0, 0]);
     }
 
     /// No animation: the same key always composes byte-identical pixels.

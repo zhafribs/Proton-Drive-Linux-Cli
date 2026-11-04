@@ -1,3 +1,13 @@
+## 3.16.94 — 2026-11-04
+
+- **The tray dot keeps its colour at panel size.** The badge was a 12px fill
+  inside a 17px white ring. Panels draw the icon at 16-22px, so the ring was
+  half of the visible dot and washed the hue out: cyan read as light green and
+  amber as pink. The badge is now a 16.5px fill inside an 18px circle with a
+  thin dark edge, so only ~17% of its area is not the state colour. Measured at
+  16px, "syncing" is `#3bc5d5` (was `#96e5f3`) and "paused" `#c66d0a` (was
+  `#e6b27d`).
+
 ## 3.16.93 — 2026-11-04
 
 - **The update button survives a moved AppImage.** When the running file had been
