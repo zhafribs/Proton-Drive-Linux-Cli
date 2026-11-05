@@ -1471,10 +1471,15 @@ fn row(
         );
     }
     if resp.has_focus() {
+        let ring = if selected {
+            visuals.selection.stroke.color
+        } else {
+            theme::accent(ui.visuals())
+        };
         ui.painter().rect_stroke(
             rect,
             2.0,
-            egui::Stroke::new(1.5, theme::accent(ui.visuals())),
+            egui::Stroke::new(1.5, ring),
             egui::StrokeKind::Inside,
         );
     }
@@ -1585,10 +1590,13 @@ fn row(
     // moved the current item when right-clicking outside the selection.
     // AccessKit activation is a fake primary click, which clicked_by ignores,
     // so ask for the action explicitly.
-    let at_click = ui.input(|i| {
-        i.has_accesskit_action_request(resp.id, egui::accesskit::Action::Click)
-    });
-    if resp.clicked_by(egui::PointerButton::Primary) || raw_click || at_click {
+    let at_click = app.dialog.is_none()
+        && ui.input(|i| {
+            i.has_accesskit_action_request(resp.id, egui::accesskit::Action::Click)
+        });
+    if app.dialog.is_none()
+        && (resp.clicked_by(egui::PointerButton::Primary) || raw_click || at_click)
+    {
         let mods = ui.input(|i| i.modifiers);
         let sel = &mut app.cloud.sel;
         if mods.ctrl || mods.command {

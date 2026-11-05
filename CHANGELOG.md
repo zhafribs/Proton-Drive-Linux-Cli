@@ -1,3 +1,13 @@
+## 3.20.14 — 2026-11-06
+
+- **Focused selected rows keep a visible ring.** The 3.20.13 accent ring sat on
+  the accent selection fill (1.0:1 in light, 1.9:1 in dark); selected rows now
+  use the white selection stroke (5.09:1), while unselected rows keep the
+  accent ring.
+- **Dialogs block row and tile activation**, including AccessKit Click, so a
+  screen reader or keyboard cannot change the selection behind a confirmation
+  dialog whose action reads the live selection.
+
 ## 3.20.13 — 2026-11-06
 
 - **Keyboard focus is visible on file rows in both themes.** The focus ring was
