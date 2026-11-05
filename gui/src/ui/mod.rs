@@ -1301,16 +1301,21 @@ impl App {
                                     );
                                 }
                             } else {
-                                self.upd.label = format!(
-                                    "You're up to date (latest release: {}, {}).",
-                                    rel.tag, rel.published
-                                );
+                                self.upd.label = if rel.published.is_empty() {
+                                    format!("You're up to date (latest release: {}).", rel.tag)
+                                } else {
+                                    format!(
+                                        "You're up to date (latest release: {}, {}).",
+                                        rel.tag, rel.published
+                                    )
+                                };
                                 self.upd.available = None;
                             }
                         }
                         Err(e) => {
-                            let _ = e;
-                            self.upd.label = "Could not check for updates right now.".to_string();
+                            self.upd.label = format!(
+                                "Could not check for updates right now. {e}"
+                            );
                             self.upd.available = None;
                         }
                     }

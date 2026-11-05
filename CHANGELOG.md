@@ -1,3 +1,17 @@
+## 3.20.22 — 2026-11-06
+
+- **Update checks keep working when GitHub rate-limits the API.** GitHub's
+  unauthenticated API allows 60 requests per hour, and when the quota ran out
+  the App & updates tab simply said it could not check. The app now falls back
+  to GitHub's `releases/latest` redirect and the signed checksum manifest, so
+  finding and downloading an update no longer depends on the API quota.
+- **The update card tells you what happened.** A failed check now shows the
+  real reason instead of a generic message, and the “up to date” line no longer
+  leaves a blank date when the fallback supplied no publish date.
+- **Installations stay signature-checked.** The fallback builds the same
+  canonical asset URLs; every download is still verified against the Ed25519
+  signature over `SHA256SUMS` before it can replace the running AppImage.
+
 ## 3.20.21 — 2026-11-06
 
 - **Locally added photos now upload even while the photo timeline is held.**

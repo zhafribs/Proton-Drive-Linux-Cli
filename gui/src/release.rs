@@ -180,7 +180,11 @@ pub fn check(paths: &Paths) -> Result<(Release, bool), String> {
         .unwrap_or("")
         .to_string();
 
-    let agent = ureq::Agent::new_with_defaults();
+    let config = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .timeout_global(Some(Duration::from_secs(30)))
+        .build();
+    let agent = ureq::Agent::new_with_config(config);
     let mut req = agent
         .get(RELEASE_API)
         .header("User-Agent", "Proton-Drive-Linux-Cli")
@@ -194,8 +198,13 @@ pub fn check(paths: &Paths) -> Result<(Release, bool), String> {
     let status = resp.status().as_u16();
 
     if status == 403 || status == 429 {
-        // GitHub's unauthenticated quota is 60 requests per hour per IP, and
-        // this app has no token: say what happened instead of a bare 403.
+        // The unauthenticated API quota is 60 requests/hour. GitHub's
+        // `releases/latest` redirect is not rate-limited, so fall back to it
+        // and let the signed manifest carry the integrity data.
+        if let Ok(rel) = check_via_redirect() {
+            return Ok((rel, false));
+        }
+        // Say what happened instead of a bare 403.
         let minutes = resp
             .headers()
             .get("x-ratelimit-reset")
@@ -230,6 +239,71 @@ pub fn check(paths: &Paths) -> Result<(Release, bool), String> {
         return read_fresh(resp, &paths.release_cache_file);
     }
     read_fresh(resp, &paths.release_cache_file)
+}
+
+/// The latest release tag without the API: `releases/latest` redirects to the
+/// tag page. Used only when the API is rate-limited. The result has no asset
+/// list; [`release_asset_url`] builds the expected release URLs from the tag.
+fn check_via_redirect() -> Result<Release, String> {
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(30)))
+        .max_redirects(0)
+        .build();
+    let agent = ureq::Agent::new_with_config(config);
+    let resp = agent
+        .get(crate::paths::RELEASE_PAGE)
+        .header("User-Agent", "Proton-Drive-Linux-Cli")
+        .call()
+        .map_err(|e| format!("release redirect failed: {e}"))?;
+    if !(300..400).contains(&resp.status().as_u16()) {
+        return Err(format!("release redirect: HTTP {}", resp.status()));
+    }
+    let location = resp
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| "release redirect: no location".to_string())?;
+    let tag = tag_from_release_location(location)
+        .ok_or_else(|| "release redirect: no tag".to_string())?;
+    let (cli, gui) =
+        parse_tag(tag).ok_or_else(|| "release redirect: invalid tag shape".to_string())?;
+    Ok(Release {
+        tag: tag.to_string(),
+        cli,
+        gui,
+        published: String::new(),
+        assets: Vec::new(),
+    })
+}
+
+/// `/tag/<tag>` from a `releases/latest` redirect target, rejecting anything
+/// that is not a plain single path segment.
+fn tag_from_release_location(location: &str) -> Option<&str> {
+    let (_, tag) = location.split_once("/tag/")?;
+    let tag = tag.split(['?', '#']).next()?;
+    if tag.is_empty() || tag.contains('/') || tag.contains(' ') || tag.contains('\\') {
+        return None;
+    }
+    Some(tag)
+}
+
+/// A release asset URL from the API list, or the canonical release-download URL
+/// when the release came from the rate-limit fallback.
+fn release_asset_url(rel: &Release, name: &str) -> Option<String> {
+    if let Some(url) = rel.asset_url(name) {
+        return Some(url.to_string());
+    }
+    if rel.tag.is_empty()
+        || rel.tag.contains('/')
+        || rel.tag.contains(' ')
+        || rel.tag.contains('\\')
+    {
+        return None;
+    }
+    Some(format!(
+        "https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/download/{}/{name}",
+        rel.tag
+    ))
 }
 
 fn read_fresh(
@@ -595,10 +669,9 @@ fn download_plan(
         // legacy release tagged v<cli> without a GUI suffix
         format!("ProtonDrive-CLI-{}-{arch}.AppImage", rel.cli)
     };
-    let url = rel
-        .asset_url(&name)
+    let url = release_asset_url(rel, &name)
         .ok_or_else(|| format!("no build for {arch} in release {}", rel.tag))?;
-    if !trusted_download_url(url) {
+    if !trusted_download_url(&url) {
         return Err(format!("release asset is not on a trusted host: {url}"));
     }
     let api_digest = match rel.asset_digest_raw(&name) {
@@ -610,16 +683,14 @@ fn download_plan(
     // Signature verification is mandatory: the manifest and its detached
     // signature are fetched for every update, even when GitHub supplies a
     // digest. The signed manifest is the authority.
-    let sums_url = rel
-        .asset_url("SHA256SUMS")
+    let sums_url = release_asset_url(rel, "SHA256SUMS")
         .ok_or_else(|| format!("no checksum manifest in release {}", rel.tag))?;
-    if !trusted_download_url(sums_url) {
+    if !trusted_download_url(&sums_url) {
         return Err(format!("checksum manifest is not on a trusted host: {sums_url}"));
     }
-    let sig_url = rel
-        .asset_url("SHA256SUMS.sig")
+    let sig_url = release_asset_url(rel, "SHA256SUMS.sig")
         .ok_or_else(|| format!("no signature for the checksum manifest in {}", rel.tag))?;
-    if !trusted_download_url(sig_url) {
+    if !trusted_download_url(&sig_url) {
         return Err(format!("manifest signature is not on a trusted host: {sig_url}"));
     }
     let target = install_target(target, &name)
@@ -635,9 +706,9 @@ fn download_plan(
     let dest = dir.join(format!("proton-update-{name}"));
     Ok(DownloadPlan {
         name,
-        url: url.to_string(),
-        sums_url: sums_url.to_string(),
-        sig_url: sig_url.to_string(),
+        url,
+        sums_url,
+        sig_url,
         api_digest,
         dir,
         dest,
@@ -1026,6 +1097,62 @@ mod tests {
     }
 
     #[test]
+    fn parses_latest_redirect_location() {
+        assert_eq!(
+            tag_from_release_location(
+                "https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/tag/v0.9.0-gui3.20.22"
+            ),
+            Some("v0.9.0-gui3.20.22")
+        );
+        assert_eq!(
+            tag_from_release_location("/zhafribs/Proton-Drive-Linux-Cli/releases/tag/v0.9.0-gui3.20.22?x=1#top"),
+            Some("v0.9.0-gui3.20.22")
+        );
+        assert_eq!(tag_from_release_location("https://github.com/releases/latest"), None);
+        assert_eq!(tag_from_release_location("https://github.com/releases/tag/"), None);
+        assert_eq!(
+            tag_from_release_location("https://github.com/releases/tag/a/b"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_redirect_release_synthesizes_canonical_asset_urls() {
+        let mut r = rel("0.9.0", "3.20.22");
+        r.assets.clear();
+        let app = "ProtonDrive-CLI-0.9.0-GUI-3.20.22-x86_64.AppImage";
+        assert_eq!(
+            release_asset_url(&r, app).as_deref(),
+            Some(
+                "https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/download/v0.9.0-gui3.20.22/ProtonDrive-CLI-0.9.0-GUI-3.20.22-x86_64.AppImage"
+            )
+        );
+        assert!(release_asset_url(&r, "SHA256SUMS")
+            .unwrap()
+            .ends_with("/v0.9.0-gui3.20.22/SHA256SUMS"));
+        assert!(release_asset_url(&r, "SHA256SUMS.sig")
+            .unwrap()
+            .ends_with("/v0.9.0-gui3.20.22/SHA256SUMS.sig"));
+
+        // The API's real asset list still wins when present.
+        r.assets.push(Asset {
+            name: "SHA256SUMS".into(),
+            url: "https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/download/v1/SHA256SUMS"
+                .into(),
+            digest: None,
+        });
+        assert_eq!(
+            release_asset_url(&r, "SHA256SUMS").as_deref(),
+            Some("https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/download/v1/SHA256SUMS")
+        );
+
+        // A hostile tag never becomes a URL.
+        r.assets.clear();
+        r.tag = "../evil".into();
+        assert_eq!(release_asset_url(&r, "SHA256SUMS"), None);
+    }
+
+    #[test]
     fn parses_latest_release_json() {
         let v = serde_json::json!({
             "tag_name": "v0.9.0-gui3.13.2",
@@ -1328,6 +1455,24 @@ mod tests {
     }
 
     #[test]
+    fn download_plan_works_from_a_rate_limit_redirect() {
+        let dir = std::env::temp_dir().join(format!("pd-plan-redirect-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let app = dir.join("old.AppImage");
+        std::fs::write(&app, b"x").unwrap();
+        let mut r = rel("0.9.0", "3.20.22");
+        r.assets.clear();
+        let plan = download_plan(&r, "x86_64", Some(&app)).unwrap();
+        assert!(plan.url.ends_with(
+            "/v0.9.0-gui3.20.22/ProtonDrive-CLI-0.9.0-GUI-3.20.22-x86_64.AppImage"
+        ));
+        assert!(plan.sums_url.ends_with("/v0.9.0-gui3.20.22/SHA256SUMS"));
+        assert!(plan.sig_url.ends_with("/v0.9.0-gui3.20.22/SHA256SUMS.sig"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn download_plan_requires_a_signed_manifest() {
         let dir = std::env::temp_dir().join(format!("pd-plan-signed-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1357,5 +1502,48 @@ mod tests {
         assert!(plan.sig_url.ends_with("SHA256SUMS.sig"));
         assert!(plan.sums_url.ends_with("SHA256SUMS"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[ignore = "network: GitHub releases redirect"]
+    fn live_redirect_finds_the_latest_tag() {
+        let r = check_via_redirect().unwrap();
+        assert!(parse_tag(&r.tag).is_some(), "unexpected tag {}", r.tag);
+        assert!(!r.tag.contains('/'));
+    }
+
+    #[test]
+    #[ignore = "network: GitHub release check"]
+    fn live_check_still_works_when_the_api_is_rate_limited() {
+        let root =
+            std::env::temp_dir().join(format!("pd-live-check-{}", std::process::id()));
+        let state = root.join("state");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&state).unwrap();
+        let paths = Paths {
+            conf_file: root.join("proton-sync.conf"),
+            unit_file: root.join("proton-sync.service"),
+            state_dir: state.clone(),
+            health_file: state.join("health.json"),
+            wake_file: state.join("wake"),
+            lock_file: state.join("gui.lock"),
+            snapshot_file: state.join("remote-snapshot.json"),
+            cloud_cache_file: state.join("cloud-cache.json"),
+            release_cache_file: state.join("release-cache.json"),
+            update_mark_file: state.join("update-pending.json"),
+            autostart_file: root.join("autostart.desktop"),
+            menu_desktop_file: root.join("menu.desktop"),
+            menu_icon_file: root.join("icon.svg"),
+            prefs_file: root.join("gui.conf"),
+            appimage: None,
+        };
+        let (rel, cached) = check(&paths).unwrap();
+        assert!(!cached);
+        assert!(parse_tag(&rel.tag).is_some(), "unexpected tag {}", rel.tag);
+        // The fallback has no API asset list, but plans from canonical URLs.
+        assert!(release_asset_url(&rel, "SHA256SUMS")
+            .unwrap()
+            .ends_with("SHA256SUMS"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
