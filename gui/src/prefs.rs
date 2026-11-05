@@ -146,6 +146,11 @@ impl Prefs {
     pub fn close_to_tray(&self) -> bool {
         self.bool_of("close_to_tray", true)
     }
+
+    /// Animate the aurora backdrop / request continuous repaints.
+    pub fn motion_enabled(&self) -> bool {
+        self.bool_of("motion", true)
+    }
     pub fn always_on_top(&self) -> bool {
         self.bool_of("always_on_top", true)
     }

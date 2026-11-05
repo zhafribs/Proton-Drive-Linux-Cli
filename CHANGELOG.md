@@ -1,3 +1,15 @@
+## 3.20.18 — 2026-11-06
+
+- **Dialogs block the page underneath.** A dimmed, input-absorbing layer sits
+  behind every dialog and dialog windows are foreground, so pointer clicks and
+  drags cannot reach the file list or controls while a confirmation is open.
+- **Toasts are dismissible and pause on hover.** Escape dismisses the front
+  error when no dialog is using the key, and hovering an info toast stops its
+  four-second timer until the pointer leaves.
+- **The aurora can be switched off.** Settings → Appearance has an “Animate the
+  background” toggle. Turning it off stops the continuous repaint and leaves
+  the backdrop static, saving CPU/GPU wakeups.
+
 ## 3.20.17 — 2026-11-06
 
 - **Settings Discard now restores the saved snapshot.** 3.20.16 re-read the

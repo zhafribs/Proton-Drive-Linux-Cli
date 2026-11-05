@@ -1802,7 +1802,7 @@ impl App {
             ctx.request_repaint();
         }
         let mut dismiss = false;
-        egui::Area::new(egui::Id::unique("toast"))
+        let area = egui::Area::new(egui::Id::unique("toast"))
             .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-18.0, -18.0 + slide))
             .show(ctx, |ui| {
                 ui.set_opacity(fade.clamp(0.0, 1.0));
@@ -1830,6 +1830,20 @@ impl App {
                     });
                 });
             });
+        // Hover pauses an info toast; Escape dismisses an error when no dialog
+        // is using the key.
+        let hovered = ctx
+            .pointer_hover_pos()
+            .is_some_and(|p| area.response.rect.contains(p));
+        if hovered
+            && !error
+            && let Some(front) = self.toasts.front_mut()
+        {
+            front.shown_at = Some(t);
+        }
+        if error && self.dialog.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            dismiss = true;
+        }
         if dismiss {
             self.toasts.pop_front();
         }
@@ -1840,6 +1854,24 @@ impl App {
         let Some(dlg) = self.dialog.clone() else {
             return;
         };
+        // Modal input blocker: pointer clicks and drags stay out of the page
+        // while a dialog is up. The dialog windows are Foreground, above this.
+        egui::Area::new(egui::Id::unique("dialog-blocker"))
+            .order(egui::Order::Middle)
+            .fixed_pos(egui::Pos2::ZERO)
+            .show(ctx, |ui| {
+                let screen = ctx.viewport_rect();
+                let resp = ui.allocate_rect(screen, egui::Sense::click_and_drag());
+                resp.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::Role::GenericContainer,
+                        false,
+                        "Dialog open",
+                    )
+                });
+                ui.painter()
+                    .rect_filled(screen, 0, egui::Color32::from_black_alpha(50));
+            });
         let mut open = true;
         let mut act: Option<DlgAct> = None;
 
@@ -1847,6 +1879,7 @@ impl App {
             Dialog::Info { title, body } => {
                 egui::Window::new(title.clone())
                     .collapsible(false)
+                    .order(egui::Order::Foreground)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                     .open(&mut open)
@@ -1861,6 +1894,7 @@ impl App {
             Dialog::ConfirmSave => {
                 egui::Window::new("Save changes")
                     .collapsible(false)
+                    .order(egui::Order::Foreground)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                     .open(&mut open)
@@ -1880,6 +1914,7 @@ impl App {
             Dialog::ConfirmLogout => {
                 egui::Window::new("Sign out")
                     .collapsible(false)
+                    .order(egui::Order::Foreground)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                     .open(&mut open)
@@ -1902,6 +1937,7 @@ impl App {
             Dialog::PauseMenu => {
                 egui::Window::new("Pause syncing")
                     .collapsible(false)
+                    .order(egui::Order::Foreground)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                     .open(&mut open)
@@ -1924,6 +1960,7 @@ impl App {
                 let cwd = cwd.clone();
                 egui::Window::new("Choose the folder to sync")
                     .collapsible(false)
+                    .order(egui::Order::Foreground)
                     .resizable(false)
                     .default_size([420.0, 480.0])
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
@@ -1979,6 +2016,7 @@ impl App {
                 let intent = intent.clone();
                 egui::Window::new(title)
                     .collapsible(false)
+                    .order(egui::Order::Foreground)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                     .open(&mut open)
@@ -2021,6 +2059,7 @@ impl App {
                 };
                 egui::Window::new("Move to trash?")
                     .collapsible(false)
+                    .order(egui::Order::Foreground)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                     .open(&mut open)
@@ -2050,6 +2089,7 @@ impl App {
                 let total = local + cloud;
                 egui::Window::new(format!("Delete {total} files?"))
                     .collapsible(false)
+                    .order(egui::Order::Foreground)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                     .open(&mut open)
@@ -2097,6 +2137,7 @@ impl App {
                 };
                 egui::Window::new("Move to the photos trash?")
                     .collapsible(false)
+                    .order(egui::Order::Foreground)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                     .open(&mut open)
@@ -2125,6 +2166,7 @@ impl App {
                 };
                 egui::Window::new("Delete permanently?")
                     .collapsible(false)
+                    .order(egui::Order::Foreground)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                     .open(&mut open)
@@ -2144,6 +2186,7 @@ impl App {
             Dialog::ConfirmEmptyTrash => {
                 egui::Window::new("Empty trash?")
                     .collapsible(false)
+                    .order(egui::Order::Foreground)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                     .open(&mut open)
@@ -2166,6 +2209,7 @@ impl App {
             Dialog::ConfirmClearCache => {
                 egui::Window::new("Clear snapshot cache")
                     .collapsible(false)
+                    .order(egui::Order::Foreground)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                     .open(&mut open)
@@ -2189,6 +2233,7 @@ impl App {
                 let root = cloud::remote_root(&self.conf);
                 egui::Window::new("Move to")
                     .collapsible(false)
+                    .order(egui::Order::Foreground)
                     .resizable(false)
                     .default_size([430.0, 480.0])
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
@@ -2487,7 +2532,7 @@ impl eframe::App for App {
         // the glow. One request_repaint per frame keeps the drift smooth;
         // `PROTON_UI_MOTION=0` or a hidden window freezes it.
         theme::paint_aurora(ui, ui.max_rect());
-        if theme::motion_enabled() && !self.hidden {
+        if theme::motion_enabled() && self.prefs.motion_enabled() && !self.hidden {
             ui.ctx().request_repaint();
         }
         // White sidebar against the lavender content page - the Proton Drive

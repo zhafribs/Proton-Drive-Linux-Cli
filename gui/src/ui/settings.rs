@@ -880,6 +880,16 @@ fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
                 });
         });
         ui.add_space(4.0);
+        let mut motion = app.prefs.motion_enabled();
+        if widgets::toggle(
+            ui,
+            "Animate the background",
+            &mut motion,
+            Some("Turn this off to stop the aurora drift and continuous repaints."),
+        ) {
+            app.prefs.set_bool("motion", motion);
+        }
+        ui.add_space(4.0);
         labeled_control(ui, "Interface size", |ui| {
             const SCALES: [&str; 3] = ["Compact", "Default", "Large"];
             egui::ComboBox::from_id_salt("ui_scale")
