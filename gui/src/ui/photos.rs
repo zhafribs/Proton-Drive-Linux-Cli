@@ -1034,7 +1034,7 @@ fn tile(ui: &mut egui::Ui, app: &mut App, p: &cli::PhotoEntry, dir: &std::path::
                     egui::StrokeKind::Outside,
                 );
             }
-            if resp.clicked() || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space))) {
+            if resp.clicked() || (app.dialog.is_none() && resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space))) {
                 if selected {
                     app.photos.sel.retain(|u| u != &p.uid);
                 } else {

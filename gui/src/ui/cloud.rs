@@ -1474,7 +1474,7 @@ fn row(
         ui.painter().rect_stroke(
             rect,
             2.0,
-            egui::Stroke::new(1.5, visuals.selection.stroke.color),
+            egui::Stroke::new(1.5, theme::accent(ui.visuals())),
             egui::StrokeKind::Inside,
         );
     }
@@ -1583,7 +1583,12 @@ fn row(
 
     // Selection: plain click replaces, ctrl toggles, shift ranges; Qt also
     // moved the current item when right-clicking outside the selection.
-    if resp.clicked_by(egui::PointerButton::Primary) || raw_click {
+    // AccessKit activation is a fake primary click, which clicked_by ignores,
+    // so ask for the action explicitly.
+    let at_click = ui.input(|i| {
+        i.has_accesskit_action_request(resp.id, egui::accesskit::Action::Click)
+    });
+    if resp.clicked_by(egui::PointerButton::Primary) || raw_click || at_click {
         let mods = ui.input(|i| i.modifiers);
         let sel = &mut app.cloud.sel;
         if mods.ctrl || mods.command {
@@ -1627,7 +1632,7 @@ fn row(
     }
     // Keyboard: Enter opens, Space toggles selection, matching the pointer
     // behaviour. Focus is requested on click so the next Tab/Enter lands here.
-    if resp.clicked_by(egui::PointerButton::Primary) || raw_click {
+    if resp.clicked_by(egui::PointerButton::Primary) || raw_click || at_click {
         resp.request_focus();
     }
     if resp.gained_focus() {

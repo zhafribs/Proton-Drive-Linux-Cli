@@ -1,3 +1,14 @@
+## 3.20.13 — 2026-11-06
+
+- **Keyboard focus is visible on file rows in both themes.** The focus ring was
+  using the selection stroke, which is white in the light theme and disappeared
+  on the near-white card; it now uses the accent colour.
+- **Screen-reader activation works on file rows.** AccessKit's Click action now
+  selects the row explicitly, while physical Space still toggles and Enter
+  opens exactly once.
+- **Photo tiles ignore keyboard activation while a dialog is open**, matching
+  the file-list guard.
+
 ## 3.20.12 — 2026-11-06
 
 - **A blocked account is one click from signing in.** Home shows **Sign in** (or
