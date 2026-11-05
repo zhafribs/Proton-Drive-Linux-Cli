@@ -1,3 +1,13 @@
+## 3.20.15 — 2026-11-06
+
+- **Confirmation dialogs now block background file actions.** Double-click,
+  context-menu actions and empty-area selection are ignored while a dialog is
+  open, so ConfirmTrash and Move cannot act on a selection different from the
+  one the dialog described. The same guard covers AccessKit and keyboard
+  activation.
+- **Photo-tile focus rings meet the 3:1 non-text bar** (full accent instead of
+  60% opacity).
+
 ## 3.20.14 — 2026-11-06
 
 - **Focused selected rows keep a visible ring.** The 3.20.13 accent ring sat on

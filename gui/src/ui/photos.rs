@@ -1030,7 +1030,7 @@ fn tile(ui: &mut egui::Ui, app: &mut App, p: &cli::PhotoEntry, dir: &std::path::
                 ui.painter().rect_stroke(
                     rect,
                     egui::CornerRadius::same(10),
-                    egui::Stroke::new(2.0, theme::accent(ui.visuals()).gamma_multiply(0.6)),
+                    egui::Stroke::new(2.0, theme::accent(ui.visuals())),
                     egui::StrokeKind::Outside,
                 );
             }

@@ -1384,10 +1384,12 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
                     let _ = rect;
                 });
 
-            if let Some(rel) = open_rel {
-                open_item(app, &rel);
+            if app.dialog.is_none() {
+                if let Some(rel) = open_rel {
+                    open_item(app, &rel);
+                }
+                apply_menu_item(app, menu_item);
             }
-            apply_menu_item(app, menu_item);
 
             // Delete key = move to trash (Qt event filter), but never while a
             // text field owns the keyboard or a dialog is already open.
@@ -1635,7 +1637,7 @@ fn row(
         }
     }
 
-    if resp.double_clicked() || raw_double {
+    if app.dialog.is_none() && (resp.double_clicked() || raw_double) {
         *open_rel = Some(e.rel.clone());
     }
     // Keyboard: Enter opens, Space toggles selection, matching the pointer
