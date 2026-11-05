@@ -51,12 +51,20 @@ EOF
 EOF
     printf 'appimage-bytes\n' > "$root/dist/ProtonDrive-CLI-1.2.3-GUI-9.9.9-x86_64.AppImage"
     ( cd "$root/dist" && sha256sum ProtonDrive-CLI-1.2.3-GUI-9.9.9-x86_64.AppImage > SHA256SUMS )
+    # A throwaway signing key: the gate only needs a valid signature.
+    mkdir -p "$root/src"
+    openssl genpkey -algorithm ED25519 -out "$root/test-key.pem" 2>/dev/null
+    openssl pkey -in "$root/test-key.pem" -pubout -out "$root/src/update-signing-key.pub" 2>/dev/null
+    openssl pkeyutl -sign -rawin -inkey "$root/test-key.pem" \
+        -in "$root/dist/SHA256SUMS" -out "$root/dist/SHA256SUMS.sig" 2>/dev/null
     echo "$root"
 }
 
 run() {
     local root="$1"
-    CHECK_RELEASE_ROOT="$root" "$GATE" >/dev/null 2>&1
+    CHECK_RELEASE_ROOT="$root" \
+        CHECK_RELEASE_PUBLIC_KEY="$root/src/update-signing-key.pub" \
+        "$GATE" >/dev/null 2>&1
 }
 
 expect_ok() {
@@ -96,13 +104,13 @@ git -C "$root" -c user.name=test -c user.email=test@example.com add -A
 git -C "$root" -c user.name=test -c user.email=test@example.com commit -q -m base
 git -C "$root" tag v1.2.3-gui9.9.9
 printf '\n// source change without a GUI bump\n' >> "$root/gui/src/main.rs"
-if CHECK_RELEASE_ROOT="$root" "$GATE" >/dev/null 2>&1; then
+if CHECK_RELEASE_ROOT="$root" CHECK_RELEASE_PUBLIC_KEY="$root/src/update-signing-key.pub" "$GATE" >/dev/null 2>&1; then
     echo "FAIL: same GUI_VERSION with a source change was accepted" >&2
     exit 1
 fi
-ALLOW_SAME_VERSION=1 CHECK_RELEASE_ROOT="$root" "$GATE" >/dev/null 2>&1 \
+ALLOW_SAME_VERSION=1 CHECK_RELEASE_ROOT="$root" CHECK_RELEASE_PUBLIC_KEY="$root/src/update-signing-key.pub" "$GATE" >/dev/null 2>&1 \
     || { echo "FAIL: force-rebuild override was rejected" >&2; exit 1; }
-ALLOW_SAME_VERSION=true CHECK_RELEASE_ROOT="$root" "$GATE" >/dev/null 2>&1 \
+ALLOW_SAME_VERSION=true CHECK_RELEASE_ROOT="$root" CHECK_RELEASE_PUBLIC_KEY="$root/src/update-signing-key.pub" "$GATE" >/dev/null 2>&1 \
     || { echo "FAIL: force-rebuild true override was rejected" >&2; exit 1; }
 
 echo "check-release fixtures: 8/8 passed"

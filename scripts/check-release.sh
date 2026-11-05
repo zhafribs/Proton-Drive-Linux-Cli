@@ -88,6 +88,26 @@ fi
 grep -q "  $(basename "$APPIMAGE")\$" "$DIST/SHA256SUMS" \
     || die "dist/SHA256SUMS has no entry for $(basename "$APPIMAGE")"
 
+# The updater refuses unsigned manifests; the release gate must too.
+PUBLIC_KEY="${CHECK_RELEASE_PUBLIC_KEY:-$ROOT/src/update-signing-key.pub}"
+[ -f "$PUBLIC_KEY" ] || die "src/update-signing-key.pub is missing"
+[ -f "$DIST/SHA256SUMS.sig" ] || die "dist/SHA256SUMS.sig is missing - run scripts/sign-release.sh"
+command -v openssl >/dev/null 2>&1 || die "openssl not found"
+openssl pkeyutl -verify -pubin -inkey "$PUBLIC_KEY" -rawin \
+    -in "$DIST/SHA256SUMS" -sigfile "$DIST/SHA256SUMS.sig" >/dev/null 2>&1 \
+    || die "SHA256SUMS.sig does not verify against the project public key"
+
+# The public key file and the key embedded in the updater must be the same.
+# Fixtures override the path with a throwaway key, so only check the real one.
+if [ -z "${CHECK_RELEASE_PUBLIC_KEY:-}" ]; then
+    embedded="$(sed -n 's/.*UPDATE_PUBLIC_KEY_HEX: &str = "\([0-9a-f]*\)";/\1/p' \
+        "$ROOT/gui/src/release.rs" | head -1)"
+    derived="$(openssl pkey -pubin -in "$PUBLIC_KEY" -outform DER 2>/dev/null \
+        | tail -c 32 | od -An -tx1 | tr -d ' \n')"
+    [ -n "$embedded" ] && [ "$embedded" = "$derived" ] \
+        || die "gui/src/release.rs embedded update key does not match src/update-signing-key.pub"
+fi
+
 allow_same="${ALLOW_SAME_VERSION:-0}"
 case "$allow_same" in
     1|true|TRUE|yes) allow_same=1 ;;

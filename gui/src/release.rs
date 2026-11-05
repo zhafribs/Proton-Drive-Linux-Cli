@@ -50,6 +50,45 @@ impl Release {
     }
 }
 
+/// The project's Ed25519 update-manifest public key (raw 32-byte hex).
+/// The private key lives in the GitHub `UPDATE_SIGNING_KEY` secret and an
+/// offline backup; it is never in this repository.
+const UPDATE_PUBLIC_KEY_HEX: &str = "49a5c084f6e0673bb7ad3c102db4186ff6048529c6533b334ebfc868db0e51bb";
+
+fn hex_bytes<const N: usize>(value: &str) -> Option<[u8; N]> {
+    if value.len() != N * 2 {
+        return None;
+    }
+    let mut out = [0u8; N];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&value[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
+fn verify_manifest_with(key_hex: &str, manifest: &[u8], signature: &[u8]) -> bool {
+    use ed25519_dalek::{Signature, VerifyingKey};
+    let Some(key) = hex_bytes::<32>(key_hex) else {
+        return false;
+    };
+    let Ok(verifying) = VerifyingKey::from_bytes(&key) else {
+        return false;
+    };
+    let Ok(bytes) = <[u8; 64]>::try_from(signature) else {
+        return false;
+    };
+    verifying
+        .verify_strict(manifest, &Signature::from_bytes(&bytes))
+        .is_ok()
+}
+
+/// An update is installable only when `SHA256SUMS.sig` is a valid signature by
+/// the project key over `SHA256SUMS`. The digest in that signed manifest is
+/// the authority; the GitHub API digest is only a consistency check.
+fn verify_manifest_signature(manifest: &[u8], signature: &[u8]) -> bool {
+    verify_manifest_with(UPDATE_PUBLIC_KEY_HEX, manifest, signature)
+}
+
 /// Accept only a 64-character SHA-256; strip the API's `sha256:` prefix and
 /// normalize case. A malformed API digest must be rejected, not ignored.
 fn normalize_sha256(raw: &str) -> Option<String> {
@@ -430,6 +469,51 @@ fn http_get_text_retry(url: &str, timeout_s: u64) -> Result<String, String> {
     Err(last)
 }
 
+fn http_get_bytes(
+    url: &str,
+    timeout_s: u64,
+    limit: u64,
+) -> Result<Vec<u8>, String> {
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(timeout_s)))
+        .max_redirects(0)
+        .build();
+    let agent = ureq::Agent::new_with_config(config);
+    let mut resp = get_following(&agent, url)?;
+    if resp.status().as_u16() != 200 {
+        return Err(format!("fetch: HTTP {}", resp.status()));
+    }
+    let mut bytes = Vec::new();
+    let mut reader = resp.body_mut().as_reader().take(limit + 1);
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("fetch body: {e}"))?;
+    if bytes.len() as u64 > limit {
+        return Err("response is too large".to_string());
+    }
+    Ok(bytes)
+}
+
+fn http_get_bytes_retry(
+    url: &str,
+    timeout_s: u64,
+    limit: u64,
+) -> Result<Vec<u8>, String> {
+    let mut last = String::new();
+    for attempt in 0..3 {
+        match http_get_bytes(url, timeout_s, limit) {
+            Ok(bytes) => return Ok(bytes),
+            Err(e) => {
+                last = e;
+                if attempt < 2 {
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+            }
+        }
+    }
+    Err(last)
+}
+
 /// The checksum line of SHA256SUMS for `name` ("<hash>  <name>"; the name
 /// may carry a leading "*" for binary mode, and releases up to 3.15.0
 /// listed it as "./name" the way sha256sum prints path arguments - match
@@ -488,8 +572,9 @@ fn dir_writable(dir: &std::path::Path) -> bool {
 struct DownloadPlan {
     name: String,
     url: String,
-    sums_url: Option<String>,
-    want: Option<String>,
+    sums_url: String,
+    sig_url: String,
+    api_digest: Option<String>,
     dir: PathBuf,
     dest: PathBuf,
 }
@@ -516,23 +601,27 @@ fn download_plan(
     if !trusted_download_url(url) {
         return Err(format!("release asset is not on a trusted host: {url}"));
     }
-    let want = match rel.asset_digest_raw(&name) {
+    let api_digest = match rel.asset_digest_raw(&name) {
         Some(raw) => Some(normalize_sha256(raw).ok_or_else(|| {
             format!("release asset digest for {name} is not a SHA-256")
         })?),
         None => None,
     };
-    let sums_url = if want.is_none() {
-        let url = rel
-            .asset_url("SHA256SUMS")
-            .ok_or_else(|| format!("no checksums in release {}", rel.tag))?;
-        if !trusted_download_url(url) {
-            return Err(format!("checksum asset is not on a trusted host: {url}"));
-        }
-        Some(url.to_string())
-    } else {
-        None
-    };
+    // Signature verification is mandatory: the manifest and its detached
+    // signature are fetched for every update, even when GitHub supplies a
+    // digest. The signed manifest is the authority.
+    let sums_url = rel
+        .asset_url("SHA256SUMS")
+        .ok_or_else(|| format!("no checksum manifest in release {}", rel.tag))?;
+    if !trusted_download_url(sums_url) {
+        return Err(format!("checksum manifest is not on a trusted host: {sums_url}"));
+    }
+    let sig_url = rel
+        .asset_url("SHA256SUMS.sig")
+        .ok_or_else(|| format!("no signature for the checksum manifest in {}", rel.tag))?;
+    if !trusted_download_url(sig_url) {
+        return Err(format!("manifest signature is not on a trusted host: {sig_url}"));
+    }
     let target = install_target(target, &name)
         .ok_or_else(|| "no writable install directory for the update".to_string())?;
     let base = target
@@ -547,35 +636,42 @@ fn download_plan(
     Ok(DownloadPlan {
         name,
         url: url.to_string(),
-        sums_url,
-        want,
+        sums_url: sums_url.to_string(),
+        sig_url: sig_url.to_string(),
+        api_digest,
         dir,
         dest,
     })
 }
 
-/// Download the AppImage for this machine and verify its checksum.
+/// Download the AppImage for this machine, verify the signed checksum
+/// manifest, then verify the AppImage against that manifest.
 pub fn download_update(rel: &Release, arch: &str) -> Result<std::path::PathBuf, String> {
     let plan = download_plan(rel, arch, appimage_path().as_deref())?;
 
-    // Resolve the checksum before the download: a checksum problem should not
-    // cost a 50 MB transfer, and the release API's own digest needs no second
-    // request. SHA256SUMS remains the fallback for older release JSON.
-    let want = match plan.want {
-        Some(digest) => digest,
-        None => {
-            let sums = plan
-                .sums_url
-                .as_deref()
-                .ok_or_else(|| "no checksum source in the release".to_string())?;
-            let text = http_get_text_retry(sums, 60)
-                .map_err(|e| format!("checksum fetch failed: {e}"))?;
-            let sum = sum_for(&text, &plan.name)
-                .ok_or_else(|| format!("no checksum entry for {} in {}", plan.name, rel.tag))?;
-            normalize_sha256(&sum)
-                .ok_or_else(|| format!("malformed checksum entry for {} in {}", plan.name, rel.tag))?
-        }
-    };
+    // Signature first: a checksum is only trustworthy when the manifest that
+    // carries it is signed by the project key. The GitHub API digest is a
+    // consistency check, never the authority.
+    let manifest = http_get_text_retry(&plan.sums_url, 60)
+        .map_err(|e| format!("checksum fetch failed: {e}"))?;
+    let signature = http_get_bytes_retry(&plan.sig_url, 60, 1024)
+        .map_err(|e| format!("manifest signature fetch failed: {e}"))?;
+    if !verify_manifest_signature(manifest.as_bytes(), &signature) {
+        return Err("update manifest is unsigned or its signature is invalid".to_string());
+    }
+    let want = sum_for(&manifest, &plan.name)
+        .and_then(|sum| normalize_sha256(&sum))
+        .ok_or_else(|| {
+            format!(
+                "no valid checksum entry for {} in the signed manifest",
+                plan.name
+            )
+        })?;
+    if let Some(api) = &plan.api_digest
+        && api != &want
+    {
+        return Err("release digest does not match the signed manifest".to_string());
+    }
 
     let _ = std::fs::remove_dir_all(&plan.dir);
     #[cfg(unix)]
@@ -1185,6 +1281,79 @@ mod tests {
         update_confirm_health_at(&mark_file, Some(&target));
         assert!(victim.exists());
         assert!(!mark_file.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn signed_manifest_verifies_and_tampering_fails() {
+        use ed25519_dalek::{Signer, SigningKey};
+        let signing = SigningKey::from_bytes(&[7u8; 32]);
+        let key_hex: String = signing
+            .verifying_key()
+            .to_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let manifest = b"aaa  file.AppImage\n";
+        let signature = signing.sign(manifest);
+        assert!(verify_manifest_with(
+            &key_hex,
+            manifest,
+            &signature.to_bytes()
+        ));
+        assert!(!verify_manifest_with(
+            &key_hex,
+            b"aaa  other.AppImage\n",
+            &signature.to_bytes()
+        ));
+        assert!(!verify_manifest_with("not-hex", manifest, &signature.to_bytes()));
+    }
+
+    #[test]
+    fn project_key_verifies_an_openssl_signature() {
+        // Signature over b"proton-update-self-test" made with the offline
+        // Ed25519 key; proves the OpenSSL signer and the Rust verifier agree.
+        let signature = hex_bytes::<64>(
+            "4cfea0b3dcf5f08b2a4ee8ecdbd8244933903e266dfcf739688644b05624196b\
+             f07f1f645f7070eea9fa741ce6a7d3b63eebde6ed3907d4b57183da4731af009",
+        )
+        .unwrap();
+        assert!(verify_manifest_signature(
+            b"proton-update-self-test",
+            &signature
+        ));
+        assert!(!verify_manifest_signature(b"tampered", &signature));
+    }
+
+    #[test]
+    fn download_plan_requires_a_signed_manifest() {
+        let dir = std::env::temp_dir().join(format!("pd-plan-signed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let app = dir.join("old.AppImage");
+        std::fs::write(&app, b"x").unwrap();
+        let name = "ProtonDrive-CLI-0.9.0-GUI-3.20.9-x86_64.AppImage";
+        let mut r = rel("0.9.0", "3.20.9");
+        r.assets = vec![
+            Asset {
+                name: name.to_string(),
+                url: format!("https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/download/v1/{name}"),
+                digest: None,
+            },
+            Asset {
+                name: "SHA256SUMS".into(),
+                url: "https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/download/v1/SHA256SUMS".into(),
+                digest: None,
+            },
+            Asset {
+                name: "SHA256SUMS.sig".into(),
+                url: "https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/download/v1/SHA256SUMS.sig".into(),
+                digest: None,
+            },
+        ];
+        let plan = download_plan(&r, "x86_64", Some(&app)).unwrap();
+        assert!(plan.sig_url.ends_with("SHA256SUMS.sig"));
+        assert!(plan.sums_url.ends_with("SHA256SUMS"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

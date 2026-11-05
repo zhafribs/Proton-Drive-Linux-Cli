@@ -18,6 +18,9 @@ Fedora `dnf install fuse-libs` — or launch with `APPIMAGE_EXTRACT_AND_RUN=1`.
 
 Verify: `sha256sum -c SHA256SUMS`
 
+The in-app updater also verifies `SHA256SUMS.sig` (Ed25519, project key) and
+refuses to install an update whose manifest is not signed.
+
 **Versions:** CLI {{VERSION}} (official, released {{RELEASE_DATE}}) · app
 {{GUI_VERSION}} · tagged `{{TAG}}` — every update is
 its own release and filename, so older builds stay downloadable.

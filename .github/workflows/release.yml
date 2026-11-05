@@ -67,7 +67,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            librsvg2-bin desktop-file-utils appstream binutils \
+            librsvg2-bin desktop-file-utils appstream binutils openssl \
             libxkbcommon-dev libwayland-dev fonts-dejavu-core
 
       - name: Install the pinned Rust toolchain
@@ -120,7 +120,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            librsvg2-bin desktop-file-utils appstream binutils
+            librsvg2-bin desktop-file-utils appstream binutils openssl
 
       - name: Cache the Rust build (registry + cargo tools + target)
         uses: actions/cache@v6
@@ -201,6 +201,11 @@ jobs:
           REQUIRE_GLIBC_FLOOR: "1"
         run: ./build.sh
 
+      - name: Sign the checksum manifest
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: ./scripts/sign-release.sh
+
       - name: Verify the release gate
         env:
           ALLOW_SAME_VERSION: ${{ inputs.force_rebuild || false }}
@@ -222,13 +227,14 @@ jobs:
           TAG="v${VERSION}-gui${GUI}"
           NOTES="$RUNNER_TEMP/release-notes.md"
           ASSETS=(dist/ProtonDrive-CLI-"${VERSION}"-GUI-"${GUI}"-x86_64.AppImage
-                  dist/SHA256SUMS)
+                  dist/SHA256SUMS
+                  dist/SHA256SUMS.sig)
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             existing="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
             missing=0
             for name in ProtonDrive-CLI-"${VERSION}"-GUI-"${GUI}"-x86_64.AppImage \
-                        SHA256SUMS; do
+                        SHA256SUMS SHA256SUMS.sig; do
               grep -qxF "$name" <<<"$existing" || missing=1
             done
             if [ "$missing" -eq 0 ] && [ "$FORCE" != "true" ]; then
@@ -269,5 +275,6 @@ jobs:
           path: |
             dist/*.AppImage
             dist/SHA256SUMS
+            dist/SHA256SUMS.sig
           if-no-files-found: error
           retention-days: 7

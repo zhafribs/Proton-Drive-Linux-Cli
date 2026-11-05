@@ -1,3 +1,21 @@
+## 3.20.10 — 2026-11-05
+
+- **Updates are signed.** Every release now publishes `SHA256SUMS.sig`, an
+  Ed25519 signature over the checksum manifest. The updater downloads and
+  verifies it against the project public key before trusting any digest, and
+  refuses an unsigned or tampered manifest. GitHub's own asset digest is only a
+  consistency check; the signed manifest is the authority.
+- **The release gate verifies the signature too.** CI signs with the
+  `UPDATE_SIGNING_KEY` secret, then `check-release.sh` verifies the signature
+  against both the tracked public key and the key embedded in the updater, so
+  the two cannot drift apart.
+- **Key policy:** the private key is stored in the GitHub secret and an offline
+  backup at `~/Backup/proton-update-signing-key.pem` (0600). Losing it means
+  future builds cannot sign updates; rotate by shipping a new key in a release
+  signed with the old one.
+- Signed updates are verified offline; the updater still checks the AppImage
+  size/checksum and the staged build's `--smoke` start before installing.
+
 ## 3.20.9 — 2026-11-05
 
 - **Releases are verified before publishing.** CI now runs the full test suite
