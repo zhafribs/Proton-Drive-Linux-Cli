@@ -1,3 +1,16 @@
+## 3.20.21 — 2026-11-06
+
+- **Locally added photos now upload even while the photo timeline is held.**
+  A previous safety hold paused the entire photo pass when the CLI returned an
+  empty timeline, so a photo copied into `~/ProtonPhotos` never reached the
+  cloud. The hold now keeps deletions and downloads paused, but uploads local
+  photos: all of them when the cloud timeline is empty, or only names the
+  engine has not seen when it is merely short. Successful uploads are
+  remembered as pending so an empty timeline cannot upload duplicates every
+  cycle.
+- The hold summary now says how many photos were uploaded and that nothing was
+  deleted, instead of only saying “Nothing was changed”.
+
 ## 3.20.20 — 2026-11-06
 
 - **The Photos page is calmer and easier to scan.** The header shows the local

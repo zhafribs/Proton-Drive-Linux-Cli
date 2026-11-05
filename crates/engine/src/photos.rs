@@ -10,7 +10,7 @@
 use crate::cli::Cli;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// Extensions the timeline accepts; anything else in the folder is ignored.
@@ -88,6 +88,10 @@ pub struct PhotoState {
     /// GUI download cannot re-arm the empty-folder guard.
     #[serde(default)]
     pub hold: bool,
+    /// New local photos uploaded while a hold kept the normal plan paused.
+    /// They must not be uploaded again while the timeline is still suspect.
+    #[serde(default)]
+    pub pending_uploads: BTreeSet<String>,
 }
 
 fn remote_by_name<'a>(remote: &'a [RemotePhoto], name: &str) -> Option<&'a RemotePhoto> {
@@ -163,6 +167,12 @@ pub fn plan(
         let Some(r) = remote_index.get(l.name.as_str()) else {
             // A 0-byte image is a failed write, not a photo: never upload it.
             if l.size == 0 {
+                continue;
+            }
+            // A new local photo already uploaded while the timeline was
+            // suspect: wait for the cloud to confirm it instead of renaming a
+            // duplicate every cycle.
+            if state.pending_uploads.contains(&l.name) {
                 continue;
             }
             match state.synced.get(&l.name) {
@@ -408,6 +418,42 @@ fn upload(cli: &Cli, dir: &Path, names: &[String]) -> Result<usize> {
     Ok(done)
 }
 
+/// Upload new local photos while the normal plan is held. Only names the
+/// engine has never seen and the timeline does not list; deletions and
+/// downloads stay disabled. Successful names are remembered so a still-empty
+/// timeline cannot make the next cycle upload a duplicate.
+fn upload_new_locals(
+    cli: &Cli,
+    dir: &Path,
+    local: &[LocalPhoto],
+    remote: &[RemotePhoto],
+    state: &mut PhotoState,
+    state_dir: &Path,
+    include_known: bool,
+) -> (usize, Option<String>) {
+    let names: Vec<String> = local
+        .iter()
+        .filter(|l| {
+            l.size > 0
+                && !state.pending_uploads.contains(&l.name)
+                && remote_by_name(remote, &l.name).is_none()
+                && (include_known || !state.synced.contains_key(&l.name))
+        })
+        .map(|l| l.name.clone())
+        .collect();
+    if names.is_empty() {
+        return (0, None);
+    }
+    match upload(cli, dir, &names) {
+        Ok(n) => {
+            state.pending_uploads.extend(names);
+            let _ = write_state(state_dir, state);
+            (n, None)
+        }
+        Err(e) => (0, Some(format!("{e:#}"))),
+    }
+}
+
 /// Download the given uids (batched) into `dir`.
 fn download(cli: &Cli, dir: &Path, uids: &[String]) -> Result<usize> {
     let mut done = 0;
@@ -627,14 +673,25 @@ pub fn sync(
             .filter(|r| local_by_name(&local, &r.name).is_none())
             .count();
         if missing > 0 {
+            let (uploaded, upload_error) =
+                upload_new_locals(cli, dir, &local, &remote, &mut state, state_dir, false);
+            let extra = if let Some(e) = upload_error {
+                format!(" Upload failed: {e}")
+            } else if uploaded > 0 {
+                format!(" Uploaded {uploaded} new photo(s).")
+            } else {
+                String::new()
+            };
             let summary = Summary {
                 ts: chrono::Utc::now().to_rfc3339(),
                 remote: remote.len(),
                 local: local.len(),
+                uploaded,
                 error: format!(
-                    "Photo folder is recovering: {} of {} known photo(s) are local. Nothing was changed; finish restoring the folder first.",
+                    "Photo folder is recovering: {} of {} known photo(s) are local. Nothing was deleted.{}",
                     known.len() - missing,
-                    known.len()
+                    known.len(),
+                    extra
                 ),
                 attention: 1,
                 ..Default::default()
@@ -655,17 +712,34 @@ pub fn sync(
         state.hold = true;
         let _ = write_state(state_dir, &state);
         let _ = std::fs::write(&hold_marker, b"");
+        let (uploaded, upload_error) = upload_new_locals(
+            cli,
+            dir,
+            &local,
+            &remote,
+            &mut state,
+            state_dir,
+            remote.is_empty(),
+        );
+        let extra = if let Some(e) = upload_error {
+            format!(" Upload failed: {e}")
+        } else if uploaded > 0 {
+            format!(" Uploaded {uploaded} new photo(s); the cloud timeline will be rechecked next cycle.")
+        } else {
+            String::new()
+        };
         let summary = Summary {
             ts: chrono::Utc::now().to_rfc3339(),
             remote: remote.len(),
             local: local.len(),
+            uploaded,
             error: if skipped > 0 {
                 format!(
-                    "Photo timeline: {skipped} entries could not be read. Nothing was changed; retry later or fix those cloud entries."
+                    "Photo timeline: {skipped} entries could not be read. Nothing was deleted.{extra}"
                 )
             } else {
                 format!(
-                    "Photo timeline looks incomplete ({} readable, {} known). Nothing was changed. If you deleted these photos in Proton, move the stale local copies out of {} and remove {} to reset the baseline.",
+                    "Photo timeline looks incomplete ({} readable, {} known). Nothing was deleted. If you deleted these photos in Proton, move the stale local copies out of {} and remove {} to reset the baseline.{extra}",
                     remote.len(),
                     state.synced.len(),
                     dir.display(),
@@ -918,6 +992,10 @@ pub fn sync(
                 state.synced.insert(name.clone(), old.clone());
             }
         }
+        // A pending upload is confirmed once a trusted timeline puts it back
+        // in sync; names that never appear stay pending instead of being
+        // uploaded again as duplicates.
+        state.pending_uploads.retain(|name| !state.synced.contains_key(name));
         // Keep a failed-repair entry while the local copy is still broken or
         // gone: it is the veto that stops the cloud copy from being trashed.
         state.repair_failed.retain(|uid, fail| {
@@ -1571,6 +1649,58 @@ mod tests {
         assert_eq!(second.removed, 5);
         assert_eq!(read_state(&state_dir).synced.len(), 0);
         assert_eq!(std::fs::read_dir(&photos).unwrap().count(), 1); // the trash dir
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn new_local_photos_upload_while_the_timeline_is_held() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("pd-photo-hold-upload-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let photos = root.join("photos");
+        let state_dir = root.join("state");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(photos.join("old.jpg"), b"12345").unwrap();
+        std::fs::write(photos.join("new.jpg"), b"67890").unwrap();
+        let state = PhotoState {
+            synced: [synced("old.jpg", "u1", 5)].into(),
+            ..Default::default()
+        };
+        assert!(write_state(&state_dir, &state));
+        let fake = root.join("fake-proton-drive");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\ndir=$(dirname \"$0\")\ncase \"$1\" in\n  photo) case \"$2\" in\n    timeline) echo '[]' ;;\n    upload) echo \"$@\" >> \"$dir/upload.log\" ;;\n    download) echo \"unexpected download\" >> \"$dir/errors.log\" ;;\n  esac ;;\nesac\n",
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&fake).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake, perms).unwrap();
+        let cli = Cli::for_test(fake);
+
+        let first = sync(&cli, &photos, &state_dir, true, &[]).unwrap();
+        assert_eq!(first.uploaded, 2);
+        assert!(read_state(&state_dir).pending_uploads.contains("new.jpg"));
+        assert!(read_state(&state_dir).pending_uploads.contains("old.jpg"));
+        // With an empty cloud, every local photo is restored, including one
+        // the old state knew about.
+        let log = std::fs::read_to_string(root.join("upload.log")).unwrap();
+        assert_eq!(log.lines().count(), 1);
+        assert!(log.contains("new.jpg"));
+        assert!(log.contains("old.jpg"));
+
+        // A second empty-timeline cycle must not upload the same photo again.
+        let second = sync(&cli, &photos, &state_dir, true, &[]).unwrap();
+        assert_eq!(second.uploaded, 0);
+        assert_eq!(
+            std::fs::read_to_string(root.join("upload.log"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+        assert!(!root.join("errors.log").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 
