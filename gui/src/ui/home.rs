@@ -1,6 +1,6 @@
 //! Home: the status hero plus the activity feed (the old Activity tab).
 
-use super::{activity, widgets, App, Dialog};
+use super::{App, Dialog, activity, widgets};
 use crate::{health, theme, util};
 use eframe::egui;
 
@@ -25,8 +25,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
             (360.0, 0.030, cyan),
             (460.0, 0.02, glow),
         ] {
-            ui.painter()
-                .circle_filled(c, r, col.gamma_multiply(a));
+            ui.painter().circle_filled(c, r, col.gamma_multiply(a));
         }
     }
 
@@ -61,6 +60,30 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                     "Deletes and edits to existing files are held until the background check finishes."
                 };
                 ui.label(egui::RichText::new(note).size(12.0).weak());
+            }
+            if status == health::UiStatus::DeletesHeld {
+                if app.health.deletes_wipe_guard {
+                    ui.label(
+                        egui::RichText::new(
+                            "Nothing will be deleted while one side looks empty. Restore the \
+                             folder or fix the sync path, then check again.",
+                        )
+                        .size(12.0)
+                        .weak(),
+                    );
+                } else if widgets::secondary_button_hint(
+                    ui,
+                    "Review and allow once",
+                    "Review the files that would be removed, then approve this batch only.",
+                ) {
+                    app.dialog = Some(Dialog::ConfirmHeldDeletes {
+                        local: app.health.deletes_held_local,
+                        cloud: app.health.deletes_held_cloud,
+                        local_digest: app.health.deletes_held_local_digest.clone().unwrap_or_default(),
+                        cloud_digest: app.health.deletes_held_cloud_digest.clone().unwrap_or_default(),
+                        sample: app.health.deletes_held_sample.clone(),
+                    });
+                }
             }
             if app.health.transfer_active == Some(true)
                 && app.health.transfer_total.unwrap_or(0) > 0

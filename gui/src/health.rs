@@ -20,6 +20,8 @@ pub enum UiStatus {
     SigningIn,
     /// Signed in, but the sync service is not running (stopped/crashed).
     EngineStopped,
+    /// A suspicious batch of deletions is waiting for explicit review.
+    DeletesHeld,
     /// The service is up but has not reported a cycle yet.
     Starting,
     Error,
@@ -36,6 +38,7 @@ impl UiStatus {
             UiStatus::SignedOut => "signed_out",
             UiStatus::SigningIn => "signing_in",
             UiStatus::EngineStopped => "engine_stopped",
+            UiStatus::DeletesHeld => "deletes_held",
             UiStatus::Starting => "starting",
             UiStatus::Error => "error",
             UiStatus::Unknown => "unknown",
@@ -81,6 +84,9 @@ pub fn derive_status(
             UiStatus::SignedOut
         };
     }
+    if active && hstatus == "deletes_held" {
+        return UiStatus::DeletesHeld;
+    }
     if active && hstatus == "error" {
         return UiStatus::Error;
     }
@@ -121,13 +127,14 @@ pub fn status_text(status: UiStatus) -> (&'static str, &'static str) {
             "Welcome to Proton Drive",
             "Sign in to start - your files will appear here.",
         ),
-        UiStatus::SigningIn => (
-            "Signing in...",
-            "Finish signing in in the terminal window.",
-        ),
+        UiStatus::SigningIn => ("Signing in...", "Finish signing in in the terminal window."),
         UiStatus::EngineStopped => (
             "Sync engine isn't running",
             "Start it to keep your files in sync.",
+        ),
+        UiStatus::DeletesHeld => (
+            "Deletions paused",
+            "Nothing was deleted. Review the files before continuing.",
         ),
         UiStatus::Starting => ("Starting the sync engine...", "Just a moment..."),
         UiStatus::Error => ("Couldn't sync", "{error}"),
@@ -182,6 +189,32 @@ pub fn hero_sub(status: UiStatus, h: &Health) -> String {
             .error
             .clone()
             .unwrap_or_else(|| "See Recent activity below for details.".into()),
+        UiStatus::DeletesHeld => {
+            if h.deletes_wipe_guard {
+                "One side looks empty, so nothing will be deleted. Restore the folder or fix \
+                 the sync path, then check again."
+                    .to_string()
+            } else {
+                let direction = match (h.deletes_held_local > 0, h.deletes_held_cloud > 0) {
+                    (true, false) => {
+                        "They are missing from the cloud, so syncing would remove them from this computer."
+                    }
+                    (false, true) => {
+                        "They are missing on this computer, so syncing would remove them from the cloud."
+                    }
+                    _ => "They would be removed from both sides.",
+                };
+                let sample = if h.deletes_held_sample.is_empty() {
+                    String::new()
+                } else {
+                    format!(" Includes: {}.", h.deletes_held_sample.join(", "))
+                };
+                format!(
+                    "{} files would be removed. Nothing was deleted. {direction}{sample}",
+                    h.deletes_held
+                )
+            }
+        }
         _ => sub.replace("{error}", h.error.as_deref().unwrap_or("")),
     }
 }
@@ -228,6 +261,36 @@ mod tests {
     /// Interval 0 is "Off": no scheduled check, so no countdown - but the
     /// last-check time still shows normally.
     #[test]
+    fn deletion_hold_is_its_own_status() {
+        let h: Health = serde_json::from_str(
+            r#"{"status":"deletes_held","deletes_held":30,"deletes_held_local":30,"deletes_held_cloud":0,"deletes_held_sample":["A","B"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            derive_status(true, &h.status, Some(true), false, false, false, false),
+            UiStatus::DeletesHeld
+        );
+        let (title, _) = status_text(UiStatus::DeletesHeld);
+        assert_eq!(title, "Deletions paused");
+        assert!(hero_sub(UiStatus::DeletesHeld, &h).contains("Nothing was deleted"));
+        assert!(hero_sub(UiStatus::DeletesHeld, &h).contains("A, B"));
+    }
+
+    #[test]
+    fn empty_side_hold_has_no_approval_wording() {
+        let h = Health {
+            status: "deletes_held".into(),
+            deletes_held: 30,
+            deletes_held_cloud: 30,
+            deletes_wipe_guard: true,
+            ..Default::default()
+        };
+        let sub = hero_sub(UiStatus::DeletesHeld, &h);
+        assert!(sub.to_lowercase().contains("restore the folder"));
+        assert!(!sub.contains("Review and allow"));
+    }
+
+    #[test]
     fn manual_interval_has_no_countdown() {
         let h: Health = serde_json::from_str(
             r#"{"status":"ok","ts":"2026-10-20T00:30:02+08:00","interval":0}"#,
@@ -268,8 +331,7 @@ mod tests {
 
     #[test]
     fn cached_age_line_is_replaced_after_the_audit() {
-        let cached: Health =
-            serde_json::from_str(r#"{"status":"ok","cache_age":120}"#).unwrap();
+        let cached: Health = serde_json::from_str(r#"{"status":"ok","cache_age":120}"#).unwrap();
         assert!(synced_line(&cached).contains("Cached view \u{b7} 120s old"));
         let checked: Health = serde_json::from_str(
             r#"{"status":"ok","ts":"2026-10-20T00:30:02+08:00","cache_age":null}"#,

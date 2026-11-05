@@ -92,7 +92,11 @@ pub fn glass_stroke(visuals: &egui::Visuals) -> egui::Stroke {
 
 /// Danger text that stays AA on the current surface.
 pub fn danger_text(visuals: &egui::Visuals) -> egui::Color32 {
-    if visuals.dark_mode { DANGER_TEXT } else { ERROR }
+    if visuals.dark_mode {
+        DANGER_TEXT
+    } else {
+        ERROR
+    }
 }
 
 /// Accent that reads on the theme currently in use.
@@ -195,7 +199,7 @@ pub fn status_color(key: &str) -> egui::Color32 {
     match key {
         "synced" => SUCCESS,
         "syncing" => ACCENT,
-        "paused" => WARNING,
+        "paused" | "deletes_held" => WARNING,
         // A lost session is recoverable - warn, do not alarm.
         "needs_login" => WARNING,
         // No account yet: calm, not an error.

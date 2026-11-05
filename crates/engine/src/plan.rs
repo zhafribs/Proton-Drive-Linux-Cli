@@ -6,15 +6,21 @@
 //! path order. The Python tests and the fixture harness are the contract.
 
 use crate::action::{Action, LocalEntry, LocalTree};
+use proton_core::delete_approval::digest_paths;
 use proton_core::snapshot::{RemoteEntry, RemoteTree};
 use proton_core::state::{State, StateEntry};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+const DELETE_CONFIRM_MIN: usize = 25;
+
 #[derive(Clone, Copy, Debug)]
 pub struct PlanConfig {
     pub propagate_deletes: bool,
     pub wipe_min: usize,
+    /// The user approved the exact mass-delete path set for this cycle.
+    /// This never overrides the empty-side wipe guard.
+    pub approved_mass_delete: bool,
 }
 
 impl Default for PlanConfig {
@@ -22,6 +28,7 @@ impl Default for PlanConfig {
         Self {
             propagate_deletes: true,
             wipe_min: 5,
+            approved_mass_delete: false,
         }
     }
 }
@@ -53,6 +60,7 @@ impl PlanFixture {
         PlanConfig {
             propagate_deletes: self.propagate_deletes,
             wipe_min: self.wipe_min,
+            approved_mass_delete: false,
         }
     }
 }
@@ -70,10 +78,127 @@ pub struct PlanResult {
     pub holds: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub wipe_guard: Vec<WipeSide>,
+    pub deletes_held: usize,
+    pub deletes_held_local: usize,
+    pub deletes_held_cloud: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deletes_held_local_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deletes_held_cloud_digest: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub deletes_held_sample: Vec<String>,
+    pub deletes_wipe_guard: bool,
 }
 
 fn depth(rel: &str) -> usize {
     rel.matches('/').count()
+}
+
+fn is_state_file(entry: &StateEntry) -> bool {
+    entry.l_mtime_ns.is_some() || entry.r_mtime.as_deref().is_some_and(|m| !m.is_empty())
+}
+
+fn under(rel: &str, prefix: &str) -> bool {
+    rel == prefix
+        || (rel.len() > prefix.len()
+            && rel.starts_with(prefix)
+            && rel.as_bytes().get(prefix.len()) == Some(&b'/'))
+}
+
+fn local_files_under(local: &LocalTree, prefix: &str) -> BTreeSet<String> {
+    local
+        .iter()
+        .filter(|(rel, node)| node.is_file() && under(rel, prefix))
+        .map(|(rel, _)| rel.clone())
+        .collect()
+}
+
+fn remote_files_under(remote: &RemoteTree, prefix: &str) -> BTreeSet<String> {
+    remote
+        .iter()
+        .filter(|(rel, node)| node.kind == "file" && under(rel, prefix))
+        .map(|(rel, _)| rel.clone())
+        .collect()
+}
+
+/// Paths that would be moved to local trash if the guard were absent.
+fn candidate_local(
+    local: &LocalTree,
+    remote: &RemoteTree,
+    state: &State,
+    moved: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for (rel, node) in local {
+        if remote.contains_key(rel) || moved.contains(rel) {
+            continue;
+        }
+        let Some(entry) = state.get(rel) else {
+            continue;
+        };
+        if !entry.r_mtime.as_deref().is_some_and(|m| !m.is_empty()) {
+            continue;
+        }
+        if node.is_file() {
+            out.insert(rel.clone());
+        } else {
+            out.extend(local_files_under(local, rel));
+        }
+    }
+    out
+}
+
+/// Paths that would be moved to Proton trash if the guard were absent.
+fn candidate_cloud(
+    remote: &RemoteTree,
+    local: &LocalTree,
+    state: &State,
+    moved: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for (rel, node) in remote {
+        if local.contains_key(rel) || moved.contains(rel) {
+            continue;
+        }
+        let Some(entry) = state.get(rel) else {
+            continue;
+        };
+        if entry.l_mtime_ns.is_none() {
+            continue;
+        }
+        if node.kind == "file" {
+            out.insert(rel.clone());
+        } else {
+            out.extend(remote_files_under(remote, rel));
+        }
+    }
+    out
+}
+
+/// True when all known files in a folder vanished at once. This catches a
+/// whole-folder loss below the absolute batch limit.
+fn whole_folder_lost(paths: &BTreeSet<String>, state: &State, wipe_min: usize) -> bool {
+    let mut prefixes = BTreeSet::new();
+    for path in paths {
+        let parts: Vec<&str> = path.split('/').collect();
+        for i in 1..parts.len() {
+            prefixes.insert(parts[..i].join("/"));
+        }
+    }
+    prefixes.into_iter().any(|prefix| {
+        let known = state
+            .iter()
+            .filter(|(rel, entry)| is_state_file(entry) && under(rel, &prefix))
+            .count();
+        known >= wipe_min && paths.iter().filter(|rel| under(rel, &prefix)).count() == known
+    })
+}
+
+fn mass_delete_hold(affected: &BTreeSet<String>, state: &State, wipe_min: usize) -> bool {
+    let synced_files = state.values().filter(|entry| is_state_file(entry)).count();
+    affected.len() >= DELETE_CONFIRM_MIN
+        || (affected.len() >= wipe_min && affected.len().saturating_mul(2) >= synced_files)
+        || whole_folder_lost(affected, state, wipe_min)
 }
 
 pub fn ts_ns(iso: Option<&str>) -> Option<i64> {
@@ -87,7 +212,9 @@ pub fn ts_ns(iso: Option<&str>) -> Option<i64> {
 }
 
 pub fn local_changed(local: &LocalEntry, state: &StateEntry) -> bool {
-    state.l_mtime_ns.is_none() || state.l_mtime_ns != local.mtime_ns() || state.l_size != local.size()
+    state.l_mtime_ns.is_none()
+        || state.l_mtime_ns != local.mtime_ns()
+        || state.l_size != local.size()
 }
 
 pub fn remote_changed(remote: &RemoteEntry, state: &StateEntry) -> bool {
@@ -128,7 +255,9 @@ pub fn detect_moves(
     let mut old_keys: Vec<&String> = state
         .iter()
         .filter(|(rel, s)| {
-            s.r_uid.is_some() && !remote.contains_key(rel.as_str()) && local.contains_key(rel.as_str())
+            s.r_uid.is_some()
+                && !remote.contains_key(rel.as_str())
+                && local.contains_key(rel.as_str())
         })
         .map(|(rel, _)| rel)
         .collect();
@@ -185,9 +314,7 @@ pub fn detect_moves(
             s.l_mtime_ns.is_some()
                 && s.l_size.is_some()
                 && !local.contains_key(rel.as_str())
-                && remote
-                    .get(rel.as_str())
-                    .is_some_and(|n| n.kind == "file")
+                && remote.get(rel.as_str()).is_some_and(|n| n.kind == "file")
         })
         .map(|(rel, _)| rel)
         .collect();
@@ -225,9 +352,7 @@ pub fn detect_moves(
         .iter()
         .filter(|(rel, _)| {
             !local.contains_key(rel.as_str())
-                && remote
-                    .get(rel.as_str())
-                    .is_some_and(|n| n.kind == "dir")
+                && remote.get(rel.as_str()).is_some_and(|n| n.kind == "dir")
         })
         .map(|(rel, _)| rel)
         .collect();
@@ -300,8 +425,7 @@ pub fn plan_cycle(
 
     // Moves first: cheapest sync (no bytes move) and they pre-empt the
     // delete+recreate interpretation of the same paths.
-    let (local_moves, remote_moves) =
-        detect_moves(remote, local, state, &BTreeSet::new());
+    let (local_moves, remote_moves) = detect_moves(remote, local, state, &BTreeSet::new());
     for (old, new) in &local_moves {
         actions.push(Action::MvRemote {
             old: old.clone(),
@@ -326,10 +450,7 @@ pub fn plan_cycle(
     }
 
     // Wipe guard: one side scanned empty while state remembers real content.
-    let state_local = state
-        .values()
-        .filter(|s| s.l_mtime_ns.is_some())
-        .count();
+    let state_local = state.values().filter(|s| s.l_mtime_ns.is_some()).count();
     let state_remote = state
         .values()
         .filter(|s| s.r_mtime.as_deref().is_some_and(|m| !m.is_empty()))
@@ -365,10 +486,11 @@ pub fn plan_cycle(
         let s = state.get(rel);
 
         if let Some(r) = r
-            && r.doc {
-                holds += 1; // Proton Doc/Sheet: the CLI cannot download it
-                continue;
-            }
+            && r.doc
+        {
+            holds += 1; // Proton Doc/Sheet: the CLI cannot download it
+            continue;
+        }
 
         // ---- only on the remote side ----
         if let (Some(r), None) = (r, l) {
@@ -388,10 +510,7 @@ pub fn plan_cycle(
                             node: r.clone(),
                         });
                         trashed.insert(rel.to_string());
-                    } else if config.propagate_deletes
-                        && !local_dead
-                        && s.l_mtime_ns.is_some()
-                    {
+                    } else if config.propagate_deletes && !local_dead && s.l_mtime_ns.is_some() {
                         actions.push(Action::TrashRemote {
                             rel: rel.to_string(),
                             node: r.clone(),
@@ -446,8 +565,7 @@ pub fn plan_cycle(
                         let local_size = l.size().unwrap_or(0);
                         if r.size.unwrap_or(0) == local_size {
                             holds += 1; // identical: nothing to do
-                        } else if l.mtime_ns().unwrap_or(0)
-                            > ts_ns(r.mtime.as_deref()).unwrap_or(0)
+                        } else if l.mtime_ns().unwrap_or(0) > ts_ns(r.mtime.as_deref()).unwrap_or(0)
                         {
                             actions.push(Action::Up {
                                 rel: rel.to_string(),
@@ -494,10 +612,55 @@ pub fn plan_cycle(
         }
     }
 
+    let affected_local = candidate_local(local, remote, state, &moved);
+    let affected_cloud = candidate_cloud(remote, local, state, &moved);
+    let wipe = !wipe_guard.is_empty();
+    let mass = mass_delete_hold(&affected_local, state, config.wipe_min)
+        || mass_delete_hold(&affected_cloud, state, config.wipe_min);
+    let hold = config.propagate_deletes && (wipe || mass);
+    // An explicit approval can release a reviewed mass deletion, never a
+    // sick-scan wipe.
+    let approved = hold && !wipe && config.approved_mass_delete;
+    if hold && !approved {
+        actions.retain(|action| {
+            !matches!(
+                action,
+                Action::TrashLocal { .. } | Action::TrashRemote { .. }
+            )
+        });
+    }
+
+    let held_local = if hold && !approved {
+        affected_local
+    } else {
+        BTreeSet::new()
+    };
+    let held_cloud = if hold && !approved {
+        affected_cloud
+    } else {
+        BTreeSet::new()
+    };
+    let sample = held_local
+        .iter()
+        .chain(held_cloud.iter())
+        .filter_map(|rel| rel.split('/').next())
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .take(5)
+        .collect();
+
     PlanResult {
         actions,
         holds,
         wipe_guard,
+        deletes_held: held_local.len() + held_cloud.len(),
+        deletes_held_local: held_local.len(),
+        deletes_held_cloud: held_cloud.len(),
+        deletes_held_local_digest: (!held_local.is_empty()).then(|| digest_paths(&held_local)),
+        deletes_held_cloud_digest: (!held_cloud.is_empty()).then(|| digest_paths(&held_cloud)),
+        deletes_held_sample: sample,
+        deletes_wipe_guard: hold && wipe,
     }
 }
 
@@ -529,7 +692,7 @@ mod tests {
         }
     }
 
-    fn state(l: Option<(u64, i64)>, r: Option<(&str, &str)>) -> StateEntry {
+    fn st_entry(l: Option<(u64, i64)>, r: Option<(&str, &str)>) -> StateEntry {
         StateEntry {
             l_size: l.map(|x| x.0),
             l_mtime_ns: l.map(|x| x.1),
@@ -553,7 +716,10 @@ mod tests {
 
     #[test]
     fn new_files_sync_in_both_directions() {
-        let r = BTreeMap::from([("remote.txt".into(), remote_file("u", 1, "2026-01-01T00:00:00Z"))]);
+        let r = BTreeMap::from([(
+            "remote.txt".into(),
+            remote_file("u", 1, "2026-01-01T00:00:00Z"),
+        )]);
         let l = BTreeMap::from([("local.txt".into(), local_file(1, 1))]);
         let out = plan(r, l, State::new());
         assert_eq!(out.actions.len(), 2);
@@ -568,7 +734,10 @@ mod tests {
     fn local_edit_uploads_and_remote_edit_downloads() {
         let remote_old = "2026-01-01T00:00:00Z";
         let r = BTreeMap::from([
-            ("down.txt".into(), remote_file("u1", 2, "2026-02-01T00:00:00Z")),
+            (
+                "down.txt".into(),
+                remote_file("u1", 2, "2026-02-01T00:00:00Z"),
+            ),
             ("up.txt".into(), remote_file("u2", 2, remote_old)),
         ]);
         let l = BTreeMap::from([
@@ -576,8 +745,14 @@ mod tests {
             ("up.txt".into(), local_file(2, 2)),
         ]);
         let st = BTreeMap::from([
-            ("down.txt".into(), state(Some((1, 1)), Some((remote_old, "u1")))),
-            ("up.txt".into(), state(Some((1, 1)), Some((remote_old, "u2")))),
+            (
+                "down.txt".into(),
+                st_entry(Some((1, 1)), Some((remote_old, "u1"))),
+            ),
+            (
+                "up.txt".into(),
+                st_entry(Some((1, 1)), Some((remote_old, "u2"))),
+            ),
         ]);
         let out = plan(r, l, st);
         assert_eq!(out.actions.len(), 2);
@@ -590,16 +765,28 @@ mod tests {
     #[test]
     fn both_edited_conflicts_unless_sizes_match() {
         let r = BTreeMap::from([
-            ("conf.txt".into(), remote_file("u1", 2, "2026-02-01T00:00:00Z")),
-            ("same.txt".into(), remote_file("u2", 2, "2026-02-01T00:00:00Z")),
+            (
+                "conf.txt".into(),
+                remote_file("u1", 2, "2026-02-01T00:00:00Z"),
+            ),
+            (
+                "same.txt".into(),
+                remote_file("u2", 2, "2026-02-01T00:00:00Z"),
+            ),
         ]);
         let l = BTreeMap::from([
             ("conf.txt".into(), local_file(3, 2)),
             ("same.txt".into(), local_file(2, 2)),
         ]);
         let st = BTreeMap::from([
-            ("conf.txt".into(), state(Some((1, 1)), Some(("2026-01-01T00:00:00Z", "u1")))),
-            ("same.txt".into(), state(Some((1, 1)), Some(("2026-01-01T00:00:00Z", "u2")))),
+            (
+                "conf.txt".into(),
+                st_entry(Some((1, 1)), Some(("2026-01-01T00:00:00Z", "u1"))),
+            ),
+            (
+                "same.txt".into(),
+                st_entry(Some((1, 1)), Some(("2026-01-01T00:00:00Z", "u2"))),
+            ),
         ]);
         let out = plan(r, l, st);
         assert_eq!(out.actions.len(), 1);
@@ -619,11 +806,11 @@ mod tests {
         let st = BTreeMap::from([
             (
                 "deleted-locally.txt".into(),
-                state(Some((1, 1)), Some(("2026-01-01T00:00:00Z", "u1"))),
+                st_entry(Some((1, 1)), Some(("2026-01-01T00:00:00Z", "u1"))),
             ),
             (
                 "deleted-remotely.txt".into(),
-                state(Some((1, 1)), Some(("2026-01-01T00:00:00Z", "u2"))),
+                st_entry(Some((1, 1)), Some(("2026-01-01T00:00:00Z", "u2"))),
             ),
         ]);
         let out = plan(r, l, st);
@@ -640,7 +827,7 @@ mod tests {
         let l = LocalTree::new();
         let st = BTreeMap::from([(
             "a.txt".into(),
-            state(Some((1, 1)), Some(("2026-01-01T00:00:00Z", "u"))),
+            st_entry(Some((1, 1)), Some(("2026-01-01T00:00:00Z", "u"))),
         )]);
         let out = plan_cycle(
             &r,
@@ -661,8 +848,14 @@ mod tests {
         let mut st = State::new();
         for i in 0..5 {
             let rel = format!("f{i}.txt");
-            r.insert(rel.clone(), remote_file(&format!("u{i}"), 1, "2026-01-01T00:00:00Z"));
-            st.insert(rel, state(Some((1, 1)), Some(("2026-01-01T00:00:00Z", "u"))));
+            r.insert(
+                rel.clone(),
+                remote_file(&format!("u{i}"), 1, "2026-01-01T00:00:00Z"),
+            );
+            st.insert(
+                rel,
+                st_entry(Some((1, 1)), Some(("2026-01-01T00:00:00Z", "u"))),
+            );
         }
         let out = plan(r, LocalTree::new(), st);
         assert_eq!(out.wipe_guard, vec![WipeSide::Local]);
@@ -687,11 +880,14 @@ mod tests {
 
     #[test]
     fn local_move_becomes_one_remote_rename() {
-        let r = BTreeMap::from([("old.txt".into(), remote_file("u", 3, "2026-01-01T00:00:00Z"))]);
+        let r = BTreeMap::from([(
+            "old.txt".into(),
+            remote_file("u", 3, "2026-01-01T00:00:00Z"),
+        )]);
         let l = BTreeMap::from([("new.txt".into(), local_file(3, 7))]);
         let st = BTreeMap::from([(
             "old.txt".into(),
-            state(Some((3, 7)), Some(("2026-01-01T00:00:00Z", "u"))),
+            st_entry(Some((3, 7)), Some(("2026-01-01T00:00:00Z", "u"))),
         )]);
         let out = plan(r, l, st);
         assert_eq!(out.actions.len(), 1);
@@ -706,11 +902,14 @@ mod tests {
 
     #[test]
     fn remote_move_becomes_one_local_rename() {
-        let r = BTreeMap::from([("new.txt".into(), remote_file("u", 3, "2026-01-01T00:00:00Z"))]);
+        let r = BTreeMap::from([(
+            "new.txt".into(),
+            remote_file("u", 3, "2026-01-01T00:00:00Z"),
+        )]);
         let l = BTreeMap::from([("old.txt".into(), local_file(3, 7))]);
         let st = BTreeMap::from([(
             "old.txt".into(),
-            state(Some((3, 7)), Some(("2026-01-01T00:00:00Z", "u"))),
+            st_entry(Some((3, 7)), Some(("2026-01-01T00:00:00Z", "u"))),
         )]);
         let out = plan(r, l, st);
         assert_eq!(out.actions.len(), 1);
@@ -727,17 +926,20 @@ mod tests {
     fn folder_move_collapses_into_one_move() {
         let r = BTreeMap::from([
             ("old".into(), remote_dir("d-old")),
-            ("old/a.txt".into(), remote_file("u1", 3, "2026-01-01T00:00:00Z")),
+            (
+                "old/a.txt".into(),
+                remote_file("u1", 3, "2026-01-01T00:00:00Z"),
+            ),
         ]);
         let l = BTreeMap::from([
             ("new".into(), LocalEntry::Dir),
             ("new/a.txt".into(), local_file(3, 7)),
         ]);
         let st = BTreeMap::from([
-            ("old".into(), state(None, Some(("", "d-old")))),
+            ("old".into(), st_entry(None, Some(("", "d-old")))),
             (
                 "old/a.txt".into(),
-                state(Some((3, 7)), Some(("2026-01-01T00:00:00Z", "u1"))),
+                st_entry(Some((3, 7)), Some(("2026-01-01T00:00:00Z", "u1"))),
             ),
         ]);
         let out = plan(r, l, st);
@@ -748,6 +950,195 @@ mod tests {
                 old: "old".into(),
                 new: "new".into()
             }
+        );
+    }
+
+    fn flat_file_set(
+        count: usize,
+        side: &str,
+    ) -> (
+        BTreeMap<String, RemoteEntry>,
+        BTreeMap<String, LocalEntry>,
+        State,
+    ) {
+        let mut remote = BTreeMap::new();
+        let mut local = BTreeMap::new();
+        let mut state = State::new();
+        for i in 0..count {
+            let rel = format!("{side}/f{i}.txt");
+            remote.insert(
+                rel.clone(),
+                remote_file(&format!("u{i}"), 1, "2026-01-01T00:00:00Z"),
+            );
+            local.insert(rel.clone(), local_file(1, 1));
+            state.insert(
+                rel,
+                st_entry(Some((1, 1)), Some(("2026-01-01T00:00:00Z", "u"))),
+            );
+        }
+        (remote, local, state)
+    }
+
+    #[test]
+    fn mass_remote_loss_holds_all_local_deletes() {
+        let (mut remote, mut local, mut state) = flat_file_set(30, "A");
+        remote.retain(|rel, _| !rel.starts_with("A/"));
+        remote.insert(
+            "Other/keep.txt".into(),
+            remote_file("keep", 1, "2026-01-01T00:00:00Z"),
+        );
+        local.insert("Other/keep.txt".into(), local_file(1, 1));
+        state.insert(
+            "Other/keep.txt".into(),
+            st_entry(Some((1, 1)), Some(("2026-01-01T00:00:00Z", "keep"))),
+        );
+        let out = plan(remote, local, state);
+        assert!(out.actions.is_empty());
+        assert_eq!(out.deletes_held_local, 30);
+        assert_eq!(out.deletes_held_cloud, 0);
+        assert!(!out.deletes_wipe_guard);
+        assert_eq!(out.deletes_held_sample, vec!["A".to_string()]);
+    }
+
+    #[test]
+    fn small_partial_loss_is_allowed_below_the_threshold() {
+        let (mut remote, local, state) = flat_file_set(100, "Docs");
+        remote.remove("Docs/f0.txt");
+        let out = plan(remote, local, state);
+        assert_eq!(out.deletes_held, 0);
+        assert_eq!(
+            out.actions
+                .iter()
+                .filter(|a| a.kind() == "trash_local")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn delete_threshold_is_25_paths() {
+        for count in [24usize, 25usize] {
+            let (mut remote, local, state) = flat_file_set(100, "Docs");
+            for i in 0..count {
+                remote.remove(&format!("Docs/f{i}.txt"));
+            }
+            let out = plan(remote, local, state);
+            if count == 24 {
+                assert_eq!(out.deletes_held_local, 0, "24 paths are ordinary");
+            } else {
+                assert_eq!(out.deletes_held_local, 25, "25 paths wait for review");
+            }
+        }
+    }
+
+    #[test]
+    fn a_whole_small_folder_is_held_even_below_25() {
+        // One folder with six synced files, in a library large enough that the
+        // absolute and ratio rules stay idle; the folder rule must catch it.
+        let (mut remote, mut local, mut state) = flat_file_set(100, "Other");
+        for i in 0..6 {
+            let rel = format!("Project/f{i}.txt");
+            remote.insert(
+                rel.clone(),
+                remote_file(&format!("p{i}"), 1, "2026-01-01T00:00:00Z"),
+            );
+            local.insert(rel.clone(), local_file(1, 1));
+            state.insert(
+                rel,
+                st_entry(Some((1, 1)), Some(("2026-01-01T00:00:00Z", "p"))),
+            );
+        }
+        remote.retain(|rel, _| !rel.starts_with("Project/"));
+        let out = plan(remote, local, state);
+        assert!(out.deletes_held_local >= 6);
+        assert!(out.actions.iter().all(|a| a.kind() != "trash_local"));
+    }
+
+    #[test]
+    fn whole_folder_counts_unsynced_descendants() {
+        let (remote, mut local, mut state) = flat_file_set(1, "Other");
+        local.insert("Big".into(), LocalEntry::Dir);
+        for i in 0..30 {
+            local.insert(format!("Big/f{i}.txt"), local_file(1, 1));
+        }
+        state.insert(
+            "Big".into(),
+            st_entry(None, Some(("2026-01-01T00:00:00Z", "d"))),
+        );
+        let out = plan(remote, local, state);
+        assert_eq!(out.deletes_held_local, 30);
+    }
+
+    #[test]
+    fn approval_releases_only_a_mass_hold() {
+        let (mut remote, mut local, mut state) = flat_file_set(30, "A");
+        remote.retain(|rel, _| !rel.starts_with("A/"));
+        remote.insert(
+            "Other/keep.txt".into(),
+            remote_file("keep", 1, "2026-01-01T00:00:00Z"),
+        );
+        local.insert("Other/keep.txt".into(), local_file(1, 1));
+        state.insert(
+            "Other/keep.txt".into(),
+            st_entry(Some((1, 1)), Some(("2026-01-01T00:00:00Z", "keep"))),
+        );
+        let out = plan_cycle(
+            &remote,
+            &local,
+            &state,
+            &PlanConfig {
+                approved_mass_delete: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(out.deletes_held, 0);
+        assert_eq!(
+            out.actions
+                .iter()
+                .filter(|a| a.kind() == "trash_local")
+                .count(),
+            30
+        );
+    }
+
+    #[test]
+    fn approval_never_releases_the_empty_side_guard() {
+        let (remote, _local, mut state) = flat_file_set(30, "A");
+        state.remove("A/f0.txt");
+        let out = plan_cycle(
+            &remote,
+            &LocalTree::new(),
+            &state,
+            &PlanConfig {
+                approved_mass_delete: true,
+                ..Default::default()
+            },
+        );
+        assert!(!out.actions.iter().any(|a| a.kind().starts_with("trash_")));
+        assert!(out.deletes_wipe_guard);
+        assert!(out.deletes_held_cloud > 0);
+    }
+
+    #[test]
+    fn mass_hold_keeps_new_uploads() {
+        let (mut remote, mut local, mut state) = flat_file_set(30, "A");
+        remote.retain(|rel, _| !rel.starts_with("A/"));
+        remote.insert(
+            "Other/keep.txt".into(),
+            remote_file("keep", 1, "2026-01-01T00:00:00Z"),
+        );
+        local.insert("Other/keep.txt".into(), local_file(1, 1));
+        state.insert(
+            "Other/keep.txt".into(),
+            st_entry(Some((1, 1)), Some(("2026-01-01T00:00:00Z", "keep"))),
+        );
+        local.insert("brand-new.txt".into(), local_file(3, 3));
+        let out = plan(remote, local, state);
+        assert!(!out.actions.iter().any(|a| a.kind() == "trash_local"));
+        assert!(
+            out.actions
+                .iter()
+                .any(|a| a.kind() == "up" && a.rel() == "brand-new.txt")
         );
     }
 

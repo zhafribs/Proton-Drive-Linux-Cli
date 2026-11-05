@@ -2,7 +2,7 @@
 //! updates, install helpers, advanced tuning - plus the conf/unit write flow
 //! (`do_save`), all with the PyQt app's exact labels and validations.
 
-use super::{widgets, App, Dialog};
+use super::{App, Dialog, widgets};
 use crate::{conf, desktop, service};
 use eframe::egui;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -73,8 +73,14 @@ impl Draft {
             interval_idx: conf::interval_index(secs),
             inotify: get("PROTON_SYNC_INOTIFY", "1") == "1",
             deletes: get("PROTON_SYNC_DELETES", "1") == "1",
-            workers: get("PROTON_SYNC_WORKERS", "12").parse().unwrap_or(12).clamp(1, 32),
-            retries: get("PROTON_SYNC_RETRIES", "3").parse().unwrap_or(3).clamp(1, 10),
+            workers: get("PROTON_SYNC_WORKERS", "12")
+                .parse()
+                .unwrap_or(12)
+                .clamp(1, 32),
+            retries: get("PROTON_SYNC_RETRIES", "3")
+                .parse()
+                .unwrap_or(3)
+                .clamp(1, 10),
             fast_start: get("PROTON_SYNC_FAST_START", "1") == "1",
             auto_workers: get("PROTON_SYNC_AUTO_WORKERS", "1") == "1",
             transfers: parse_transfers(&get("PROTON_SYNC_TRANSFERS", "4")),
@@ -177,9 +183,12 @@ impl Draft {
     fn partial(&self, prefix: &str) -> bool {
         match self.children.get(prefix) {
             Some(kids) if !kids.is_empty() => {
-                let any_true = kids.iter().any(|(_, k)| self.nodes.get(k).copied().unwrap_or(false));
-                let all_true =
-                    kids.iter().all(|(_, k)| self.nodes.get(k).copied().unwrap_or(false));
+                let any_true = kids
+                    .iter()
+                    .any(|(_, k)| self.nodes.get(k).copied().unwrap_or(false));
+                let all_true = kids
+                    .iter()
+                    .all(|(_, k)| self.nodes.get(k).copied().unwrap_or(false));
                 any_true && !all_true
             }
             _ => false,
@@ -199,7 +208,9 @@ impl Draft {
     }
 
     fn walk_derive(&self, parent: &str, out: &mut Vec<String>) {
-        let Some(kids) = self.children.get(parent) else { return };
+        let Some(kids) = self.children.get(parent) else {
+            return;
+        };
         for (_name, rel) in kids {
             if self.nodes.get(rel).copied().unwrap_or(false) {
                 out.push(rel.clone());
@@ -214,7 +225,8 @@ impl Draft {
         let root_checked = self.nodes.get("").copied().unwrap_or(false);
         let derived = self.derive_selection();
         self.nodes.retain(|k, _| k.is_empty());
-        self.nodes.insert(String::new(), root_checked && derived.is_empty());
+        self.nodes
+            .insert(String::new(), root_checked && derived.is_empty());
         self.children.retain(|k, _| !k.is_empty());
         self.loading.clear();
         self.expanded.clear();
@@ -262,8 +274,13 @@ const COLUMN_ALL: &[CardFn] = &[
 // Three columns are shallower: keep Performance with the folder cards, move
 // How often across, so no single column runs far past the others. The
 // advanced/troubleshooting cards join the same packing, not a separate block.
-const COLUMN_3A: &[CardFn] =
-    &[folder_card, what_syncs_card, photos_card, performance_card, fine_tuning_card];
+const COLUMN_3A: &[CardFn] = &[
+    folder_card,
+    what_syncs_card,
+    photos_card,
+    performance_card,
+    fine_tuning_card,
+];
 const COLUMN_3B: &[CardFn] = &[
     how_often_card,
     notifications_card,
@@ -381,7 +398,11 @@ pub fn do_save(app: &mut App) {
         return;
     }
     let d = &app.draft;
-    let selection = if d.selective { d.derive_selection() } else { Vec::new() };
+    let selection = if d.selective {
+        d.derive_selection()
+    } else {
+        Vec::new()
+    };
     let mut values: BTreeMap<String, String> = BTreeMap::new();
     values.insert("PROTON_SYNC_LOCAL".into(), d.local.clone());
     values.insert("PROTON_SYNC_REMOTE".into(), d.remote.clone());
@@ -395,11 +416,18 @@ pub fn do_save(app: &mut App) {
     values.insert("PROTON_SYNC_INOTIFY".into(), flag(d.inotify));
     values.insert("PROTON_SYNC_WORKERS".into(), d.workers.to_string());
     values.insert("PROTON_SYNC_RETRIES".into(), d.retries.to_string());
-    values.extend(performance_values(d.fast_start, d.auto_workers, d.transfers));
+    values.extend(performance_values(
+        d.fast_start,
+        d.auto_workers,
+        d.transfers,
+    ));
     values.insert("PROTON_SYNC_SUBFOLDERS".into(), selection.join(","));
     values.insert("PROTON_SYNC_EXCLUDE".into(), d.exclude.clone());
     values.insert("PROTON_SYNC_PHOTOS".into(), flag(d.photos));
-    values.insert("PROTON_SYNC_PHOTOS_LOCAL".into(), d.photos_local.trim().to_string());
+    values.insert(
+        "PROTON_SYNC_PHOTOS_LOCAL".into(),
+        d.photos_local.trim().to_string(),
+    );
     values.insert("PROTON_SYNC_PHOTOS_DELETES".into(), flag(d.photos_deletes));
     let extras: Vec<String> = d
         .env_text
@@ -483,7 +511,11 @@ fn folder_card(app: &mut App, ui: &mut egui::Ui) {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("Choose folder...").clicked() {
                     let start = super::expand_user(&app.draft.local);
-                    let start = if start.is_dir() { start } else { dirs::home_dir().unwrap_or_default() };
+                    let start = if start.is_dir() {
+                        start
+                    } else {
+                        dirs::home_dir().unwrap_or_default()
+                    };
                     app.dialog = Some(Dialog::DirBrowse { cwd: start });
                 }
             });
@@ -506,7 +538,10 @@ fn what_syncs_card(app: &mut App, ui: &mut egui::Ui) {
                 app.draft.sel_hint = "Everything in your cloud is synced.".into();
             } else {
                 app.draft.sel_hint = if app.draft.sel_root_loaded {
-                    format!("{} folders", app.draft.children.get("").map(Vec::len).unwrap_or(0))
+                    format!(
+                        "{} folders",
+                        app.draft.children.get("").map(Vec::len).unwrap_or(0)
+                    )
                 } else {
                     "Loading folders...".into()
                 };
@@ -524,7 +559,11 @@ fn what_syncs_card(app: &mut App, ui: &mut egui::Ui) {
                 if ui.button("Refresh folder list").clicked() {
                     refresh_roots(app);
                 }
-                ui.label(egui::RichText::new(app.draft.sel_hint.clone()).size(12.0).weak());
+                ui.label(
+                    egui::RichText::new(app.draft.sel_hint.clone())
+                        .size(12.0)
+                        .weak(),
+                );
             });
         }
 
@@ -582,7 +621,9 @@ fn how_often_card(app: &mut App, ui: &mut egui::Ui) {
             ui,
             "Also remove files I delete",
             &mut deletes,
-            Some("Deleted files go to the trash."),
+            Some(
+                "Deleted files go to an app-managed trash folder. Large batches wait for your OK first.",
+            ),
         ) {
             app.draft.deletes = deletes;
         }
@@ -709,33 +750,33 @@ fn performance_card(app: &mut App, ui: &mut egui::Ui) {
 fn notifications_card(app: &mut App, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Notifications"), |ui| {
         let mut v = app.draft.note_errors;
-        if ui.checkbox(&mut v, "Tell me if something fails to sync").changed() {
+        if ui
+            .checkbox(&mut v, "Tell me if something fails to sync")
+            .changed()
+        {
             app.draft.note_errors = v;
             app.prefs.set_bool("notify_errors", v);
         }
         let mut v = app.draft.note_conflicts;
         if ui
-            .checkbox(
-                &mut v,
-                "Tell me if a file was edited in two places at once",
-            )
+            .checkbox(&mut v, "Tell me if a file was edited in two places at once")
             .changed()
         {
             app.draft.note_conflicts = v;
             app.prefs.set_bool("notify_conflicts", v);
         }
         let mut v = app.draft.note_done;
-        if ui.checkbox(&mut v, "Tell me when syncing finished").changed() {
+        if ui
+            .checkbox(&mut v, "Tell me when syncing finished")
+            .changed()
+        {
             app.draft.note_done = v;
             app.prefs.set_bool("notify_complete", v);
         }
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
             if ui.button("Send a test notification").clicked() {
-                crate::notify::send(
-                    "Proton Drive",
-                    "This is what notifications look like.",
-                );
+                crate::notify::send("Proton Drive", "This is what notifications look like.");
             }
         });
     });
@@ -776,10 +817,18 @@ fn background_card(app: &mut App, ui: &mut egui::Ui) {
                 if v {
                     let _ = service::ensure_service_unit(paths_appimage.as_deref(), false);
                 }
-                let ok = if v { service::enable() } else { service::disable() };
+                let ok = if v {
+                    service::enable()
+                } else {
+                    service::disable()
+                };
                 let _ = tx.send(super::Back::SaveHint(
-                    if ok { "Will start when you log in." } else { "Could not change start-up." }
-                        .to_string(),
+                    if ok {
+                        "Will start when you log in."
+                    } else {
+                        "Could not change start-up."
+                    }
+                    .to_string(),
                 ));
                 let _ = tx.send(super::Back::UnitEnabled(ok && v));
             });
@@ -805,7 +854,10 @@ fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
                 .selected_text(THEMES[app.draft.theme_idx.min(2)])
                 .show_ui(ui, |ui| {
                     for (i, t) in THEMES.iter().enumerate() {
-                        if ui.selectable_value(&mut app.draft.theme_idx, i, *t).changed() {
+                        if ui
+                            .selectable_value(&mut app.draft.theme_idx, i, *t)
+                            .changed()
+                        {
                             let theme = match i {
                                 1 => crate::prefs::Theme::Light,
                                 2 => crate::prefs::Theme::Dark,
@@ -824,7 +876,10 @@ fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
                 .selected_text(SCALES[app.draft.ui_scale_idx.min(2)])
                 .show_ui(ui, |ui| {
                     for (i, s) in SCALES.iter().enumerate() {
-                        if ui.selectable_value(&mut app.draft.ui_scale_idx, i, *s).changed() {
+                        if ui
+                            .selectable_value(&mut app.draft.ui_scale_idx, i, *s)
+                            .changed()
+                        {
                             let scale = match i {
                                 0 => crate::prefs::UiScale::Compact,
                                 2 => crate::prefs::UiScale::Large,
@@ -915,7 +970,13 @@ fn fine_tuning_card(app: &mut App, ui: &mut egui::Ui) {
         });
         ui.add_space(8.0);
         labeled_control(ui, "Retries per folder", |ui| {
-            number_combo(ui, "retries-per-folder", &mut app.draft.retries, RETRIES_RANGE, "");
+            number_combo(
+                ui,
+                "retries-per-folder",
+                &mut app.draft.retries,
+                RETRIES_RANGE,
+                "",
+            );
         });
     });
 }
@@ -988,9 +1049,7 @@ fn sel_tree(app: &mut App, ui: &mut egui::Ui, parent: &str) {
         if app.draft.expanded.contains(rel) {
             let rel2 = rel.clone();
             ui.indent(("sel", rel2.clone()), |ui| {
-                if !app.draft.children.contains_key(&rel2)
-                    && !app.draft.loading.contains(&rel2)
-                {
+                if !app.draft.children.contains_key(&rel2) && !app.draft.loading.contains(&rel2) {
                     // lazy load this level
                     app.draft.loading.insert(rel2.clone());
                     let remote = app.draft.remote.clone();
@@ -1009,17 +1068,12 @@ fn sel_tree(app: &mut App, ui: &mut egui::Ui, parent: &str) {
 
 fn sel_row(app: &mut App, ui: &mut egui::Ui, rel: &str, label: &str) {
     ui.horizontal(|ui| {
-        let loaded_empty = app
-            .draft
-            .children
-            .get(rel)
-            .is_some_and(|k| k.is_empty());
+        let loaded_empty = app.draft.children.get(rel).is_some_and(|k| k.is_empty());
         if !loaded_empty {
             let expanded = app.draft.expanded.contains(rel);
             let arrow = if expanded { "\u{25be}" } else { "\u{25b8}" };
             let resp = ui.add(egui::Label::new(arrow).sense(egui::Sense::click()));
-            if resp.clicked()
-                || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+            if resp.clicked() || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
             {
                 if expanded {
                     app.draft.expanded.remove(rel);
@@ -1041,15 +1095,12 @@ fn sel_row(app: &mut App, ui: &mut egui::Ui, rel: &str, label: &str) {
             "\u{2610}"
         };
         let resp = ui.add(egui::Label::new(glyph).sense(egui::Sense::click()));
-        if resp.clicked()
-            || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-        {
+        if resp.clicked() || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
             app.draft.toggle_node(rel);
         }
         ui.label(label);
     });
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1066,9 +1117,18 @@ mod tests {
     #[test]
     fn performance_values_are_conf_keys() {
         let values = performance_values(true, true, 4);
-        assert_eq!(values.get("PROTON_SYNC_FAST_START").map(String::as_str), Some("1"));
-        assert_eq!(values.get("PROTON_SYNC_AUTO_WORKERS").map(String::as_str), Some("1"));
-        assert_eq!(values.get("PROTON_SYNC_TRANSFERS").map(String::as_str), Some("4"));
+        assert_eq!(
+            values.get("PROTON_SYNC_FAST_START").map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            values.get("PROTON_SYNC_AUTO_WORKERS").map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            values.get("PROTON_SYNC_TRANSFERS").map(String::as_str),
+            Some("4")
+        );
     }
 
     #[test]
@@ -1100,8 +1160,17 @@ mod tests {
 
     #[test]
     fn options_cover_every_integer() {
-        assert_eq!(number_options(WORKERS_RANGE), (1..=32).collect::<Vec<i32>>());
-        assert_eq!(number_options(TRANSFERS_RANGE), (1..=10).collect::<Vec<i32>>());
-        assert_eq!(number_options(RETRIES_RANGE), (1..=10).collect::<Vec<i32>>());
+        assert_eq!(
+            number_options(WORKERS_RANGE),
+            (1..=32).collect::<Vec<i32>>()
+        );
+        assert_eq!(
+            number_options(TRANSFERS_RANGE),
+            (1..=10).collect::<Vec<i32>>()
+        );
+        assert_eq!(
+            number_options(RETRIES_RANGE),
+            (1..=10).collect::<Vec<i32>>()
+        );
     }
 }

@@ -26,6 +26,15 @@ pub struct Health {
     pub downloaded: u64,
     pub actions: u64,
     pub holds: u64,
+    /// Deletion paths held for review this cycle, split by the side that would
+    /// lose them. `deletes_wipe_guard` is the non-approvable sick-scan state.
+    pub deletes_held: u64,
+    pub deletes_held_local: u64,
+    pub deletes_held_cloud: u64,
+    pub deletes_held_local_digest: Option<String>,
+    pub deletes_held_cloud_digest: Option<String>,
+    pub deletes_held_sample: Vec<String>,
+    pub deletes_wipe_guard: bool,
     pub failed: u64,
     pub conflicts: u64,
     pub remote_entries: Option<u64>,

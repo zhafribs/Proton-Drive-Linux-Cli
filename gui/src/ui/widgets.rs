@@ -72,9 +72,7 @@ pub fn primary_button_hint(ui: &mut egui::Ui, text: &str, hint: &str) -> bool {
 pub fn primary_button_full(ui: &mut egui::Ui, text: &str) -> bool {
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), text)
-    });
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), text));
     let radius = theme::pill();
     let fill = if response.hovered() {
         theme::ACCENT.gamma_multiply(1.12)
@@ -106,8 +104,7 @@ pub fn primary_button_full(ui: &mut egui::Ui, text: &str) -> bool {
             egui::StrokeKind::Inside,
         );
     }
-    response.clicked()
-        || (response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+    response.clicked() || (response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
 }
 
 /// Round identity avatar: accent disc, cyan cap and the initial.
@@ -151,7 +148,8 @@ pub fn toggle(ui: &mut egui::Ui, label: &str, value: &mut bool, hint: Option<&st
     ui.vertical(|ui| {
         changed = ui.checkbox(value, label).changed();
         if let Some(h) = hint {
-            ui.label(egui::RichText::new(h).size(12.0).weak()).on_hover_text(h);
+            ui.label(egui::RichText::new(h).size(12.0).weak())
+                .on_hover_text(h);
         }
     });
     changed
@@ -196,11 +194,7 @@ pub fn status_orb(ui: &mut egui::Ui, status: &str) {
     );
 
     // The ring itself: a calm track in the status color.
-    painter.circle_stroke(
-        c,
-        r,
-        egui::Stroke::new(6.0, color.gamma_multiply(0.22)),
-    );
+    painter.circle_stroke(c, r, egui::Stroke::new(6.0, color.gamma_multiply(0.22)));
 
     if status == "syncing" {
         // Smooth motion: ~25 fps while the orb is on screen and animating.
@@ -208,7 +202,9 @@ pub fn status_orb(ui: &mut egui::Ui, status: &str) {
             .request_repaint_after(std::time::Duration::from_millis(40));
         let t = ui.ctx().input(|i| i.time) as f32;
         // Comet sweep riding the ring.
-        let a0 = (t * 140.0f32).to_radians().rem_euclid(std::f32::consts::TAU);
+        let a0 = (t * 140.0f32)
+            .to_radians()
+            .rem_euclid(std::f32::consts::TAU);
         let a1 = a0 + std::f32::consts::FRAC_PI_2;
         let steps = 24;
         let pts: Vec<egui::Pos2> = (0..=steps)
@@ -275,12 +271,10 @@ pub fn status_orb(ui: &mut egui::Ui, status: &str) {
                 w,
             ));
         }
-        "paused" => {
+        "paused" | "deletes_held" => {
             for dx in [-5.5f32, 5.5] {
-                let bar = egui::Rect::from_center_size(
-                    c + egui::vec2(dx, 0.0),
-                    egui::vec2(4.5, 17.0),
-                );
+                let bar =
+                    egui::Rect::from_center_size(c + egui::vec2(dx, 0.0), egui::vec2(4.5, 17.0));
                 painter.rect_filled(bar, egui::CornerRadius::same(2), white);
             }
         }
@@ -326,10 +320,8 @@ pub fn status_orb(ui: &mut egui::Ui, status: &str) {
                 pts.push(arc_c + egui::vec2(a.cos(), a.sin()) * 6.0);
             }
             painter.add(egui::Shape::line(pts, w));
-            let body = egui::Rect::from_center_size(
-                c + egui::vec2(0.0, 5.0),
-                egui::vec2(18.0, 13.0),
-            );
+            let body =
+                egui::Rect::from_center_size(c + egui::vec2(0.0, 5.0), egui::vec2(18.0, 13.0));
             painter.rect_filled(body, egui::CornerRadius::same(3), white);
             painter.circle_filled(c + egui::vec2(0.0, 4.0), 2.4, theme::NAVY);
         }
@@ -409,7 +401,12 @@ pub fn move_row(ui: &mut egui::Ui, row: &ChangeRow, parent: &str, when: &str) {
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         ui.horizontal(|ui| {
-            let g = ui.label(egui::RichText::new(row.glyph()).strong().size(15.0).color(color));
+            let g = ui.label(
+                egui::RichText::new(row.glyph())
+                    .strong()
+                    .size(15.0)
+                    .color(color),
+            );
             g.on_hover_text(row.rel.clone());
             ui.add_space(gap);
             ui.allocate_ui_with_layout(
@@ -418,10 +415,8 @@ pub fn move_row(ui: &mut egui::Ui, row: &ChangeRow, parent: &str, when: &str) {
                 |ui| {
                     ui.set_max_width(content_w);
                     let name = ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(row.name.clone()).strong().size(14.0),
-                        )
-                        .truncate(),
+                        egui::Label::new(egui::RichText::new(row.name.clone()).strong().size(14.0))
+                            .truncate(),
                     );
                     name.on_hover_text(row.rel.clone());
                     let mut meta = row.label().to_string();
@@ -430,8 +425,7 @@ pub fn move_row(ui: &mut egui::Ui, row: &ChangeRow, parent: &str, when: &str) {
                         meta.push_str(parent);
                     }
                     ui.add(
-                        egui::Label::new(egui::RichText::new(meta).size(12.0).weak())
-                            .truncate(),
+                        egui::Label::new(egui::RichText::new(meta).size(12.0).weak()).truncate(),
                     );
                 },
             );
@@ -502,7 +496,13 @@ pub fn nav_icon(painter: &egui::Painter, r: egui::Rect, kind: NavIcon, c: egui::
             );
             painter.circle_stroke(p(0.34, 0.38), 0.08 * r.width(), stroke);
             painter.add(egui::Shape::line(
-                vec![p(0.16, 0.72), p(0.42, 0.47), p(0.60, 0.66), p(0.73, 0.55), p(0.85, 0.68)],
+                vec![
+                    p(0.16, 0.72),
+                    p(0.42, 0.47),
+                    p(0.60, 0.66),
+                    p(0.73, 0.55),
+                    p(0.85, 0.68),
+                ],
                 stroke,
             ));
         }
@@ -515,7 +515,10 @@ pub fn nav_icon(painter: &egui::Painter, r: egui::Rect, kind: NavIcon, c: egui::
                 let (s, cs) = a.sin_cos();
                 let dir = egui::vec2(cs, s);
                 painter.add(egui::Shape::line(
-                    vec![ctr + dir * (0.24 * r.width()), ctr + dir * (0.42 * r.width())],
+                    vec![
+                        ctr + dir * (0.24 * r.width()),
+                        ctr + dir * (0.42 * r.width()),
+                    ],
                     stroke,
                 ));
             }
@@ -536,8 +539,14 @@ pub fn nav_icon(painter: &egui::Painter, r: egui::Rect, kind: NavIcon, c: egui::
                 vec![p(0.22, 0.38), p(0.27, 0.86), p(0.73, 0.86), p(0.78, 0.38)],
                 stroke,
             ));
-            painter.add(egui::Shape::line(vec![p(0.44, 0.48), p(0.46, 0.76)], stroke));
-            painter.add(egui::Shape::line(vec![p(0.56, 0.48), p(0.54, 0.76)], stroke));
+            painter.add(egui::Shape::line(
+                vec![p(0.44, 0.48), p(0.46, 0.76)],
+                stroke,
+            ));
+            painter.add(egui::Shape::line(
+                vec![p(0.56, 0.48), p(0.54, 0.76)],
+                stroke,
+            ));
         }
         NavIcon::About => {
             // Info bubble: ring with an "i".
@@ -586,8 +595,11 @@ pub fn nav_row(ui: &mut egui::Ui, icon: NavIcon, label: &str, selected: bool) ->
             egui::pos2(rect.left() + 1.0, rect.top() + 9.0),
             egui::vec2(3.0, rect.height() - 18.0),
         );
-        ui.painter()
-            .rect_filled(bar, egui::CornerRadius::same(2), theme::accent(ui.visuals()));
+        ui.painter().rect_filled(
+            bar,
+            egui::CornerRadius::same(2),
+            theme::accent(ui.visuals()),
+        );
         ui.painter().rect_stroke(
             rect,
             egui::CornerRadius::same(12),
@@ -612,8 +624,7 @@ pub fn nav_row(ui: &mut egui::Ui, icon: NavIcon, label: &str, selected: bool) ->
         egui::FontId::proportional(14.5),
         color,
     );
-    resp.clicked()
-        || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+    resp.clicked() || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
 }
 
 /// Toolbar glyphs for the files view (refresh ring + the two arrows),

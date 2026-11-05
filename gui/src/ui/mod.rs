@@ -11,15 +11,15 @@ pub mod settings;
 pub mod widgets;
 
 use crate::{
-    cli, conf, health, journal, notify, paths::Paths, prefs, release, service,
-    system_theme, theme, tray, util,
+    cli, conf, health, journal, notify, paths::Paths, prefs, release, service, system_theme, theme,
+    tray, util,
 };
 use eframe::egui;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -34,10 +34,17 @@ pub enum Page {
 /// Messages from the poller/worker threads to the UI.
 #[derive(Clone)]
 pub enum Back {
-    Poll { health: Box<health::Health>, active: bool, enabled: bool },
+    Poll {
+        health: Box<health::Health>,
+        active: bool,
+        enabled: bool,
+    },
     Journal(Vec<String>),
     Identity(cli::Identity),
-    Stats { files: u64, bytes: u64 },
+    Stats {
+        files: u64,
+        bytes: u64,
+    },
     ShowWindow,
     SaveHint(String),
     /// Release check: (release, update available, installed CLI version).
@@ -45,7 +52,10 @@ pub enum Back {
     /// Download + swap finished; Ok is the new AppImage's path.
     UpdateInstalled(Result<String, String>),
     /// Selective-sync folder listing (parent rel "" = the root level).
-    SelFolders { parent: String, folders: Vec<(String, String)> },
+    SelFolders {
+        parent: String,
+        folders: Vec<(String, String)>,
+    },
     /// Whether the sync unit is enabled at login (slow systemctl call).
     UnitEnabled(bool),
     /// "Restart syncing now" finished; `false` = systemctl refused.
@@ -63,17 +73,37 @@ pub enum Back {
         result: Result<(usize, usize, Vec<u8>), String>,
     },
     /// Cloud browser: a folder listing landed (key + serial guard staleness).
-    CloudEntries { key: String, serial: u64, result: Result<Vec<cli::RemoteEntry>, String> },
+    CloudEntries {
+        key: String,
+        serial: u64,
+        result: Result<Vec<cli::RemoteEntry>, String>,
+    },
     /// A sidebar tree listing (never touches the visible folder).
-    TreeEntries { key: String, result: Result<Vec<cli::RemoteEntry>, String> },
+    TreeEntries {
+        key: String,
+        result: Result<Vec<cli::RemoteEntry>, String>,
+    },
     /// Cloud browser: a CLI mutation finished (refresh follows).
-    CloudMutated { ok: bool, err: String, done: String, notify: Option<(String, String)> },
+    CloudMutated {
+        ok: bool,
+        err: String,
+        done: String,
+        notify: Option<(String, String)>,
+    },
     /// Cloud browser: a download finished.
-    CloudDownload { ok: bool, err: String, name: String, n: usize },
+    CloudDownload {
+        ok: bool,
+        err: String,
+        name: String,
+        n: usize,
+    },
     /// Cloud browser: a file dialog returned (None = cancelled).
     CloudPicked(Option<Picked>),
     /// Cloud browser: the move-to picker's folder listing landed.
-    PickerFolders { parent: String, folders: Vec<(String, String)> },
+    PickerFolders {
+        parent: String,
+        folders: Vec<(String, String)>,
+    },
     /// Tray menu/activation actions (sent from the ksni service thread).
     TrayToggle,
     TrayQuit,
@@ -89,28 +119,58 @@ pub enum Back {
 pub enum Picked {
     UploadFiles(Vec<PathBuf>),
     UploadFolder(PathBuf),
-    DownloadSave { rpath: String, dest: PathBuf },
-    DownloadDir { rpaths: Vec<String>, dest: PathBuf, n: usize },
+    DownloadSave {
+        rpath: String,
+        dest: PathBuf,
+    },
+    DownloadDir {
+        rpaths: Vec<String>,
+        dest: PathBuf,
+        n: usize,
+    },
 }
 
 #[derive(Clone, Debug)]
 pub enum Dialog {
-    Info { title: String, body: String },
+    Info {
+        title: String,
+        body: String,
+    },
     ConfirmSave,
     ConfirmLogout,
     PauseMenu,
-    DirBrowse { cwd: PathBuf },
+    DirBrowse {
+        cwd: PathBuf,
+    },
     /// Text input (Cloud: rename / new folder); the buffer lives on App.
-    Input { title: String, label: String, intent: InputIntent },
-    ConfirmTrash { n: usize },
+    Input {
+        title: String,
+        label: String,
+        intent: InputIntent,
+    },
+    ConfirmTrash {
+        n: usize,
+    },
+    /// Approve one exact, reviewed mass deletion for the next sync cycle.
+    ConfirmHeldDeletes {
+        local: u64,
+        cloud: u64,
+        local_digest: String,
+        cloud_digest: String,
+        sample: Vec<String>,
+    },
     /// Permanently delete the trash selection (cannot be undone).
-    ConfirmDelete { n: usize },
+    ConfirmDelete {
+        n: usize,
+    },
     /// Empty the whole Proton trash (cannot be undone).
     ConfirmEmptyTrash,
     ConfirmClearCache,
     /// Move the selected photos to the Proton photos trash (also removes the
     /// local copies in the photo folder).
-    ConfirmPhotoDelete { uids: Vec<String> },
+    ConfirmPhotoDelete {
+        uids: Vec<String>,
+    },
     /// The "Move to..." cloud folder picker.
     CloudMove,
 }
@@ -130,14 +190,23 @@ enum DlgAct {
     Pause(Option<u64>),
     BrowseGo(PathBuf),
     BrowseSet(PathBuf),
-    CloudRename { old: String, name: String },
+    CloudRename {
+        old: String,
+        name: String,
+    },
     NewFolder(String),
     TrashConfirm,
+    HeldDeleteConfirm {
+        local: u64,
+        cloud: u64,
+        local_digest: String,
+        cloud_digest: String,
+    },
     DeleteConfirm,
     PhotoDeleteConfirm(Vec<String>),
     EmptyTrashConfirm,
     ClearCache,
-    MoveSel(String), // picker row clicked
+    MoveSel(String),  // picker row clicked
     MovePick(String), // picker confirmed: move selection here
 }
 
@@ -236,9 +305,10 @@ pub fn expand_user(s: &str) -> PathBuf {
         return dirs::home_dir().unwrap_or_else(|| "/".into());
     }
     if let Some(rest) = s.strip_prefix("~/")
-        && let Some(home) = dirs::home_dir() {
-            return home.join(rest);
-        }
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(rest);
+    }
     PathBuf::from(s)
 }
 
@@ -340,7 +410,7 @@ fn spawn_poller(tx: mpsc::Sender<Back>, paths: Paths, journal_open: Arc<AtomicBo
             // `ts` is second-granular, so include the counters that move
             // between writes; the pair is enough to spot new telemetry.
             let now_fingerprint = format!(
-                "{}|{}|{}|{}|{}|{}|{}",
+                "{}|{}|{}|{}|{}|{}|{}|{}|{}",
                 h.ts.as_deref().unwrap_or(""),
                 h.status,
                 h.uploaded,
@@ -348,6 +418,8 @@ fn spawn_poller(tx: mpsc::Sender<Back>, paths: Paths, journal_open: Arc<AtomicBo
                 h.actions,
                 h.transfer_done.unwrap_or(0),
                 h.audit_phase.as_deref().unwrap_or(""),
+                h.deletes_held,
+                h.deletes_wipe_guard,
             );
             let changed = now_fingerprint != fingerprint;
             fingerprint = now_fingerprint;
@@ -363,7 +435,14 @@ fn spawn_poller(tx: mpsc::Sender<Back>, paths: Paths, journal_open: Arc<AtomicBo
             let repaint_due = last_poll.is_none_or(|t| t.elapsed() >= POLL_MIN_GAP);
             let heartbeat_due = last_poll.is_none_or(|t| t.elapsed() >= HEARTBEAT);
             if (dirty && repaint_due) || heartbeat_due {
-                if tx.send(Back::Poll { health: Box::new(h.clone()), active, enabled }).is_err() {
+                if tx
+                    .send(Back::Poll {
+                        health: Box::new(h.clone()),
+                        active,
+                        enabled,
+                    })
+                    .is_err()
+                {
                     break;
                 }
                 last_poll = Some(Instant::now());
@@ -415,9 +494,7 @@ fn spawn_poller(tx: mpsc::Sender<Back>, paths: Paths, journal_open: Arc<AtomicBo
 fn account_action(ui: &mut egui::Ui, label: &str, danger: bool) -> bool {
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label)
-    });
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
     if response.hovered() {
         let fill = if danger {
             theme::ERROR.gamma_multiply(0.14)
@@ -453,8 +530,10 @@ fn account_action(ui: &mut egui::Ui, label: &str, danger: bool) -> bool {
         ],
         stroke,
     ));
-    ui.painter()
-        .line_segment([c + egui::vec2(1.0, 0.0), c + egui::vec2(12.0, 0.0)], stroke);
+    ui.painter().line_segment(
+        [c + egui::vec2(1.0, 0.0), c + egui::vec2(12.0, 0.0)],
+        stroke,
+    );
     ui.painter().add(egui::Shape::line(
         vec![
             c + egui::vec2(8.0, -4.0),
@@ -470,8 +549,7 @@ fn account_action(ui: &mut egui::Ui, label: &str, danger: bool) -> bool {
         egui::FontId::proportional(13.0),
         color,
     );
-    response.clicked()
-        || (response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+    response.clicked() || (response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
 }
 
 /// Sidebar stat chip: glass mini-card with an accent number and a muted
@@ -546,9 +624,9 @@ impl App {
         // Read the desktop's scheme before the first frame so the first paint
         // already matches it (Linux never reports it to egui itself).
         let detected_theme = system_theme::detect();
-        let upd_next_check = prefs.updates_auto().then(|| {
-            std::time::Instant::now() + Duration::from_secs(5)
-        });
+        let upd_next_check = prefs
+            .updates_auto()
+            .then(|| std::time::Instant::now() + Duration::from_secs(5));
         theme::apply(&cc.egui_ctx, &prefs.theme());
         theme::force(
             &cc.egui_ctx,
@@ -765,11 +843,19 @@ impl App {
         }
         let _ = std::fs::create_dir_all(&self.paths.state_dir);
         let _ = std::fs::write(&self.paths.wake_file, b"");
-        self.sub_override = Some(("On it - checking for new changes...".into(), self.now() + 8.0));
+        self.sub_override = Some((
+            "On it - checking for new changes...".into(),
+            self.now() + 8.0,
+        ));
     }
 
     pub fn action_open_folder(&self) {
-        let root = expand_user(self.conf.get("PROTON_SYNC_LOCAL").map(String::as_str).unwrap_or(""));
+        let root = expand_user(
+            self.conf
+                .get("PROTON_SYNC_LOCAL")
+                .map(String::as_str)
+                .unwrap_or(""),
+        );
         let _ = std::fs::create_dir_all(&root);
         std::thread::spawn(move || {
             let _ = std::process::Command::new("xdg-open")
@@ -783,9 +869,18 @@ impl App {
     /// Qt `_open_sync_path`: open a change's parent folder (falling back to
     /// the sync root when the target is gone).
     pub fn action_open_sync_path(&self, rel: &str) {
-        let root = expand_user(self.conf.get("PROTON_SYNC_LOCAL").map(String::as_str).unwrap_or(""));
+        let root = expand_user(
+            self.conf
+                .get("PROTON_SYNC_LOCAL")
+                .map(String::as_str)
+                .unwrap_or(""),
+        );
         let rel = rel.trim_matches('/');
-        let target = if rel.is_empty() { root.clone() } else { root.join(rel) };
+        let target = if rel.is_empty() {
+            root.clone()
+        } else {
+            root.join(rel)
+        };
         let dir = if target.is_dir() { target } else { root };
         std::thread::spawn(move || {
             let _ = std::process::Command::new("xdg-open")
@@ -932,7 +1027,9 @@ impl App {
     /// Qt's "Download and restart": download + checksum + staged start-up
     /// check + swap, then quit and let main() relaunch the new build.
     pub fn action_download_update(&mut self) {
-        let Some(rel) = self.upd.available.clone() else { return };
+        let Some(rel) = self.upd.available.clone() else {
+            return;
+        };
         if self.upd.downloading {
             return;
         }
@@ -965,7 +1062,11 @@ impl App {
     fn drain(&mut self, ctx: &egui::Context) {
         while let Ok(back) = self.rx.try_recv() {
             match back {
-                Back::Poll { health, active, enabled } => {
+                Back::Poll {
+                    health,
+                    active,
+                    enabled,
+                } => {
                     self.on_poll(*health, active, enabled);
                     self.tray_sync();
                 }
@@ -978,18 +1079,12 @@ impl App {
                     // sign-in, not the ordinary startup identity probe (the
                     // service already runs its first cycle on its own).
                     let was_signing_in = self.login_started.is_some();
-                    let signed_in_now = id.logged_in
-                        && self
-                            .identity
-                            .as_ref()
-                            .is_some_and(|i| !i.logged_in);
+                    let signed_in_now =
+                        id.logged_in && self.identity.as_ref().is_some_and(|i| !i.logged_in);
                     if id.logged_in {
                         self.login_started = None;
                         if let Some(email) = id.email.clone() {
-                            let _ = std::fs::write(
-                                self.paths.state_dir.join("last-email"),
-                                &email,
-                            );
+                            let _ = std::fs::write(self.paths.state_dir.join("last-email"), &email);
                             self.last_email = Some(email);
                         }
                         if was_signing_in || signed_in_now {
@@ -1017,8 +1112,7 @@ impl App {
                             .is_some_and(|t| t.elapsed() < Duration::from_secs(300))
                         && self.identity_retry.is_none()
                     {
-                        self.identity_retry =
-                            Some(Instant::now() + Duration::from_secs(10));
+                        self.identity_retry = Some(Instant::now() + Duration::from_secs(10));
                     }
                 }
                 Back::Stats { files, bytes } => {
@@ -1047,7 +1141,11 @@ impl App {
                 Back::Photos(r) => photos::on_fetched(self, r),
                 Back::PhotosDownloaded(r) => photos::on_downloaded(self, r),
                 Back::PhotosDeleted(r) => photos::on_deleted(self, r),
-                Back::PhotoThumb { name, stamp, result } => {
+                Back::PhotoThumb {
+                    name,
+                    stamp,
+                    result,
+                } => {
                     self.photos.in_flight.remove(&name);
                     match result {
                         Ok((w, h, rgba)) => {
@@ -1068,13 +1166,18 @@ impl App {
                         }
                     }
                 }
-                Back::CloudEntries { key, serial, result } => {
-                    cloud::on_entries(self, key, serial, result)
-                }
+                Back::CloudEntries {
+                    key,
+                    serial,
+                    result,
+                } => cloud::on_entries(self, key, serial, result),
                 Back::TreeEntries { key, result } => cloud::on_tree_entries(self, key, result),
-                Back::CloudMutated { ok, err, done, notify } => {
-                    cloud::on_mutated(self, ok, err, done, notify)
-                }
+                Back::CloudMutated {
+                    ok,
+                    err,
+                    done,
+                    notify,
+                } => cloud::on_mutated(self, ok, err, done, notify),
                 Back::CloudDownload { ok, err, name, n } => {
                     cloud::on_downloaded(self, ok, err, name, n)
                 }
@@ -1083,8 +1186,7 @@ impl App {
                     cloud::on_picker_folders(self, parent, folders)
                 }
                 Back::TrayToggle => {
-                    let minimized =
-                        ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+                    let minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
                     if self.hidden || minimized {
                         self.show_from_tray(ctx);
                     } else {
@@ -1104,16 +1206,16 @@ impl App {
                             if have {
                                 self.upd.label = format!(
                                     "Update available: CLI {} + GUI {} (you have {} + {}).",
-                                    rel.cli, rel.gui, cur, crate::GUI_VERSION
+                                    rel.cli,
+                                    rel.gui,
+                                    cur,
+                                    crate::GUI_VERSION
                                 );
                                 self.upd.available = Some(rel.clone());
                                 if self.tray.is_some() && self.cool.cool_ok("update", 6 * 3600) {
                                     notify::send(
                                         "Update available",
-                                        &format!(
-                                            "Proton Drive {} is ready to install.",
-                                            rel.tag
-                                        ),
+                                        &format!("Proton Drive {} is ready to install.", rel.tag),
                                     );
                                 }
                             } else {
@@ -1126,8 +1228,7 @@ impl App {
                         }
                         Err(e) => {
                             let _ = e;
-                            self.upd.label =
-                                "Could not check for updates right now.".to_string();
+                            self.upd.label = "Could not check for updates right now.".to_string();
                             self.upd.available = None;
                         }
                     }
@@ -1136,8 +1237,7 @@ impl App {
                     self.upd.downloading = false;
                     match r {
                         Ok(target) => {
-                            self.upd.label =
-                                "Updated - the new version is starting...".to_string();
+                            self.upd.label = "Updated - the new version is starting...".to_string();
                             // main() starts it once the lock is free.
                             *self.relaunch_slot.lock().unwrap() =
                                 Some(std::path::PathBuf::from(target));
@@ -1436,7 +1536,9 @@ impl App {
         };
         let signed_in = !matches!(
             self.ui_status(),
-            health::UiStatus::SignedOut | health::UiStatus::NeedsLogin | health::UiStatus::SigningIn
+            health::UiStatus::SignedOut
+                | health::UiStatus::NeedsLogin
+                | health::UiStatus::SigningIn
         ) && (self.logged_in() || self.last_email.is_some());
         let hint = if signed_in {
             "Account \u{b7} click to sign out"
@@ -1481,17 +1583,17 @@ impl App {
         let dot = c + egui::vec2(10.0, 10.0);
         ui.painter()
             .circle_filled(dot, 4.5, theme::status_color(self.status_key()));
-        ui.painter().circle_stroke(
-            dot,
-            4.5,
-            egui::Stroke::new(1.5, ui.visuals().panel_fill),
-        );
+        ui.painter()
+            .circle_stroke(dot, 4.5, egui::Stroke::new(1.5, ui.visuals().panel_fill));
         ui.painter().text(
             rect.left_center() + egui::vec2(48.0, 0.0),
             egui::Align2::LEFT_CENTER,
             // Width-aware elision: a fixed character count overflowed the
             // pill (and its chevron) on a narrow pane.
-            widgets::elide(label, ((rect.width() - 80.0) / 6.6).clamp(4.0, 24.0) as usize),
+            widgets::elide(
+                label,
+                ((rect.width() - 80.0) / 6.6).clamp(4.0, 24.0) as usize,
+            ),
             egui::FontId::proportional(13.5),
             ui.visuals().strong_text_color(),
         );
@@ -1517,8 +1619,8 @@ impl App {
                 // the whole screen and stretch the popup across the page.
                 ui.set_width(220.0);
                 ui.horizontal(|ui| {
-                    let (av, _) = ui
-                        .allocate_exact_size(egui::vec2(34.0, 34.0), egui::Sense::hover());
+                    let (av, _) =
+                        ui.allocate_exact_size(egui::vec2(34.0, 34.0), egui::Sense::hover());
                     widgets::avatar(ui, av.center(), 16.0, &ch);
                     ui.add_space(4.0);
                     ui.vertical(|ui| {
@@ -1532,10 +1634,8 @@ impl App {
                         );
                         ui.add_space(1.0);
                         ui.horizontal(|ui| {
-                            let (d, _) = ui.allocate_exact_size(
-                                egui::vec2(10.0, 10.0),
-                                egui::Sense::hover(),
-                            );
+                            let (d, _) = ui
+                                .allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
                             ui.painter().circle_filled(
                                 d.center(),
                                 4.0,
@@ -1614,7 +1714,9 @@ impl App {
 
     fn dialog_ui(&mut self, ctx: &egui::Context) {
         let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
-        let Some(dlg) = self.dialog.clone() else { return };
+        let Some(dlg) = self.dialog.clone() else {
+            return;
+        };
         let mut open = true;
         let mut act: Option<DlgAct> = None;
 
@@ -1705,31 +1807,33 @@ impl App {
                     .open(&mut open)
                     .show(ctx, |ui| {
                         ui.label(
-                            egui::RichText::new(widgets::elide(&cwd.to_string_lossy(), 70))
-                                .weak(),
+                            egui::RichText::new(widgets::elide(&cwd.to_string_lossy(), 70)).weak(),
                         );
                         ui.add_space(6.0);
-                        egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
-                            if let Some(parent) = cwd.parent()
-                                && ui.button("\u{2191}  Go up").clicked() {
+                        egui::ScrollArea::vertical()
+                            .max_height(340.0)
+                            .show(ui, |ui| {
+                                if let Some(parent) = cwd.parent()
+                                    && ui.button("\u{2191}  Go up").clicked()
+                                {
                                     act = Some(DlgAct::BrowseGo(parent.to_path_buf()));
                                 }
-                            let mut dirs: Vec<String> = std::fs::read_dir(&cwd)
-                                .map(|it| {
-                                    it.flatten()
-                                        .filter(|e| e.path().is_dir())
-                                        .map(|e| e.file_name().to_string_lossy().into_owned())
-                                        .filter(|n| !n.starts_with('.'))
-                                        .collect()
-                                })
-                                .unwrap_or_default();
-                            dirs.sort();
-                            for name in dirs {
-                                if ui.button(format!("\u{25b8}  {name}")).clicked() {
-                                    act = Some(DlgAct::BrowseGo(cwd.join(name)));
+                                let mut dirs: Vec<String> = std::fs::read_dir(&cwd)
+                                    .map(|it| {
+                                        it.flatten()
+                                            .filter(|e| e.path().is_dir())
+                                            .map(|e| e.file_name().to_string_lossy().into_owned())
+                                            .filter(|n| !n.starts_with('.'))
+                                            .collect()
+                                    })
+                                    .unwrap_or_default();
+                                dirs.sort();
+                                for name in dirs {
+                                    if ui.button(format!("\u{25b8}  {name}")).clicked() {
+                                        act = Some(DlgAct::BrowseGo(cwd.join(name)));
+                                    }
                                 }
-                            }
-                        });
+                            });
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
                             if ui.button("Cancel").clicked() || escape {
@@ -1741,7 +1845,12 @@ impl App {
                         });
                     });
             }
-            Dialog::Input { title, label, intent, .. } => {
+            Dialog::Input {
+                title,
+                label,
+                intent,
+                ..
+            } => {
                 let title = title.clone();
                 let label = label.clone();
                 let intent = intent.clone();
@@ -1763,8 +1872,7 @@ impl App {
                             ui.memory_mut(|m| m.request_focus(id));
                             self.input_focus = false;
                         }
-                        let enter =
-                            r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
                             if ui.button("Cancel").clicked() || escape {
@@ -1809,6 +1917,54 @@ impl App {
                         });
                     });
             }
+            Dialog::ConfirmHeldDeletes {
+                local,
+                cloud,
+                local_digest,
+                cloud_digest,
+                sample,
+            } => {
+                let total = local + cloud;
+                egui::Window::new(format!("Delete {total} files?"))
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .open(&mut open)
+                    .show(ctx, |ui| {
+                        if *local > 0 {
+                            ui.label(format!(
+                                "{local} files are missing from the cloud and will be moved \
+                                 to this computer's trash. You can restore them until it is emptied."
+                            ));
+                        }
+                        if *cloud > 0 {
+                            ui.label(format!(
+                                "{cloud} files are missing on this computer and will be moved \
+                                 to the Proton trash. You can restore them in any Proton Drive app."
+                            ));
+                        }
+                        if !sample.is_empty() {
+                            ui.add_space(4.0);
+                            ui.label(format!("Includes: {}.", sample.join(", ")));
+                        }
+                        ui.add_space(8.0);
+                        ui.label("This approval applies once to this exact set of files.");
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() || escape {
+                                act = Some(DlgAct::Close);
+                            }
+                            if widgets::danger_ghost_button(ui, &format!("Delete {total} files")) {
+                                act = Some(DlgAct::HeldDeleteConfirm {
+                                    local: *local,
+                                    cloud: *cloud,
+                                    local_digest: local_digest.clone(),
+                                    cloud_digest: cloud_digest.clone(),
+                                });
+                            }
+                        });
+                    });
+            }
             Dialog::ConfirmPhotoDelete { uids } => {
                 let n = uids.len();
                 let word = if n == 1 {
@@ -1839,16 +1995,18 @@ impl App {
                     });
             }
             Dialog::ConfirmDelete { n } => {
-                let word = if *n == 1 { "this item".to_string() } else { format!("these {n} items") };
+                let word = if *n == 1 {
+                    "this item".to_string()
+                } else {
+                    format!("these {n} items")
+                };
                 egui::Window::new("Delete permanently?")
                     .collapsible(false)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                     .open(&mut open)
                     .show(ctx, |ui| {
-                        ui.label(format!(
-                            "Permanently delete {word}? This cannot be undone."
-                        ));
+                        ui.label(format!("Permanently delete {word}? This cannot be undone."));
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
                             if ui.button("Cancel").clicked() || escape {
@@ -1913,21 +2071,13 @@ impl App {
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                     .open(&mut open)
                     .show(ctx, |ui| {
-                        egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-                            self.picker_row(
-                                ui,
-                                "",
-                                &format!("My Files ({root})"),
-                                0,
-                                &mut act,
-                            );
-                        });
+                        egui::ScrollArea::vertical()
+                            .max_height(360.0)
+                            .show(ui, |ui| {
+                                self.picker_row(ui, "", &format!("My Files ({root})"), 0, &mut act);
+                            });
                         ui.add_space(10.0);
-                        let can = self
-                            .cloud
-                            .picker
-                            .as_ref()
-                            .is_some_and(|p| p.sel.is_some());
+                        let can = self.cloud.picker.as_ref().is_some_and(|p| p.sel.is_some());
                         ui.horizontal(|ui| {
                             if ui.button("Cancel").clicked() || escape {
                                 act = Some(DlgAct::Close);
@@ -1966,10 +2116,7 @@ impl App {
         let (expanded, selected) = {
             match self.cloud.picker.as_ref() {
                 None => (false, false),
-                Some(p) => (
-                    p.expanded.contains(rel),
-                    p.sel.as_deref() == Some(rel),
-                ),
+                Some(p) => (p.expanded.contains(rel), p.sel.as_deref() == Some(rel)),
             }
         };
         ui.horizontal(|ui| {
@@ -2036,6 +2183,32 @@ impl App {
                 self.dialog = None;
                 cloud::action_trash(self);
             }
+            DlgAct::HeldDeleteConfirm {
+                local,
+                cloud,
+                local_digest,
+                cloud_digest,
+            } => {
+                self.dialog = None;
+                let approval = proton_core::delete_approval::DeleteApproval {
+                    local,
+                    cloud,
+                    local_digest,
+                    cloud_digest,
+                    created_at: proton_core::delete_approval::now_secs(),
+                };
+                let path = self.paths.state_dir.join("deletes-approval.json");
+                match proton_core::delete_approval::write(&path, &approval) {
+                    Ok(()) => {
+                        let _ = std::fs::write(&self.paths.wake_file, b"");
+                        self.toast(format!(
+                            "Approved {} deletion(s) once. Syncing now.",
+                            local + cloud
+                        ));
+                    }
+                    Err(e) => self.toast(format!("Could not approve the deletion: {e}")),
+                }
+            }
             DlgAct::PhotoDeleteConfirm(uids) => {
                 self.dialog = None;
                 photos::delete(self, uids);
@@ -2087,15 +2260,16 @@ impl eframe::App for App {
 
         // Re-probe sign-in after a keyring-lock report (see on_poll).
         if let Some(t) = self.identity_retry
-            && Instant::now() >= t {
-                self.identity_retry = None;
-                let tx = self.tx.clone();
-                std::thread::spawn(move || {
-                    if let Some(c) = cli::resolve_cli() {
-                        let _ = tx.send(Back::Identity(cli::fetch_identity(&c)));
-                    }
-                });
-            }
+            && Instant::now() >= t
+        {
+            self.identity_retry = None;
+            let tx = self.tx.clone();
+            std::thread::spawn(move || {
+                if let Some(c) = cli::resolve_cli() {
+                    let _ = tx.send(Back::Identity(cli::fetch_identity(&c)));
+                }
+            });
+        }
 
         // Cloud: ensure the initial listing even if the page was reached
         // without a nav click (e.g. it becomes the startup page one day).
@@ -2114,19 +2288,20 @@ impl eframe::App for App {
         // Updates: automatic check 5s after start, then every 6h (Qt's
         // updates_timer); the ETag cache keeps this free of rate limits.
         if let Some(t) = self.upd.next_check
-            && std::time::Instant::now() >= t {
-                self.upd.next_check =
-                    Some(std::time::Instant::now() + Duration::from_secs(6 * 3600));
-                if self.prefs.updates_auto() {
-                    self.action_check_updates();
-                }
+            && std::time::Instant::now() >= t
+        {
+            self.upd.next_check = Some(std::time::Instant::now() + Duration::from_secs(6 * 3600));
+            if self.prefs.updates_auto() {
+                self.action_check_updates();
             }
+        }
         // After an update swap: quit once the status label has been seen.
         if let Some(t) = self.upd.quit_at
-            && std::time::Instant::now() >= t {
-                self.upd.quit_at = None;
-                self.quit(ctx);
-            }
+            && std::time::Instant::now() >= t
+        {
+            self.upd.quit_at = None;
+            self.quit(ctx);
+        }
 
         if self.hide_on_start {
             self.hide_on_start = false;
@@ -2224,7 +2399,10 @@ impl eframe::App for App {
             theme::glass_stroke(ui.visuals()).color
         };
         ui.painter().line_segment(
-            [egui::pos2(prect.right(), prect.top() + 8.0), egui::pos2(prect.right(), prect.bottom() - 8.0)],
+            [
+                egui::pos2(prect.right(), prect.top() + 8.0),
+                egui::pos2(prect.right(), prect.bottom() - 8.0),
+            ],
             egui::Stroke::new(1.5, sep),
         );
         if hovering {
@@ -2259,8 +2437,8 @@ impl eframe::App for App {
 #[cfg(test)]
 mod glyph_tests {
     use eframe::egui;
-    use egui::epaint::text::{FontDefinitions, FontProvider, Fonts, TextOptions};
     use egui::FontId;
+    use egui::epaint::text::{FontDefinitions, FontProvider, Fonts, TextOptions};
     use std::sync::Arc;
 
     /// Every character the UI paints as an icon rather than as text.
@@ -2272,15 +2450,15 @@ mod glyph_tests {
     /// carets, the sort arrow, the tri-state boxes, the upload/download arrows
     /// and the folder emoji.
     const ICON_GLYPHS: &[char] = &[
-        '\u{25b8}', // ▸ collapsed caret
-        '\u{25be}', // ▾ expanded caret
-        '\u{25bc}', // ▼ sort descending
-        '\u{25b2}', // ▲ sort ascending
-        '\u{2611}', // ☑ folder fully selected
-        '\u{2610}', // ☐ folder not selected
-        '\u{25d0}', // ◐ folder partly selected
-        '\u{2191}', // ↑ upload
-        '\u{2193}', // ↓ download
+        '\u{25b8}',  // ▸ collapsed caret
+        '\u{25be}',  // ▾ expanded caret
+        '\u{25bc}',  // ▼ sort descending
+        '\u{25b2}',  // ▲ sort ascending
+        '\u{2611}',  // ☑ folder fully selected
+        '\u{2610}',  // ☐ folder not selected
+        '\u{25d0}',  // ◐ folder partly selected
+        '\u{2191}',  // ↑ upload
+        '\u{2193}',  // ↓ download
         '\u{1f4c1}', // 📁 local folder card
         '\u{1f4c2}', // 📂 selective-sync folder card
     ];

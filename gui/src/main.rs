@@ -27,7 +27,7 @@ use eframe::egui;
 use std::path::{Path, PathBuf};
 
 /// The GUI's own version (the release tag is `v<CLI>-gui<GUI>`).
-pub const GUI_VERSION: &str = "3.20.3";
+pub const GUI_VERSION: &str = "3.20.4";
 
 /// The systemd user unit path (shared with `service.rs`).
 pub fn service_unit_path() -> PathBuf {
@@ -36,8 +36,8 @@ pub fn service_unit_path() -> PathBuf {
 
 fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let smoke_run = args.iter().any(|a| a == "--smoke")
-        || std::env::var_os("PROTON_SYNC_SMOKE").is_some();
+    let smoke_run =
+        args.iter().any(|a| a == "--smoke") || std::env::var_os("PROTON_SYNC_SMOKE").is_some();
 
     if smoke_run {
         // Upgrade-verification boot: prove the binary starts and can read its
@@ -111,8 +111,10 @@ fn main() -> eframe::Result<()> {
         }
     };
 
-    let icon = ui::decode_png(include_bytes!("icon-256.png")).map(|(w, h, rgba)| {
-        egui::IconData { rgba, width: w as u32, height: h as u32 }
+    let icon = ui::decode_png(include_bytes!("icon-256.png")).map(|(w, h, rgba)| egui::IconData {
+        rgba,
+        width: w as u32,
+        height: h as u32,
     });
 
     let mut viewport = eframe::egui::ViewportBuilder::default()
@@ -129,7 +131,10 @@ fn main() -> eframe::Result<()> {
         viewport = viewport.with_always_on_top();
     }
 
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    let options = eframe::NativeOptions {
+        viewport,
+        ..Default::default()
+    };
     let relaunch_slot: std::sync::Arc<std::sync::Mutex<Option<PathBuf>>> =
         std::sync::Arc::default();
     let slot = relaunch_slot.clone();

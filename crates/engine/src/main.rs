@@ -4,14 +4,14 @@
 //! parity, `scan-local` prints a local tree, and `--dry-run`/`dry-run` scan
 //! real local/remote trees and print the action plan without mutating anything.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
+use proton_core::{conf, state};
 use proton_engine::cli::Cli;
 use proton_engine::filter::Filter;
 use proton_engine::loop_::run_loop;
-use proton_engine::plan::{plan_cycle, PlanConfig, PlanFixture};
+use proton_engine::plan::{PlanConfig, PlanFixture, plan_cycle};
 use proton_engine::scan::{scan_local, scan_remote};
-use proton_engine::state_update::{refresh_state, RefreshFixture, RefreshOptions};
-use proton_core::{conf, state};
+use proton_engine::state_update::{RefreshFixture, RefreshOptions, refresh_state};
 use std::path::Path;
 
 fn main() {
@@ -37,36 +37,58 @@ fn run() -> Result<()> {
                 if let Some(xdg) = std::env::var_os("XDG_STATE_HOME") {
                     std::path::PathBuf::from(xdg).join("proton-sync")
                 } else {
-                    dirs::home_dir().unwrap_or_else(|| std::path::Path::new("/").to_path_buf()).join(".local/state/proton-sync")
+                    dirs::home_dir()
+                        .unwrap_or_else(|| std::path::Path::new("/").to_path_buf())
+                        .join(".local/state/proton-sync")
                 }
             };
             let _lock = {
                 std::fs::create_dir_all(&sd)?;
                 let lock_path = sd.join("sync.lock");
-                let fh = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(&lock_path)?;
-                fs2::FileExt::try_lock_exclusive(&fh).map_err(|_| anyhow::anyhow!("another proton-sync run is already active"))?;
+                let fh = std::fs::OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(false)
+                    .open(&lock_path)?;
+                fs2::FileExt::try_lock_exclusive(&fh)
+                    .map_err(|_| anyhow::anyhow!("another proton-sync run is already active"))?;
                 fh
             };
             let home = dirs::home_dir().unwrap_or_else(|| Path::new("/").to_path_buf());
             let config_dir = dirs::config_dir().unwrap_or_else(|| home.join(".config"));
             let values = proton_core::conf::read(&config_dir.join("proton-sync.conf"));
-            let local_root = values.get("PROTON_SYNC_LOCAL").cloned().unwrap_or_else(|| home.join("ProtonDrive").to_string_lossy().into_owned());
-            let remote_root = values.get("PROTON_SYNC_REMOTE").cloned().unwrap_or_else(|| "/my-files".to_string());
-            let subfolders = values.get("PROTON_SYNC_SUBFOLDERS").cloned().unwrap_or_default();
-            let exclude = values.get("PROTON_SYNC_EXCLUDE").cloned().unwrap_or_default();
-            let propagate_deletes = values.get("PROTON_SYNC_DELETES").map(|v| v != "0").unwrap_or(true);
+            let local_root = values
+                .get("PROTON_SYNC_LOCAL")
+                .cloned()
+                .unwrap_or_else(|| home.join("ProtonDrive").to_string_lossy().into_owned());
+            let remote_root = values
+                .get("PROTON_SYNC_REMOTE")
+                .cloned()
+                .unwrap_or_else(|| "/my-files".to_string());
+            let subfolders = values
+                .get("PROTON_SYNC_SUBFOLDERS")
+                .cloned()
+                .unwrap_or_default();
+            let exclude = values
+                .get("PROTON_SYNC_EXCLUDE")
+                .cloned()
+                .unwrap_or_default();
+            let propagate_deletes = values
+                .get("PROTON_SYNC_DELETES")
+                .map(|v| v != "0")
+                .unwrap_or(true);
             let cli = Cli::new()?;
             let filter = Filter::new(&subfolders, &exclude);
             proton_engine::loop_::run_once_cycle(
-            &cli,
-            &local_root,
-            &remote_root,
-            &filter,
-            propagate_deletes,
-            None,
-            // A pending "Run full check now" applies to a one-shot run too.
-            proton_engine::loop_::take_request(&sd.join("audit-request")),
-        )
+                &cli,
+                &local_root,
+                &remote_root,
+                &filter,
+                propagate_deletes,
+                None,
+                // A pending "Run full check now" applies to a one-shot run too.
+                proton_engine::loop_::take_request(&sd.join("audit-request")),
+            )
         }
         Some("--loop") | Some("loop") => run_loop(),
         Some("help") | Some("--help") | Some("-h") | None => {
@@ -143,8 +165,14 @@ fn dry_run_cmd(_args: &[String]) -> Result<()> {
         .get("PROTON_SYNC_REMOTE")
         .cloned()
         .unwrap_or_else(|| "/my-files".to_string());
-    let subfolders = values.get("PROTON_SYNC_SUBFOLDERS").cloned().unwrap_or_default();
-    let exclude = values.get("PROTON_SYNC_EXCLUDE").cloned().unwrap_or_default();
+    let subfolders = values
+        .get("PROTON_SYNC_SUBFOLDERS")
+        .cloned()
+        .unwrap_or_default();
+    let exclude = values
+        .get("PROTON_SYNC_EXCLUDE")
+        .cloned()
+        .unwrap_or_default();
     let propagate_deletes = values
         .get("PROTON_SYNC_DELETES")
         .map(|v| v != "0")
@@ -162,7 +190,11 @@ fn dry_run_cmd(_args: &[String]) -> Result<()> {
         .tree;
     let st = state::read(&state_dir.join("state.json"));
 
-    let config = PlanConfig { propagate_deletes, wipe_min: 5 };
+    let config = PlanConfig {
+        propagate_deletes,
+        wipe_min: 5,
+        approved_mass_delete: false,
+    };
     let result = plan_cycle(&remote, &local, &st, &config);
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())

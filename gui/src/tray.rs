@@ -161,7 +161,11 @@ pub fn compose_icon(base_rgba: &[u8], base_w: usize, status_key: &str) -> Vec<u8
     let mut out = vec![0u8; C * C * 4];
     for (i, px) in canvas.iter().enumerate() {
         let a = px[3];
-        let (r, g, b) = (px[0] / a.max(1e-6), px[1] / a.max(1e-6), px[2] / a.max(1e-6));
+        let (r, g, b) = (
+            px[0] / a.max(1e-6),
+            px[1] / a.max(1e-6),
+            px[2] / a.max(1e-6),
+        );
         let o = i * 4;
         out[o] = (a * 255.0).round().clamp(0.0, 255.0) as u8;
         out[o + 1] = (r * 255.0).round().clamp(0.0, 255.0) as u8;
@@ -183,7 +187,10 @@ pub fn recent_labels(changes: &[ChangeRow]) -> Vec<(String, String)> {
             let base = full.rsplit('/').next().unwrap_or(full);
             let parent = full[..full.len() - base.len()].trim_end_matches('/');
             let name: String = base.chars().take(44).collect();
-            (format!("{name}  \u{b7}  {}", rel_time(c.ts)), parent.to_string())
+            (
+                format!("{name}  \u{b7}  {}", rel_time(c.ts)),
+                parent.to_string(),
+            )
         })
         .collect()
 }
@@ -295,12 +302,14 @@ impl ksni::Tray for AppTray {
         m.push(ksni::MenuItem::Separator);
 
         let recent: Vec<ksni::MenuItem<Self>> = if self.recent.is_empty() {
-            vec![StandardItem {
-                label: "Nothing yet".into(),
-                enabled: false,
-                ..Default::default()
-            }
-            .into()]
+            vec![
+                StandardItem {
+                    label: "Nothing yet".into(),
+                    enabled: false,
+                    ..Default::default()
+                }
+                .into(),
+            ]
         } else {
             self.recent
                 .iter()
@@ -336,11 +345,7 @@ impl Tray {
 /// Build and start the tray. Returns `None` when the desktop has no
 /// StatusNotifierWatcher (Qt's `isSystemTrayAvailable() == False` - the app
 /// keeps working, just without a tray).
-pub fn spawn(
-    tx: Sender<Back>,
-    base_rgba: Vec<u8>,
-    base_w: usize,
-) -> Option<Tray> {
+pub fn spawn(tx: Sender<Back>, base_rgba: Vec<u8>, base_w: usize) -> Option<Tray> {
     use ksni::blocking::TrayMethods;
     let tray = AppTray {
         status_key: "unknown".into(),
@@ -366,8 +371,8 @@ pub fn spawn(
 mod tests {
     use super::*;
 
-    /// Every state `health::UiStatus::key()` can produce, all ten of them.
-    const STATES: [&str; 10] = [
+    /// Every state `health::UiStatus::key()` can produce.
+    const STATES: [&str; 11] = [
         "synced",
         "syncing",
         "paused",
@@ -375,6 +380,7 @@ mod tests {
         "signed_out",
         "signing_in",
         "engine_stopped",
+        "deletes_held",
         "starting",
         "error",
         "unknown",
@@ -398,7 +404,11 @@ mod tests {
         // No dot may be the cloud's own purple, or it would vanish on it.
         let [ar, ag, ab, _] = crate::theme::ACCENT.to_array();
         for key in STATES {
-            assert_ne!(dot_color(key), [ar, ag, ab], "{key} must not be the cloud colour");
+            assert_ne!(
+                dot_color(key),
+                [ar, ag, ab],
+                "{key} must not be the cloud colour"
+            );
         }
         // The opposites must never look alike: welcome vs booting, or vs paused.
         assert_ne!(dot_color("signed_out"), dot_color("starting"));

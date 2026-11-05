@@ -84,8 +84,11 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
   or sign out from its menu.
 
 **Safety built in:** deletes follow both ways but **only to trash** (never
-permanent); a wipe guard holds mass deletions; conflicts keep both versions;
-one app-wide lock protects the CLI's keyring session.
+permanent); large batches wait for your explicit approval, an empty-side wipe
+guard blocks sick scans, and conflicts keep both versions. Cloud deletions go
+to the desktop trash; local deletions go to
+`~/.local/state/proton-sync/trash`. One app-wide lock protects the CLI's
+keyring session.
 
 ## Use the CLI directly
 

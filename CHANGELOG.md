@@ -1,3 +1,27 @@
+## 3.20.4 — 2026-11-05
+
+- **Large deletions now wait for your approval.** A batch affecting 25 or more
+  paths, at least half of a small library, or an entire folder with five or
+  more synced files is held for one cycle. Nothing is deleted until you review
+  the exact path set on Home and approve that batch once.
+- **An empty side is still never approvable.** If one side looks completely
+  empty while the other has files, the wipe guard holds everything and tells
+  you to restore the folder or fix the sync path.
+- **Approval is one-shot and path-bound.** The engine matches the reviewed
+  counts and a stable digest of both path sets, consumes the approval on read,
+  and rejects stale or mismatched approvals. Disabling deletion propagation
+  still disables all deletions.
+- **Local trash keeps its paths.** `~/.local/state/proton-sync/trash` now keeps
+  the relative folder layout and suffixes collisions instead of overwriting
+  same-named files. A failed move is reported and retried instead of being
+  logged as success.
+- **Honest status.** Home and the tray show "Deletions paused" with the counts
+  and top-level names; the old "You're up to date" claim is gone while a hold is
+  active.
+- Known residual: a malformed Proton listing that drops fewer than the above
+  thresholds can still be treated as an ordinary deletion. That scan-validation
+  hardening is the next safety patch.
+
 ## 3.20.3 — 2026-11-05
 
 - **The tile grid fills its card.** Columns are computed from the card width and

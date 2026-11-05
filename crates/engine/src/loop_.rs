@@ -5,22 +5,36 @@ use crate::action::Action;
 use crate::cli::Cli;
 use crate::execute::execute;
 use crate::filter::Filter;
-use crate::plan::{plan_cycle, PlanConfig};
+use crate::plan::{PlanConfig, plan_cycle};
 use crate::scan::{scan_local, scan_remote};
-use crate::state_update::{refresh_state, RefreshOptions};
+use crate::state_update::{RefreshOptions, refresh_state};
 use anyhow::Result;
-use proton_core::{conf, health::Health, state};
+use proton_core::{conf, delete_approval, health::Health, state};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+fn approval_matches(
+    approval: &delete_approval::DeleteApproval,
+    result: &crate::plan::PlanResult,
+) -> bool {
+    !result.deletes_wipe_guard
+        && result.deletes_held > 0
+        && approval.local == result.deletes_held_local as u64
+        && approval.cloud == result.deletes_held_cloud as u64
+        && result.deletes_held_local_digest.as_deref().unwrap_or("") == approval.local_digest
+        && result.deletes_held_cloud_digest.as_deref().unwrap_or("") == approval.cloud_digest
+}
+
 fn state_dir() -> std::path::PathBuf {
     if let Some(xdg) = std::env::var_os("XDG_STATE_HOME") {
         std::path::PathBuf::from(xdg).join("proton-sync")
     } else {
-        dirs::home_dir().unwrap_or_else(|| std::path::Path::new("/").to_path_buf()).join(".local/state/proton-sync")
+        dirs::home_dir()
+            .unwrap_or_else(|| std::path::Path::new("/").to_path_buf())
+            .join(".local/state/proton-sync")
     }
 }
 
@@ -42,8 +56,14 @@ pub fn run_loop() -> Result<()> {
         .get("PROTON_SYNC_REMOTE")
         .cloned()
         .unwrap_or_else(|| "/my-files".to_string());
-    let subfolders = values.get("PROTON_SYNC_SUBFOLDERS").cloned().unwrap_or_default();
-    let exclude = values.get("PROTON_SYNC_EXCLUDE").cloned().unwrap_or_default();
+    let subfolders = values
+        .get("PROTON_SYNC_SUBFOLDERS")
+        .cloned()
+        .unwrap_or_default();
+    let exclude = values
+        .get("PROTON_SYNC_EXCLUDE")
+        .cloned()
+        .unwrap_or_default();
     let propagate_deletes = values
         .get("PROTON_SYNC_DELETES")
         .map(|v| v != "0")
@@ -62,7 +82,10 @@ pub fn run_loop() -> Result<()> {
     // inotify
     #[cfg(target_os = "linux")]
     {
-        let inotify = values.get("PROTON_SYNC_INOTIFY").map(|v| v != "0").unwrap_or(true);
+        let inotify = values
+            .get("PROTON_SYNC_INOTIFY")
+            .map(|v| v != "0")
+            .unwrap_or(true);
         if inotify {
             let root = local_root.clone();
             let w = wake.clone();
@@ -101,17 +124,19 @@ pub fn run_loop() -> Result<()> {
     let w2 = wake.clone();
     let we2 = wake_event.clone();
     let wm2 = wake_mutex.clone();
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(1));
-        let mut woke = take_request(&wake_file);
-        if take_request(&audit_file) {
-            full_flag.store(true, std::sync::atomic::Ordering::Relaxed);
-            woke = true;
-        }
-        if woke {
-            w2.store(true, std::sync::atomic::Ordering::Relaxed);
-            let _guard = wm2.lock().unwrap();
-            we2.notify_all();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let mut woke = take_request(&wake_file);
+            if take_request(&audit_file) {
+                full_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                woke = true;
+            }
+            if woke {
+                w2.store(true, std::sync::atomic::Ordering::Relaxed);
+                let _guard = wm2.lock().unwrap();
+                we2.notify_all();
+            }
         }
     });
 
@@ -135,9 +160,8 @@ pub fn run_loop() -> Result<()> {
         // the first cycle runs at once; later ones wait for the interval, a
         // wake, or a short auth retry after a boot-time keyring failure
         if !first {
-            let deadline = retry_at.or_else(|| {
-                (interval > 0).then(|| last_cycle + Duration::from_secs(interval))
-            });
+            let deadline = retry_at
+                .or_else(|| (interval > 0).then(|| last_cycle + Duration::from_secs(interval)));
             wait_for_cycle(&wake, &wake_event, &wake_mutex, deadline);
         }
         first = false;
@@ -148,11 +172,13 @@ pub fn run_loop() -> Result<()> {
                 Default::default()
             }
         };
-        let push_ctx = event_watch.as_ref().map(|watch| crate::events::PushContext {
-            pending: &scopes,
-            volume: &watch.volume,
-            root_uid: &watch.root_uid,
-        });
+        let push_ctx = event_watch
+            .as_ref()
+            .map(|watch| crate::events::PushContext {
+                pending: &scopes,
+                volume: &watch.volume,
+                root_uid: &watch.root_uid,
+            });
         let cycle_start = Instant::now();
         // A "Run full check now" request also disables the cached fast path
         // for exactly this cycle.
@@ -250,10 +276,17 @@ pub fn run_once_cycle(
     force_full: bool,
 ) -> Result<()> {
     let t0 = SystemTime::now();
-    let started = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+    let started = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
     crate::health::write_health(&Health {
         status: "syncing".to_string(),
-        started: Some(chrono::DateTime::<chrono::Utc>::from_timestamp(started, 0).unwrap_or_default().to_rfc3339()),
+        started: Some(
+            chrono::DateTime::<chrono::Utc>::from_timestamp(started, 0)
+                .unwrap_or_default()
+                .to_rfc3339(),
+        ),
         ..Default::default()
     });
 
@@ -274,7 +307,10 @@ pub fn run_once_cycle(
         downloaded.extend(out.downloaded);
         // the tree on disk changed: plan against what actually landed
         local = scan_local(Path::new(local_root), filter);
-        crate::scan::RemoteScan { tree: out.tree, full: true }
+        crate::scan::RemoteScan {
+            tree: out.tree,
+            full: true,
+        }
     } else if force_full {
         // "Run full check now": neither the event scopes nor the cached tree
         // may answer this cycle - list every folder.
@@ -305,11 +341,32 @@ pub fn run_once_cycle(
     // sees both sides matching instead of planning the same update again.
     let st = state::read(&state_path);
 
-    let config = PlanConfig { propagate_deletes, wipe_min: 5 };
-    let result = plan_cycle(&remote, &local, &st, &config);
+    let approval = delete_approval::take(
+        &state_dir().join("deletes-approval.json"),
+        delete_approval::now_secs(),
+    );
+    let mut config = PlanConfig {
+        propagate_deletes,
+        wipe_min: 5,
+        approved_mass_delete: false,
+    };
+    let mut result = plan_cycle(&remote, &local, &st, &config);
+    if let Some(approval) = approval
+        && approval_matches(&approval, &result)
+    {
+        config.approved_mass_delete = true;
+        result = plan_cycle(&remote, &local, &st, &config);
+    }
 
     if !result.actions.is_empty() {
-        let (f, d) = execute(&result.actions, &remote, &local, remote_root, Path::new(local_root), filter)?;
+        let (f, d) = execute(
+            &result.actions,
+            &remote,
+            &local,
+            remote_root,
+            Path::new(local_root),
+            filter,
+        )?;
         failed.extend(f);
         downloaded.extend(d);
     }
@@ -382,14 +439,30 @@ pub fn run_once_cycle(
     }
 
     let secs = t0.elapsed().unwrap_or_default().as_secs_f64();
+    let status = if result.deletes_wipe_guard || result.deletes_held > 0 {
+        "deletes_held"
+    } else {
+        "ok"
+    };
     crate::health::write_health(&Health {
-        status: "ok".to_string(),
+        status: status.to_string(),
         cycle_seconds: Some(secs),
         actions: result.actions.len() as u64,
-        uploaded: result.actions.iter().filter(|a| matches!(a, Action::Up { .. }) && !failed.contains(a.rel())).count() as u64,
+        uploaded: result
+            .actions
+            .iter()
+            .filter(|a| matches!(a, Action::Up { .. }) && !failed.contains(a.rel()))
+            .count() as u64,
         downloaded: downloaded.len() as u64,
         failed: failed.len() as u64,
         holds: result.holds as u64,
+        deletes_held: result.deletes_held as u64,
+        deletes_held_local: result.deletes_held_local as u64,
+        deletes_held_cloud: result.deletes_held_cloud as u64,
+        deletes_held_local_digest: result.deletes_held_local_digest.clone(),
+        deletes_held_cloud_digest: result.deletes_held_cloud_digest.clone(),
+        deletes_held_sample: result.deletes_held_sample.clone(),
+        deletes_wipe_guard: result.deletes_wipe_guard,
         remote_entries: Some(remote2.len() as u64),
         local_entries: Some(local2.len() as u64),
         state_records: Some(saved.len() as u64),
@@ -420,25 +493,25 @@ fn scoped_remote(
         return Ok(None);
     }
     let mut tree = snapshot.view();
-    let (groups, unknown) = crate::events::resolve_event_scopes(
-        push.pending,
-        &tree,
-        push.volume,
-        push.root_uid,
-    );
+    let (groups, unknown) =
+        crate::events::resolve_event_scopes(push.pending, &tree, push.volume, push.root_uid);
     if unknown > 0 || groups.is_empty() {
         return Ok(None);
     }
     let state_path = state_dir().join("state.json");
     let mut state = proton_core::state::read(&state_path);
     let mut state_dirty = false;
-    let fast = FastEdit { cli, remote_root, local_root };
+    let fast = FastEdit {
+        cli,
+        remote_root,
+        local_root,
+    };
     crate::cli::with_cli_lock(|| -> Result<()> {
         for (rel, events) in &groups {
             // A single content update of a file we already know can be
             // downloaded straight by UID: no parent listing, one CLI call.
-            let handled = events.len() == 1
-                && fast.download(&mut state, &mut tree, &events[0], push.volume);
+            let handled =
+                events.len() == 1 && fast.download(&mut state, &mut tree, &events[0], push.volume);
             if handled {
                 state_dirty = true;
             } else {
@@ -712,10 +785,7 @@ fn inotify_watch(
                 }
             }
             if event.mask
-                & (libc::IN_CLOSE_WRITE
-                    | libc::IN_MOVED_FROM
-                    | libc::IN_MOVED_TO
-                    | libc::IN_DELETE)
+                & (libc::IN_CLOSE_WRITE | libc::IN_MOVED_FROM | libc::IN_MOVED_TO | libc::IN_DELETE)
                 != 0
             {
                 settled = true;
@@ -767,8 +837,13 @@ fn acquire_process_lock() -> anyhow::Result<std::fs::File> {
     let sd = state_dir();
     std::fs::create_dir_all(&sd)?;
     let lock_path = sd.join("sync.lock");
-    let fh = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(&lock_path)?;
-    fh.try_lock_exclusive().map_err(|_| anyhow::anyhow!("another proton-sync run is already active"))?;
+    let fh = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)?;
+    fh.try_lock_exclusive()
+        .map_err(|_| anyhow::anyhow!("another proton-sync run is already active"))?;
     Ok(fh)
 }
 
@@ -779,11 +854,42 @@ pub fn take_request(path: &Path) -> bool {
     path.exists() && fs::remove_file(path).is_ok()
 }
 
-
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn approval_must_match_the_reviewed_paths_and_never_a_wipe() {
+        let result = crate::plan::PlanResult {
+            actions: Vec::new(),
+            holds: 0,
+            wipe_guard: Vec::new(),
+            deletes_held: 2,
+            deletes_held_local: 2,
+            deletes_held_cloud: 0,
+            deletes_held_local_digest: Some("aa".into()),
+            deletes_held_cloud_digest: None,
+            deletes_held_sample: vec!["A".into()],
+            deletes_wipe_guard: false,
+        };
+        let approval = delete_approval::DeleteApproval {
+            local: 2,
+            cloud: 0,
+            local_digest: "aa".into(),
+            cloud_digest: String::new(),
+            created_at: 1,
+        };
+        assert!(approval_matches(&approval, &result));
+
+        let mut wrong_paths = approval.clone();
+        wrong_paths.local_digest = "bb".into();
+        assert!(!approval_matches(&wrong_paths, &result));
+
+        let mut wipe = result;
+        wipe.deletes_wipe_guard = true;
+        assert!(!approval_matches(&approval, &wipe));
+    }
 
     fn wait_until(mut done: impl FnMut() -> bool, timeout: Duration) -> bool {
         let start = Instant::now();
@@ -898,7 +1004,10 @@ mod tests {
         let woke = wait_until(|| wake.load(Ordering::Relaxed), Duration::from_secs(2));
         std::fs::remove_dir_all(&root).ok();
         assert!(created, "the watcher did not create the sync root");
-        assert!(woke, "a file in the newly created root did not wake the engine");
+        assert!(
+            woke,
+            "a file in the newly created root did not wake the engine"
+        );
     }
 
     /// A change that lands while a cycle is running must not be lost: the
