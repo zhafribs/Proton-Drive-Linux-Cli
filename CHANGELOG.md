@@ -1,3 +1,19 @@
+## 3.20.11 — 2026-11-05
+
+- **The shipped licence file now covers the signing crates.** Regenerating it
+  added `ed25519-dalek`, `curve25519-dalek`, `fiat-crypto` and their
+  dependencies. CI now regenerates the file and fails if the committed copy is
+  stale, so a future dependency cannot ship without its licence text.
+- **The signature gate is regression-tested.** The fixture suite now has 12
+  cases, including a missing signature, a tampered signature, the wrong signing
+  key, and embedded-key drift.
+- **Key rotation is executable.** `SIGN_RELEASE_VERIFY_KEY` and
+  `ALLOW_KEY_ROTATION=1` support a transitional release signed by the old key
+  while embedding the new one; the exact commands are in the signed-updates
+  design doc.
+- The release notes now state that pre-3.20.10 versions do not verify
+  signatures.
+
 ## 3.20.10 — 2026-11-05
 
 - **Updates are signed.** Every release now publishes `SHA256SUMS.sig`, an

@@ -1307,6 +1307,8 @@ mod tests {
             &signature.to_bytes()
         ));
         assert!(!verify_manifest_with("not-hex", manifest, &signature.to_bytes()));
+        assert!(!verify_manifest_signature(manifest, &[0u8; 63]));
+        assert!(!verify_manifest_signature(manifest, &[0u8; 65]));
     }
 
     #[test]

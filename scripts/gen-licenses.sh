@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # gen-licenses.sh - regenerate the GUI's aggregated third-party licence
-# texts from the exact dependency graph pinned in gui/Cargo.lock. The
+# texts from the exact dependency graph pinned in Cargo.lock. The
 # output (src/licenses/proton-drive-gui-THIRD-PARTY.txt) ships inside every
 # release AppImage, so every licence that covers the shipped binary is
 # readable on the machine that runs it. Run it after any dependency change
@@ -22,4 +22,7 @@ OUT="$ROOT/src/licenses/proton-drive-gui-THIRD-PARTY.txt"
 cd "$ROOT/gui"
 cargo about generate --config about.toml --workspace \
     license-template.hbs --output-file "$OUT"
+# License texts occasionally carry trailing spaces; keep the generated file
+# clean so `git diff --check` and the CI freshness check stay deterministic.
+sed -i 's/[[:space:]]\+$//' "$OUT"
 echo "wrote $OUT ($(wc -l <"$OUT") lines)"

@@ -99,7 +99,7 @@ openssl pkeyutl -verify -pubin -inkey "$PUBLIC_KEY" -rawin \
 
 # The public key file and the key embedded in the updater must be the same.
 # Fixtures override the path with a throwaway key, so only check the real one.
-if [ -z "${CHECK_RELEASE_PUBLIC_KEY:-}" ]; then
+if [ -z "${CHECK_RELEASE_PUBLIC_KEY:-}" ] && [ "${ALLOW_KEY_ROTATION:-0}" != "1" ]; then
     embedded="$(sed -n 's/.*UPDATE_PUBLIC_KEY_HEX: &str = "\([0-9a-f]*\)";/\1/p' \
         "$ROOT/gui/src/release.rs" | head -1)"
     derived="$(openssl pkey -pubin -in "$PUBLIC_KEY" -outform DER 2>/dev/null \

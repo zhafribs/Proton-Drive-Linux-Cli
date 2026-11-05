@@ -96,6 +96,21 @@ expect_fail "wrong checksum" \
     'printf "%s  %s\n" "0000000000000000000000000000000000000000000000000000000000000000" "ProtonDrive-CLI-1.2.3-GUI-9.9.9-x86_64.AppImage" > "$root/dist/SHA256SUMS"'
 expect_fail "unsubstituted template" \
     'printf "@GUI_VERSION@\n" >> "$root/build/ProtonDrive-CLI.AppDir/usr/share/metainfo/io.github.zhafribs.protondrivecli.appdata.xml"'
+expect_fail "missing manifest signature" \
+    'rm "$root/dist/SHA256SUMS.sig"'
+expect_fail "tampered manifest signature" \
+    'printf "bad" >> "$root/dist/SHA256SUMS.sig"'
+expect_fail "wrong signing key" \
+    'openssl genpkey -algorithm ED25519 -out "$root/other-key.pem" 2>/dev/null; openssl pkey -in "$root/other-key.pem" -pubout -out "$root/src/update-signing-key.pub" 2>/dev/null'
+
+# Embedded-key drift is only checked when CHECK_RELEASE_PUBLIC_KEY is unset.
+root="$(fixture)"
+mkdir -p "$root/gui/src"
+printf 'const UPDATE_PUBLIC_KEY_HEX: &str = "%064d";\n' 0 > "$root/gui/src/release.rs"
+if CHECK_RELEASE_ROOT="$root" "$GATE" >/dev/null 2>&1; then
+    echo "FAIL: embedded key drift was accepted" >&2
+    exit 1
+fi
 
 # The version-bump guard needs a real git tag, so it gets its own fixture.
 root="$(fixture)"
@@ -113,4 +128,4 @@ ALLOW_SAME_VERSION=1 CHECK_RELEASE_ROOT="$root" CHECK_RELEASE_PUBLIC_KEY="$root/
 ALLOW_SAME_VERSION=true CHECK_RELEASE_ROOT="$root" CHECK_RELEASE_PUBLIC_KEY="$root/src/update-signing-key.pub" "$GATE" >/dev/null 2>&1 \
     || { echo "FAIL: force-rebuild true override was rejected" >&2; exit 1; }
 
-echo "check-release fixtures: 8/8 passed"
+echo "check-release fixtures: 12/12 passed"

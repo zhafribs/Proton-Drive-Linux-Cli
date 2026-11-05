@@ -34,9 +34,16 @@ before executing anything.
   embedded in `gui/src/release.rs`. `check-release.sh` derives the hex from the
   PEM and fails if the two differ.
 - Rotation: ship a release signed with the old key that embeds the new public
-  key, then switch the secret. Keep the old private key until no supported
-  release still trusts it. Losing the only private key stops new signatures,
-  but users can still download manually.
+  key, then switch the secret. The stock scripts support the transition:
+  ```bash
+  # transitional release: old key signs, new key is embedded
+  SIGN_RELEASE_VERIFY_KEY=old.pub UPDATE_SIGNING_KEY_FILE=old.pem ./scripts/sign-release.sh
+  CHECK_RELEASE_PUBLIC_KEY=old.pub ALLOW_KEY_ROTATION=1 ./scripts/check-release.sh
+  ```
+  Keep the old private key until no supported release still trusts it. Users
+  who skip the transitional release will reject post-rotation releases; the
+  release notes must call that out. Losing the only private key stops new
+  signatures, but users can still download manually.
 
 ## Release assets
 
@@ -78,15 +85,20 @@ signature is missing or invalid, so an unsigned manifest cannot be published.
   malformed key fail.
 - `download_plan`: trusted/untrusted URLs, digest shape, signed-manifest assets,
   install target.
-- `check-release` fixtures: 8 cases including signature verification, key
-  drift, stale version, empty changelog and force-rebuild override.
+- `check-release` fixtures: 12 cases including missing/tampered signature,
+  wrong signing key, embedded-key drift, stale version, empty changelog and
+  force-rebuild override.
 - Real build test: `./build.sh`, `scripts/sign-release.sh`,
   `scripts/check-release.sh` on the 3.20.10 AppImage.
+- CI regenerates `src/licenses/proton-drive-gui-THIRD-PARTY.txt` with
+  `cargo-about` and fails if the committed file differs, so a new dependency
+  cannot ship without its licence text.
 
 ## Residual risks
 
-- The first signed release (3.20.10) is installed by 3.20.9, which does not yet
-  verify signatures. From 3.20.10 onward every update is verified.
+- The first signed release (3.20.10) is installed by every pre-3.20.10
+  version, none of which verify signatures. From 3.20.10 onward every update
+  is verified.
 - The release workflow can read the signing secret; CI compromise remains a
   trusted-root risk. Offline signing or a protected environment is the next
   step if that threat matters.

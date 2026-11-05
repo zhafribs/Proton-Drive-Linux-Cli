@@ -88,6 +88,13 @@ jobs:
       - name: Test
         run: cargo test --workspace --all-targets
 
+      - name: Check third-party licences are current
+        run: |
+          command -v cargo-about >/dev/null 2>&1 \
+            || cargo install cargo-about --locked --features cli
+          ./scripts/gen-licenses.sh
+          git diff --exit-code -- src/licenses/proton-drive-gui-THIRD-PARTY.txt
+
       - name: Clippy
         run: cargo clippy --release --workspace --all-targets -- -D warnings
 
