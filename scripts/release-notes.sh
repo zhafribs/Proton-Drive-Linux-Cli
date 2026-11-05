@@ -57,7 +57,10 @@ awk -v ver="$GUI_VERSION" '
     on && $1 == "##"        { on = 0 }
     on                      { print }
 ' "$ROOT/CHANGELOG.md" > "$CHANGELOG_SECTION"
-[ -s "$CHANGELOG_SECTION" ] || printf 'Maintenance rebuild of %s (packaging refresh).\n' "$GUI_VERSION" > "$CHANGELOG_SECTION"
+[ -s "$CHANGELOG_SECTION" ] \
+    || { echo "error: CHANGELOG.md has no content for GUI ${GUI_VERSION}" >&2; exit 1; }
+grep -qE '^[[:space:]]*-[[:space:]]+' "$CHANGELOG_SECTION" \
+    || { echo "error: CHANGELOG.md section for GUI ${GUI_VERSION} has no bullets" >&2; exit 1; }
 # drop the blank line under the header and any trailing blanks, so the
 # section sits flush in the notes
 sed -i -e '/./,$!d' -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$CHANGELOG_SECTION"

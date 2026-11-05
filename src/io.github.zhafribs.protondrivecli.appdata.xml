@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.zhafrisbs.protondrivecli</id>
+  <id>io.github.zhafribs.protondrivecli</id>
   <name>Proton Drive</name>
   <summary>Sync and manage your Proton Drive - unofficial AppImage with the official CLI inside</summary>
   <metadata_license>CC0-1.0</metadata_license>
@@ -35,14 +35,14 @@
       next to this file.
     </p>
   </description>
-  <launchable type="desktop-id">io.github.zhafrisbs.protondrivecli.desktop</launchable>
+  <launchable type="desktop-id">io.github.zhafribs.protondrivecli.desktop</launchable>
   <provides>
     <binary>proton-drive</binary>
   </provides>
-  <url type="homepage">https://proton.me/download/drive/cli/index.html</url>
-  <url type="vcs-browser">https://github.com/ProtonDriveApps</url>
-  <developer id="proton.me">
-    <name>Proton AG (upstream binary)</name>
+  <url type="homepage">https://github.com/zhafribs/Proton-Drive-Linux-Cli</url>
+  <url type="vcs-browser">https://github.com/zhafribs/Proton-Drive-Linux-Cli</url>
+  <developer id="io.github.zhafribs">
+    <name>Zhafri Syazwi</name>
   </developer>
   <categories>
     <category>Network</category>
@@ -50,7 +50,7 @@
     <category>Utility</category>
   </categories>
   <releases>
-    <release version="0.9.0" date="2026-10-05"/>
+    <release version="@GUI_VERSION@" date="@RELEASE_DATE@"/>
   </releases>
   <content_rating type="oars-1.1"/>
   <custom>

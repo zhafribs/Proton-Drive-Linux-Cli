@@ -1,3 +1,32 @@
+## 3.20.9 — 2026-11-05
+
+- **Releases are verified before publishing.** CI now runs the full test suite
+  and clippy in a read-only job before the release job can start. A separate
+  release gate checks the changelog section, AppDir metadata, GUI version,
+  engine binary, `--smoke` output and SHA-256 sums. A stale version or an empty
+  changelog fails instead of publishing a maintenance stub.
+- **The sync engine now has the same 2.28 glibc floor as the GUI.** It was
+  built natively on the CI runner, so the 3.20.8 engine actually required
+  GLIBC_2.39 while the README promised 2.28. GUI, engine and AppRun are now
+  cross-built and checked with `readelf`; a newer symbol version fails the
+  build.
+- **Build tools are pinned.** appimagetool 1.9.1 and the AppImage type2
+  runtime (20251108) are checksum-verified, and Zig 0.15.2 is checksum-verified
+  when fetched and version-checked on a cache hit. The Rust toolchain is pinned
+  in `rust-toolchain.toml`.
+- **The updater is harder to redirect.** Downloads go into a private 0700
+  directory with `create_new`, only this repository's GitHub release host and
+  GitHub's asset CDN are accepted (including each redirect hop), the body is
+  capped, malformed digests are rejected, and a private writable install
+  directory is required before any download starts.
+- **Update recovery cannot delete another file.** The marker is validated in
+  both the recovery and health-confirmation paths: `old` must be exactly
+  `<app>.old` and `new` must equal the running AppImage. A failed swap restores
+  the old build immediately.
+- **Metadata is correct.** The desktop/metainfo ids move from `zhafrisbs` to
+  `zhafribs`, developer and homepage point at this project, and the AppStream
+  and desktop versions are filled from `GUI_VERSION` at build time.
+
 ## 3.20.8 — 2026-11-05
 
 - **A conflict can no longer overwrite your local edit.** The remote revision

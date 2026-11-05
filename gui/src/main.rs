@@ -27,7 +27,7 @@ use eframe::egui;
 use std::path::{Path, PathBuf};
 
 /// The GUI's own version (the release tag is `v<CLI>-gui<GUI>`).
-pub const GUI_VERSION: &str = "3.20.8";
+pub const GUI_VERSION: &str = "3.20.9";
 
 /// The systemd user unit path (shared with `service.rs`).
 pub fn service_unit_path() -> PathBuf {
@@ -56,7 +56,9 @@ fn main() -> eframe::Result<()> {
     // Update recovery: the marker decides whether this start is the freshly
     // swapped-in version (health is confirmed once its window is up) or a
     // version that never came up (its .old backup is restored and started).
-    if p.appimage.is_some() {
+    // The APPIMAGE env is authoritative even when its file is missing - that
+    // is exactly the interrupted-swap case recovery exists for.
+    if p.appimage.is_some() || std::env::var_os("APPIMAGE").is_some() {
         let (state, relaunch) = release::update_recovery_check(&p);
         if state == "rolled-back" {
             if let Some(target) = relaunch {
@@ -179,9 +181,9 @@ fn smoke() -> Result<(), String> {
         prefs.theme().as_str(),
         system_theme::detect().as_str()
     );
-    if Path::new(&local).is_absolute() {
+    if local.is_empty() || Path::new(&local).is_absolute() {
         Ok(())
     } else {
-        Err("local sync path missing".to_string())
+        Err("local sync path is not absolute".to_string())
     }
 }

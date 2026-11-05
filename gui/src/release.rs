@@ -4,7 +4,14 @@
 
 use crate::paths::{Paths, RELEASE_API};
 use serde_json::Value;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+/// A build is ~60 MB; anything past this is not an AppImage we will execute.
+const MAX_UPDATE_BYTES: u64 = 256 * 1024 * 1024;
+/// SHA256SUMS is a few hundred bytes; cap a hostile response before reading.
+const MAX_SUMS_BYTES: u64 = 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct Asset {
@@ -33,13 +40,42 @@ impl Release {
             .map(|a| a.url.as_str())
     }
 
-    /// The release API's per-asset SHA-256, without the `sha256:` prefix.
-    pub fn asset_digest(&self, name: &str) -> Option<&str> {
+    /// The release API's raw per-asset digest. Callers must pass it through
+    /// [`normalize_sha256`] before trusting it.
+    fn asset_digest_raw(&self, name: &str) -> Option<&str> {
         self.assets
             .iter()
             .find(|a| a.name == name)
             .and_then(|a| a.digest.as_deref())
     }
+}
+
+/// Accept only a 64-character SHA-256; strip the API's `sha256:` prefix and
+/// normalize case. A malformed API digest must be rejected, not ignored.
+fn normalize_sha256(raw: &str) -> Option<String> {
+    let hex = raw.strip_prefix("sha256:").unwrap_or(raw).to_ascii_lowercase();
+    (hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit())).then_some(hex)
+}
+
+/// The updater only talks to this repository's releases and GitHub's asset
+/// CDN. Hosts are matched exactly, so `github.com.evil` or userinfo tricks do
+/// not pass. The digest is still the integrity check; this is defence in depth.
+fn trusted_download_url(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    let Some((host, path)) = rest.split_once('/') else {
+        return false;
+    };
+    match host {
+        "github.com" => path.starts_with("zhafribs/Proton-Drive-Linux-Cli/releases/download/"),
+        "release-assets.githubusercontent.com" | "objects.githubusercontent.com" => true,
+        _ => false,
+    }
+}
+
+fn host_of(url: &str) -> Option<&str> {
+    url.strip_prefix("https://")?.split('/').next()
 }
 
 /// "v0.9.0-gui3.14.0" -> ("0.9.0", "3.14.0").
@@ -188,24 +224,92 @@ fn read_fresh(
     Ok((rel, false))
 }
 
-/// Download an asset to a temp path; returns bytes written.
+/// GET following at most a few redirects, validating every hop. GitHub serves
+/// release assets from `release-assets.githubusercontent.com`; anything else
+/// is refused before its bytes are read.
+fn get_following(
+    agent: &ureq::Agent,
+    url: &str,
+) -> Result<ureq::http::Response<ureq::Body>, String> {
+    let mut current = url.to_string();
+    for _ in 0..4 {
+        if !trusted_download_url(&current) {
+            return Err(format!("untrusted download URL: {current}"));
+        }
+        let resp = agent
+            .get(&current)
+            .header("User-Agent", "Proton-Drive-Linux-Cli")
+            .call()
+            .map_err(|e| format!("download failed: {e}"))?;
+        let status = resp.status().as_u16();
+        if (300..400).contains(&status) {
+            let location = resp
+                .headers()
+                .get("location")
+                .and_then(|v| v.to_str().ok())
+                .ok_or_else(|| format!("redirect without a location (HTTP {status})"))?;
+            current = if location.starts_with("https://") {
+                location.to_string()
+            } else if location.starts_with('/') {
+                format!("https://{}{}", host_of(&current).unwrap_or(""), location)
+            } else {
+                return Err(format!("unexpected redirect target: {location}"));
+            };
+            continue;
+        }
+        return Ok(resp);
+    }
+    Err("too many redirects".to_string())
+}
+
+/// Copy at most `limit` bytes; one byte over is an error, not a truncated file.
+fn copy_capped<R: Read, W: std::io::Write>(
+    reader: &mut R,
+    writer: &mut W,
+    limit: u64,
+) -> std::io::Result<u64> {
+    let n = std::io::copy(&mut reader.take(limit + 1), writer)?;
+    if n > limit {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "download too large",
+        ));
+    }
+    Ok(n)
+}
+
+/// Download an asset to a new file; returns bytes written.
 pub fn download(url: &str, dest: &std::path::Path) -> Result<u64, String> {
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(1800)))
+        .max_redirects(0)
         .build();
     let agent = ureq::Agent::new_with_config(config);
-    let mut resp = agent
-        .get(url)
-        .header("User-Agent", "Proton-Drive-Linux-Cli")
-        .call()
-        .map_err(|e| format!("download failed: {e}"))?;
+    let mut resp = get_following(&agent, url)?;
     if resp.status().as_u16() != 200 {
         return Err(format!("download: HTTP {}", resp.status()));
     }
-    let mut file = std::fs::File::create(dest).map_err(|e| e.to_string())?;
-    let n = std::io::copy(&mut resp.body_mut().as_reader(), &mut file)
-        .map_err(|e| format!("download write: {e}"))?;
-    Ok(n)
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(dest)
+            .map_err(|e| e.to_string())?
+    };
+    #[cfg(not(unix))]
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(dest)
+        .map_err(|e| e.to_string())?;
+    let mut reader = resp.body_mut().as_reader();
+    copy_capped(&mut reader, &mut file, MAX_UPDATE_BYTES).map_err(|e| match e.kind() {
+        std::io::ErrorKind::InvalidData => "update is too large".to_string(),
+        _ => format!("download write: {e}"),
+    })
 }
 
 /// Qt's update comparison: an update exists when the release's CLI is newer
@@ -240,31 +344,72 @@ fn appimage_path() -> Option<std::path::PathBuf> {
 /// file name. If that file is gone (a previous update installed a different
 /// name), the build is placed beside it instead of failing the whole update
 /// with "not running as an AppImage".
-fn install_target(recorded: Option<&std::path::Path>, asset: &str) -> Option<std::path::PathBuf> {
+/// A directory is safe for an update only if we can create files there and
+/// other users cannot replace our sidecars. `~/Applications` (0755) passes;
+/// `/tmp` (1777) does not.
+fn safe_install_dir(dir: &std::path::Path) -> bool {
+    if !dir_writable(dir) {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let Ok(meta) = std::fs::symlink_metadata(dir) else {
+            return false;
+        };
+        if !meta.is_dir() || meta.mode() & 0o022 != 0 {
+            return false;
+        }
+    }
+    true
+}
+
+fn install_target_with(
+    recorded: Option<&std::path::Path>,
+    asset: &str,
+    writable: bool,
+) -> Option<std::path::PathBuf> {
+    let asset_path = std::path::Path::new(asset);
+    if asset.is_empty()
+        || asset == "."
+        || asset == ".."
+        || asset_path.components().count() != 1
+    {
+        return None;
+    }
     let recorded = recorded?;
-    if recorded.is_file() {
+    if recorded.is_file() && writable {
         return Some(recorded.to_path_buf());
     }
     let dir = recorded.parent()?;
-    dir_writable(dir).then(|| dir.join(asset))
+    writable.then(|| dir.join(asset))
+}
+
+fn install_target(recorded: Option<&std::path::Path>, asset: &str) -> Option<std::path::PathBuf> {
+    let recorded = recorded?;
+    let dir = recorded.parent()?;
+    install_target_with(Some(recorded), asset, safe_install_dir(dir))
 }
 
 fn http_get_text(url: &str, timeout_s: u64) -> Result<String, String> {
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(timeout_s)))
+        .max_redirects(0)
         .build();
     let agent = ureq::Agent::new_with_config(config);
-    let mut resp = agent
-        .get(url)
-        .header("User-Agent", "Proton-Drive-Linux-Cli")
-        .call()
-        .map_err(|e| format!("fetch failed: {e}"))?;
+    let mut resp = get_following(&agent, url)?;
     if resp.status().as_u16() != 200 {
         return Err(format!("fetch: HTTP {}", resp.status()));
     }
-    resp.body_mut()
-        .read_to_string()
-        .map_err(|e| format!("fetch body: {e}"))
+    let mut text = String::new();
+    let mut reader = resp.body_mut().as_reader().take(MAX_SUMS_BYTES + 1);
+    reader
+        .read_to_string(&mut text)
+        .map_err(|e| format!("fetch body: {e}"))?;
+    if text.len() as u64 > MAX_SUMS_BYTES {
+        return Err("checksum response is too large".to_string());
+    }
+    Ok(text)
 }
 
 /// The checksum asset can lag a just-published release or hit a transient CDN
@@ -339,8 +484,23 @@ fn dir_writable(dir: &std::path::Path) -> bool {
     }
 }
 
-/// Download the AppImage for this machine and verify its checksum.
-pub fn download_update(rel: &Release, arch: &str) -> Result<std::path::PathBuf, String> {
+#[derive(Debug)]
+struct DownloadPlan {
+    name: String,
+    url: String,
+    sums_url: Option<String>,
+    want: Option<String>,
+    dir: PathBuf,
+    dest: PathBuf,
+}
+
+/// Resolve everything that can fail offline (URL trust, digest shape, install
+/// target, private directory) before touching the network.
+fn download_plan(
+    rel: &Release,
+    arch: &str,
+    target: Option<&Path>,
+) -> Result<DownloadPlan, String> {
     let name = if !rel.gui.is_empty() {
         format!(
             "ProtonDrive-CLI-{}-GUI-{}-{arch}.AppImage",
@@ -353,53 +513,105 @@ pub fn download_update(rel: &Release, arch: &str) -> Result<std::path::PathBuf, 
     let url = rel
         .asset_url(&name)
         .ok_or_else(|| format!("no build for {arch} in release {}", rel.tag))?;
+    if !trusted_download_url(url) {
+        return Err(format!("release asset is not on a trusted host: {url}"));
+    }
+    let want = match rel.asset_digest_raw(&name) {
+        Some(raw) => Some(normalize_sha256(raw).ok_or_else(|| {
+            format!("release asset digest for {name} is not a SHA-256")
+        })?),
+        None => None,
+    };
+    let sums_url = if want.is_none() {
+        let url = rel
+            .asset_url("SHA256SUMS")
+            .ok_or_else(|| format!("no checksums in release {}", rel.tag))?;
+        if !trusted_download_url(url) {
+            return Err(format!("checksum asset is not on a trusted host: {url}"));
+        }
+        Some(url.to_string())
+    } else {
+        None
+    };
+    let target = install_target(target, &name)
+        .ok_or_else(|| "no writable install directory for the update".to_string())?;
+    let base = target
+        .parent()
+        .ok_or_else(|| "install target has no parent directory".to_string())?;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir = base.join(format!(".proton-update-{}-{}", std::process::id(), nanos));
+    let dest = dir.join(format!("proton-update-{name}"));
+    Ok(DownloadPlan {
+        name,
+        url: url.to_string(),
+        sums_url,
+        want,
+        dir,
+        dest,
+    })
+}
+
+/// Download the AppImage for this machine and verify its checksum.
+pub fn download_update(rel: &Release, arch: &str) -> Result<std::path::PathBuf, String> {
+    let plan = download_plan(rel, arch, appimage_path().as_deref())?;
 
     // Resolve the checksum before the download: a checksum problem should not
     // cost a 50 MB transfer, and the release API's own digest needs no second
     // request. SHA256SUMS remains the fallback for older release JSON.
-    let want = match rel.asset_digest(&name) {
-        Some(digest) => digest.to_string(),
+    let want = match plan.want {
+        Some(digest) => digest,
         None => {
-            let sums = rel
-                .asset_url("SHA256SUMS")
-                .ok_or_else(|| format!("no checksums in release {}", rel.tag))?;
-            let text =
-                http_get_text_retry(sums, 60).map_err(|e| format!("checksum fetch failed: {e}"))?;
-            sum_for(&text, &name)
-                .ok_or_else(|| format!("no checksum entry for {name} in {}", rel.tag))?
+            let sums = plan
+                .sums_url
+                .as_deref()
+                .ok_or_else(|| "no checksum source in the release".to_string())?;
+            let text = http_get_text_retry(sums, 60)
+                .map_err(|e| format!("checksum fetch failed: {e}"))?;
+            let sum = sum_for(&text, &plan.name)
+                .ok_or_else(|| format!("no checksum entry for {} in {}", plan.name, rel.tag))?;
+            normalize_sha256(&sum)
+                .ok_or_else(|| format!("malformed checksum entry for {} in {}", plan.name, rel.tag))?
         }
     };
 
-    // Download beside the install target, not into /tmp: /tmp is usually a
-    // tmpfs and the final move is a rename(), which cannot cross filesystems.
-    // The target's own directory still counts when the file itself is gone.
-    let base = appimage_path()
-        .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
-        .filter(|d| dir_writable(d))
-        .unwrap_or_else(std::env::temp_dir);
-    let dest = base.join(format!("proton-update-{name}"));
-
-    if let Err(e) = download(url, &dest) {
-        let _ = std::fs::remove_file(&dest);
-        return Err(e);
-    }
-    match sha256_file(&dest) {
-        Ok(got) if got == want => {}
-        Ok(_) => {
-            let _ = std::fs::remove_file(&dest);
-            return Err("download corrupted (checksum mismatch)".to_string());
-        }
-        Err(e) => {
-            let _ = std::fs::remove_file(&dest);
-            return Err(e);
-        }
-    }
+    let _ = std::fs::remove_dir_all(&plan.dir);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755));
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&plan.dir)
+            .map_err(|e| format!("cannot create the update directory: {e}"))?;
     }
-    Ok(dest)
+    #[cfg(not(unix))]
+    std::fs::create_dir(&plan.dir)
+        .map_err(|e| format!("cannot create the update directory: {e}"))?;
+
+    let result = (|| -> Result<(), String> {
+        download(&plan.url, &plan.dest)?;
+        match sha256_file(&plan.dest) {
+            Ok(got) if got == want => {}
+            Ok(_) => return Err("download corrupted (checksum mismatch)".to_string()),
+            Err(e) => return Err(e),
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(
+                &plan.dest,
+                std::fs::Permissions::from_mode(0o755),
+            );
+        }
+        Ok(())
+    })();
+    if let Err(e) = result {
+        let _ = std::fs::remove_dir_all(&plan.dir);
+        return Err(e);
+    }
+    Ok(plan.dest)
 }
 
 /// Boot the freshly downloaded AppImage once, offscreen, before it may
@@ -442,6 +654,23 @@ fn sidecar(target: &std::path::Path, ext: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(s)
 }
 
+/// Validate a marker against the running AppImage. `old` must be exactly
+/// `<app>.old`; a tampered marker can never point at another file.
+fn validated_marker(
+    mark: &Value,
+    target: &Path,
+) -> Option<(PathBuf, PathBuf)> {
+    let old = PathBuf::from(mark.get("old")?.as_str()?);
+    let new = PathBuf::from(mark.get("new")?.as_str()?);
+    if !new.is_absolute() || !old.is_absolute() || new != target {
+        return None;
+    }
+    if old != sidecar(target, ".old") {
+        return None;
+    }
+    Some((old, new))
+}
+
 /// Recover from an update whose new version never came up.
 ///
 /// The swap records a marker before it happens; the first launch of the new
@@ -452,74 +681,120 @@ fn sidecar(target: &std::path::Path, ext: &str) -> std::path::PathBuf {
 ///
 /// Returns (`state`, `relaunch`) where state is "pending" (this run is the
 /// freshly updated version), "rolled-back" (old version restored; the
-/// caller should relaunch it), or "" (nothing to do). Also sweeps a
-/// staging file left behind by an interrupted download.
+/// caller should relaunch it), or "" (nothing to do).
 pub fn update_recovery_check(
     paths: &crate::paths::Paths,
 ) -> (&'static str, Option<std::path::PathBuf>) {
+    update_recovery_check_at(&paths.update_mark_file, appimage_path().as_deref())
+}
+
+fn update_recovery_check_at(
+    mark_file: &Path,
+    target: Option<&Path>,
+) -> (&'static str, Option<PathBuf>) {
     use serde_json::Value;
-    // Read APPIMAGE directly (no is_file gate): the "swap died" case below
-    // is exactly when the target file is missing.
-    if let Some(target) = std::env::var_os("APPIMAGE").map(std::path::PathBuf::from) {
-        let new = sidecar(&target, ".new");
-        let old = sidecar(&target, ".old");
-        if !target.is_file() {
-            // The swap died between its two renames: the launcher's file is
-            // gone. The staged build already passed its start-up check, so
-            // prefer it; otherwise put the previous version back.
-            if new.is_file() {
-                let _ = std::fs::rename(&new, &target);
-            } else if old.is_file() {
-                let _ = std::fs::rename(&old, &target);
-            }
-        } else {
-            let _ = std::fs::remove_file(new); // interrupted download
-        }
-    }
-    let Ok(text) = std::fs::read_to_string(&paths.update_mark_file) else {
+    // The APPIMAGE env is authoritative even when its file is missing - that
+    // is exactly the interrupted-swap case recovery exists for.
+    let Some(target) = target else {
+        return ("", None);
+    };
+    let Ok(text) = std::fs::read_to_string(mark_file) else {
         return ("", None);
     };
     let Ok(mut mark) = serde_json::from_str::<Value>(&text) else {
+        let _ = std::fs::remove_file(mark_file);
         return ("", None);
     };
-    let old = mark.get("old").and_then(Value::as_str).map(String::from);
-    let new = mark.get("new").and_then(Value::as_str).map(String::from);
-    if mark
+    let Some((old, _)) = validated_marker(&mark, target) else {
+        // A marker we did not write (or a corrupted one) never authorises a
+        // rename or delete. Remove it; leave every file alone.
+        let _ = std::fs::remove_file(mark_file);
+        return ("", None);
+    };
+    let staged = sidecar(target, ".new");
+    let attempted = mark
         .get("attempted")
         .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        // Second launch without a health ack: the new version never ran.
-        let _ = std::fs::remove_file(&paths.update_mark_file);
-        if let (Some(old), Some(new)) = (old, new) {
-            let (old, new) = (std::path::PathBuf::from(old), std::path::PathBuf::from(new));
-            if old.is_file() && new.is_file() && std::fs::rename(&old, &new).is_ok() {
-                return ("rolled-back", Some(new));
+        .unwrap_or(false);
+
+    if !target.is_file() {
+        if attempted {
+            if old.is_file() {
+                let _ = std::fs::rename(&old, target);
+                let _ = std::fs::remove_file(mark_file);
+                return ("rolled-back", Some(target.to_path_buf()));
             }
+        } else if staged.is_file() {
+            let _ = std::fs::rename(&staged, target);
+        } else if old.is_file() {
+            let _ = std::fs::rename(&old, target);
+        }
+    }
+    if target.is_file() {
+        let _ = std::fs::remove_file(&staged); // interrupted download
+    }
+
+    if attempted {
+        // Second launch without a health ack: the new version never ran.
+        let _ = std::fs::remove_file(mark_file);
+        if old.is_file() && std::fs::rename(&old, target).is_ok() {
+            return ("rolled-back", Some(target.to_path_buf()));
         }
         return ("", None);
     }
     mark["attempted"] = Value::Bool(true);
-    let _ = std::fs::write(
-        &paths.update_mark_file,
-        serde_json::to_vec(&mark).unwrap_or_default(),
-    );
+    if std::fs::write(mark_file, serde_json::to_vec(&mark).unwrap_or_default()).is_err() {
+        return ("", None);
+    }
     ("pending", None)
 }
 
 /// The freshly updated version is up and its window was built: keep it.
 /// Dropping the marker and the .old backup is the health acknowledgement.
 pub fn update_confirm_health(paths: &crate::paths::Paths) {
+    update_confirm_health_at(&paths.update_mark_file, appimage_path().as_deref());
+}
+
+fn update_confirm_health_at(mark_file: &Path, target: Option<&Path>) {
     use serde_json::Value;
-    let Ok(text) = std::fs::read_to_string(&paths.update_mark_file) else {
+    let Some(target) = target else {
         return;
     };
-    let _ = std::fs::remove_file(&paths.update_mark_file);
-    if let Ok(v) = serde_json::from_str::<Value>(&text)
-        && let Some(old) = v.get("old").and_then(Value::as_str)
-    {
-        let _ = std::fs::remove_file(old);
-    }
+    let Ok(text) = std::fs::read_to_string(mark_file) else {
+        return;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&text) else {
+        let _ = std::fs::remove_file(mark_file);
+        return;
+    };
+    let Some((old, _)) = validated_marker(&value, target) else {
+        let _ = std::fs::remove_file(mark_file);
+        return;
+    };
+    let _ = std::fs::remove_file(mark_file);
+    let _ = std::fs::remove_file(old);
+}
+
+/// Copy `src` into a brand-new `dst`, refusing a planted symlink.
+fn copy_new(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let mut input = std::fs::File::open(src)?;
+    #[cfg(unix)]
+    let mut output = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(dst)?
+    };
+    #[cfg(not(unix))]
+    let mut output = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(dst)?;
+    std::io::copy(&mut input, &mut output)?;
+    output.sync_all()?;
+    Ok(())
 }
 
 /// Swap the running AppImage for the freshly downloaded one, then return
@@ -542,10 +817,20 @@ pub fn install_update_and_restart(
     let in_place = target.is_file();
     let stage = sidecar(&target, ".new");
     let old = sidecar(&target, ".old");
-    // Same directory: one atomic rename; a /tmp staging falls back to copy.
+    let private_dir = dl.parent().map(Path::to_path_buf);
+    let _ = std::fs::remove_file(&stage);
+
     if std::fs::rename(dl, &stage).is_err() {
-        std::fs::copy(dl, &stage).map_err(|e| format!("could not stage the update ({e})"))?;
+        copy_new(dl, &stage)
+            .map_err(|e| format!("could not stage the update ({e})"))?;
         let _ = std::fs::remove_file(dl);
+    }
+    if let Some(dir) = private_dir
+        && dir
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with(".proton-update-"))
+    {
+        let _ = std::fs::remove_dir_all(dir);
     }
     #[cfg(unix)]
     {
@@ -568,6 +853,7 @@ pub fn install_update_and_restart(
                 format!("could not place the update ({e})")
             });
     }
+
     let mark = serde_json::json!({
         "old": old.to_string_lossy(),
         "new": target.to_string_lossy(),
@@ -578,14 +864,25 @@ pub fn install_update_and_restart(
             .unwrap_or(0),
     });
     let mark_file = crate::paths::resolve().update_mark_file;
-    let _ = std::fs::write(&mark_file, serde_json::to_vec(&mark).unwrap_or_default());
+    // The marker must exist before the target is moved: if it cannot be
+    // written, abort the update while the running file is still intact.
+    if let Err(e) = std::fs::write(&mark_file, serde_json::to_vec(&mark).unwrap_or_default()) {
+        let _ = std::fs::remove_file(&stage);
+        return Err(format!("could not record the update for recovery ({e})"));
+    }
     if let Err(e) = std::fs::rename(&target, &old) {
+        let _ = std::fs::remove_file(&mark_file);
         let _ = std::fs::remove_file(&stage);
         return Err(format!("could not replace the AppImage ({e})"));
     }
     if let Err(e) = std::fs::rename(&stage, &target) {
-        // Recovery handles the missing target on the next launch (.old).
+        // Put the old build back immediately. If that restore fails, keep the
+        // marker so the next launch can recover from `<app>.old`.
+        let restored = std::fs::rename(&old, &target).is_ok();
         let _ = std::fs::remove_file(&stage);
+        if restored {
+            let _ = std::fs::remove_file(&mark_file);
+        }
         return Err(format!("could not replace the AppImage ({e})"));
     }
     Ok(target)
@@ -640,7 +937,7 @@ mod tests {
             "assets": [
                 {"name": "ProtonDrive-CLI-0.9.0-GUI-3.13.2-x86_64.AppImage",
                  "browser_download_url": "https://x/a.AppImage", "size": 100,
-                 "digest": "sha256:aabbcc"},
+                 "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
                 {"name": "SHA256SUMS",
                  "browser_download_url": "https://x/SHA256SUMS", "size": 10,
                  "digest": null}
@@ -654,10 +951,11 @@ mod tests {
         assert_eq!(r.asset_url("SHA256SUMS"), Some("https://x/SHA256SUMS"));
         assert_eq!(r.asset_url("nope"), None);
         assert_eq!(
-            r.asset_digest("ProtonDrive-CLI-0.9.0-GUI-3.13.2-x86_64.AppImage"),
-            Some("aabbcc")
+            r.asset_digest_raw("ProtonDrive-CLI-0.9.0-GUI-3.13.2-x86_64.AppImage")
+                .and_then(normalize_sha256),
+            Some("a".repeat(64))
         );
-        assert_eq!(r.asset_digest("SHA256SUMS"), None);
+        assert_eq!(r.asset_digest_raw("SHA256SUMS"), None);
     }
 
     #[test]
@@ -731,5 +1029,162 @@ mod tests {
         assert!(has_update("0.9.0", &rel(&cli, &gui)));
         // a release equal to the installed build is not an update
         assert!(!has_update("0.9.0", &rel("0.9.0", crate::GUI_VERSION)));
+    }
+
+    #[test]
+    fn download_hosts_are_exact() {
+        assert!(trusted_download_url(
+            "https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/download/v1/x.AppImage"
+        ));
+        assert!(trusted_download_url(
+            "https://release-assets.githubusercontent.com/github-production-release-asset/x"
+        ));
+        assert!(trusted_download_url(
+            "https://objects.githubusercontent.com/github-production-release-asset/x"
+        ));
+        for bad in [
+            "http://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/download/v1/x",
+            "https://github.com.evil/zhafribs/Proton-Drive-Linux-Cli/releases/download/v1/x",
+            "https://github.com@evil/zhafribs/Proton-Drive-Linux-Cli/releases/download/v1/x",
+            "https://github.com:444/zhafribs/Proton-Drive-Linux-Cli/releases/download/v1/x",
+            "https://github.com/other/repo/releases/download/v1/x",
+            "https://evil/github-production-release-asset/x",
+            "",
+        ] {
+            assert!(!trusted_download_url(bad), "accepted {bad}");
+        }
+    }
+
+    #[test]
+    fn digests_are_64_lowercase_hex() {
+        let valid = "A".repeat(64);
+        assert_eq!(
+            normalize_sha256(&format!("sha256:{valid}")),
+            Some("a".repeat(64))
+        );
+        assert_eq!(normalize_sha256(&valid), Some("a".repeat(64)));
+        assert_eq!(normalize_sha256(&"a".repeat(63)), None);
+        assert_eq!(normalize_sha256(&"g".repeat(64)), None);
+        assert_eq!(normalize_sha256(""), None);
+    }
+
+    #[test]
+    fn download_plan_rejects_untrusted_hosts_and_bad_digests() {
+        let target = std::env::temp_dir().join(format!("pd-plan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&target);
+        std::fs::create_dir_all(&target).unwrap();
+        let app = target.join("old.AppImage");
+        std::fs::write(&app, b"x").unwrap();
+
+        let mut r = rel("0.9.0", "3.20.9");
+        r.assets.push(Asset {
+            name: "ProtonDrive-CLI-0.9.0-GUI-3.20.9-x86_64.AppImage".into(),
+            url: "https://evil/x.AppImage".into(),
+            digest: Some("a".repeat(64)),
+        });
+        let e = download_plan(&r, "x86_64", Some(&app)).unwrap_err();
+        assert!(e.contains("trusted host"), "{e}");
+
+        r.assets[0].url =
+            "https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/download/v1/x.AppImage"
+                .into();
+        r.assets[0].digest = Some("not-a-digest".into());
+        let e = download_plan(&r, "x86_64", Some(&app)).unwrap_err();
+        assert!(e.contains("not a SHA-256"), "{e}");
+        let _ = std::fs::remove_dir_all(&target);
+    }
+
+    #[test]
+    fn install_targets_require_a_writable_target_and_plain_asset() {
+        let dir = std::env::temp_dir().join(format!("pd-target-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let app = dir.join("app.AppImage");
+        std::fs::write(&app, b"x").unwrap();
+        assert_eq!(
+            install_target_with(Some(&app), "new.AppImage", true),
+            Some(app.clone())
+        );
+        assert_eq!(install_target_with(Some(&app), "new.AppImage", false), None);
+        assert_eq!(
+            install_target_with(Some(&app), "../evil", true),
+            None
+        );
+        assert_eq!(
+            install_target_with(Some(&dir.join("gone.AppImage")), "new.AppImage", true),
+            Some(dir.join("new.AppImage"))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn copy_cap_rejects_one_byte_over() {
+        let mut input = std::io::Cursor::new(vec![0u8; 10]);
+        let mut output = Vec::new();
+        assert_eq!(copy_capped(&mut input, &mut output, 10).unwrap(), 10);
+        let mut input = std::io::Cursor::new(vec![0u8; 11]);
+        let mut output = Vec::new();
+        assert!(copy_capped(&mut input, &mut output, 10).is_err());
+    }
+
+    #[test]
+    fn marker_rolls_back_only_its_own_sidecar() {
+        let dir = std::env::temp_dir().join(format!("pd-marker-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("app.AppImage");
+        let old = sidecar(&target, ".old");
+        let mark_file = dir.join("update-pending.json");
+        std::fs::write(&target, b"new").unwrap();
+        std::fs::write(&old, b"old").unwrap();
+        std::fs::write(
+            &mark_file,
+            serde_json::json!({"old": old, "new": target, "attempted": false}).to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            update_recovery_check_at(&mark_file, Some(&target)).0,
+            "pending"
+        );
+        let (state, relaunch) = update_recovery_check_at(&mark_file, Some(&target));
+        assert_eq!(state, "rolled-back");
+        assert_eq!(relaunch.as_deref(), Some(target.as_path()));
+        assert_eq!(std::fs::read(&target).unwrap(), b"old");
+        assert!(!old.exists());
+        assert!(!mark_file.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tampered_marker_never_touches_another_file() {
+        let dir = std::env::temp_dir().join(format!("pd-marker-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("app.AppImage");
+        let victim = dir.join("victim.txt");
+        let mark_file = dir.join("update-pending.json");
+        std::fs::write(&target, b"new").unwrap();
+        std::fs::write(&victim, b"keep").unwrap();
+        std::fs::write(
+            &mark_file,
+            serde_json::json!({"old": victim, "new": target, "attempted": true}).to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(update_recovery_check_at(&mark_file, Some(&target)).0, "");
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+        assert!(!mark_file.exists());
+
+        std::fs::write(
+            &mark_file,
+            serde_json::json!({"old": sidecar(&target, ".old"), "new": target, "attempted": true})
+                .to_string(),
+        )
+        .unwrap();
+        update_confirm_health_at(&mark_file, Some(&target));
+        assert!(victim.exists());
+        assert!(!mark_file.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

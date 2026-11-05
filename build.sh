@@ -9,8 +9,8 @@
 # installed on the host beyond a normal desktop.
 #
 # Usage:
-#   ./build.sh                   # build both architectures
-#   ./build.sh x86_64            # build one architecture
+#   ./build.sh                   # build x86_64
+#   ./build.sh x86_64            # build x86_64
 #   ./scripts/check-upstream.sh  # refresh upstream.lock first (or let CI do it)
 #
 # The upstream version and the SHA-512 checksums Proton publishes live in
@@ -32,8 +32,18 @@ APPIMAGE_NAME="ProtonDrive-CLI"
 # "<desktop-basename>.appdata.xml", and appstreamcli requires that basename to
 # equal the component id - so the desktop file, metainfo file and component id
 # all share this value.
-DESKTOP_ID="io.github.zhafrisbs.protondrivecli.desktop"
-METAINFO_ID="io.github.zhafrisbs.protondrivecli.appdata.xml"
+DESKTOP_ID="io.github.zhafribs.protondrivecli.desktop"
+METAINFO_ID="io.github.zhafribs.protondrivecli.appdata.xml"
+
+# Build tool pin: a moving `continuous` tag is a supply-chain hole. This
+# release is checksum-verified on every run, cached or fresh.
+APPIMAGETOOL_VERSION="1.9.1"
+APPIMAGETOOL_SHA256="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
+# appimagetool downloads the AppImage type2 runtime at package time. Pin it,
+# or the first code a user executes is an unverified `continuous` asset.
+TYPE2_RUNTIME_VERSION="20251108"
+TYPE2_RUNTIME_SHA256="2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d"
+CROSS_TARGET=""
 
 # upstream platform -> AppImage architecture, output suffix
 declare -A APPIMAGE_ARCH=(
@@ -91,24 +101,71 @@ load_upstream
 
 fetch_tool() {
     mkdir -p "$TOOLS"
-    if [ ! -x "$TOOLS/appimagetool-x86_64.AppImage" ]; then
-        log "downloading appimagetool"
-        wget -q -O "$TOOLS/appimagetool-x86_64.AppImage" \
-            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
-        chmod +x "$TOOLS/appimagetool-x86_64.AppImage"
+    local tool="$TOOLS/appimagetool-x86_64.AppImage"
+    local url="https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-x86_64.AppImage"
+    local tmp="$tool.download"
+
+    if [ -f "$tool" ] && echo "${APPIMAGETOOL_SHA256}  $tool" | sha256sum -c - >/dev/null 2>&1; then
+        return
     fi
+    # A cached `continuous` binary (or a corrupted one) must not survive the
+    # pin. Remove it, fetch the pinned release, verify before chmod/move.
+    rm -f "$tool" "$tmp"
+    log "downloading appimagetool ${APPIMAGETOOL_VERSION}"
+    wget -q -O "$tmp" "$url" || die "appimagetool download failed"
+    echo "${APPIMAGETOOL_SHA256}  $tmp" | sha256sum -c - >/dev/null \
+        || { rm -f "$tmp"; die "appimagetool checksum mismatch - refusing to use it"; }
+    chmod +x "$tmp"
+    mv "$tmp" "$tool"
+}
+
+fetch_runtime() {
+    mkdir -p "$TOOLS"
+    local out="$TOOLS/runtime-x86_64"
+    local url="https://github.com/AppImage/type2-runtime/releases/download/${TYPE2_RUNTIME_VERSION}/runtime-x86_64"
+    local tmp="$out.download"
+    if [ -f "$out" ] && echo "${TYPE2_RUNTIME_SHA256}  $out" | sha256sum -c - >/dev/null 2>&1; then
+        return
+    fi
+    rm -f "$out" "$tmp"
+    log "downloading type2 runtime ${TYPE2_RUNTIME_VERSION}"
+    wget -q -O "$tmp" "$url" || die "type2 runtime download failed"
+    echo "${TYPE2_RUNTIME_SHA256}  $tmp" | sha256sum -c - >/dev/null \
+        || { rm -f "$tmp"; die "type2 runtime checksum mismatch - refusing to embed it"; }
+    mv "$tmp" "$out"
 }
 
 fetch_payload() {
     local platform="$1" out="$DOWNLOAD/proton-drive-${VERSION}-${platform}"
     mkdir -p "$DOWNLOAD"
+    local expected="${UPSTREAM_SHA512[$platform]}"
+    if [ -f "$out" ] && ! echo "$expected  $out" | sha512sum -c - >/dev/null 2>&1; then
+        log "cached ${platform} payload does not match the lock; re-downloading"
+        rm -f "$out"
+    fi
     if [ ! -f "$out" ]; then
         log "downloading ${platform} binary from Proton"
         wget -q -O "$out" "${BASE_URL}/${platform}/proton-drive"
     fi
     log "verifying SHA-512 for ${platform}"
-    echo "${UPSTREAM_SHA512[$platform]}  $out" | sha512sum -c - >/dev/null \
+    echo "$expected  $out" | sha512sum -c - >/dev/null \
         || die "checksum mismatch for ${platform} - refusing to package a tampered binary"
+}
+
+# A built binary must not require a glibc newer than the advertised floor.
+# Enforced whenever CROSS_TARGET is set (CI/release); a plain local build
+# skips it because it inherits the host's glibc.
+check_glibc_floor() {
+    local bin="$1" max
+    [ -n "$CROSS_TARGET" ] || return 0
+    command -v readelf >/dev/null 2>&1 \
+        || die "readelf not found - install binutils to verify the glibc floor"
+    max="$(readelf --version-info "$bin" 2>/dev/null \
+        | grep -oE 'GLIBC_[0-9.]+|GLIBC_ABI_DT_RELR' | sort -Vu | tail -1)"
+    [ -n "$max" ] || die "could not read glibc symbols from $bin"
+    if [ "$(printf '%s\n%s\n' "$max" "GLIBC_2.28" | sort -V | tail -1)" != "GLIBC_2.28" ]; then
+        die "$bin requires $max, above the GLIBC_2.28 floor"
+    fi
 }
 
 # Build the Rust GUI for one architecture. Release AppImages cross-compile
@@ -117,15 +174,15 @@ fetch_payload() {
 # glibc; a plain cargo build is the fallback for local dev machines that
 # match the target and have no zigbuild.
 build_gui() {
-    local arch="$1" target bin_dir
+    local arch="$1" bin_dir
     [ "$arch" = "x86_64" ] || die "no GUI target for ${arch} - releases are x86_64-only"
-    target="x86_64-unknown-linux-gnu.2.28"
-    if command -v cargo-zigbuild >/dev/null 2>&1 && command -v zig >/dev/null 2>&1; then
-        log "building GUI (${target}, zigbuild)"
-        ( cd "$ROOT/gui" && cargo zigbuild --release --target "$target" )
-        # cargo-zigbuild strips the glibc suffix before invoking cargo, so the
-        # artifacts usually land in the plain-triple directory; probe both.
-        for bin_dir in "$ROOT/gui/target/$target/release" \
+    if [ "${REQUIRE_GLIBC_FLOOR:-0}" = "1" ] && [ -z "$CROSS_TARGET" ]; then
+        die "REQUIRE_GLIBC_FLOOR is set but cargo-zigbuild/zig are unavailable"
+    fi
+    if [ -n "$CROSS_TARGET" ]; then
+        log "building GUI (${CROSS_TARGET}, zigbuild)"
+        ( cd "$ROOT/gui" && cargo zigbuild --release --target "$CROSS_TARGET" )
+        for bin_dir in "$ROOT/gui/target/$CROSS_TARGET/release" \
                        "$ROOT/gui/target/x86_64-unknown-linux-gnu/release"; do
             [ -x "$bin_dir/proton-drive-gui" ] && break
         done
@@ -139,19 +196,22 @@ build_gui() {
     [ -x "$bin_dir/proton-drive-gui" ] \
         || die "GUI binary missing at $bin_dir/proton-drive-gui"
     GUI_BIN="$bin_dir/proton-drive-gui"
+    check_glibc_floor "$GUI_BIN"
 }
 
 # Build the tiny Rust AppImage entry point that replaces the old shell
 # `src/AppRun`. It only dispatches to the GUI / engine / upstream CLI.
 build_apprun() {
-    local arch="$1" target bin_dir
+    local arch="$1" bin_dir
     [ "$arch" = "x86_64" ] || die "no AppRun target for ${arch} - releases are x86_64-only"
-    if command -v cargo-zigbuild >/dev/null 2>&1 && command -v zig >/dev/null 2>&1; then
-        target="x86_64-unknown-linux-gnu.2.28"
-        log "building AppRun launcher (${target}, zigbuild)"
-        ( cd "$ROOT" && cargo zigbuild --release -p proton-drive-apprun --target "$target" ) \
+    if [ "${REQUIRE_GLIBC_FLOOR:-0}" = "1" ] && [ -z "$CROSS_TARGET" ]; then
+        die "REQUIRE_GLIBC_FLOOR is set but cargo-zigbuild/zig are unavailable"
+    fi
+    if [ -n "$CROSS_TARGET" ]; then
+        log "building AppRun launcher (${CROSS_TARGET}, zigbuild)"
+        ( cd "$ROOT" && cargo zigbuild --release -p proton-drive-apprun --target "$CROSS_TARGET" ) \
             || die "AppRun build failed"
-        for bin_dir in "$ROOT/gui/target/$target/release" \
+        for bin_dir in "$ROOT/gui/target/$CROSS_TARGET/release" \
                        "$ROOT/gui/target/x86_64-unknown-linux-gnu/release"; do
             [ -x "$bin_dir/proton-drive-apprun" ] && break
         done
@@ -166,6 +226,7 @@ build_apprun() {
     [ -x "$bin_dir/proton-drive-apprun" ] \
         || die "AppRun binary missing at $bin_dir/proton-drive-apprun"
     APPRUN_BIN="$bin_dir/proton-drive-apprun"
+    check_glibc_floor "$APPRUN_BIN"
 }
 
 render_icon() {
@@ -192,26 +253,45 @@ make_appdir() {
 
     install -m 0755 "$APPRUN_BIN" "$appdir/AppRun"
     install -m 0755 "$payload"    "$appdir/usr/bin/proton-drive"
+    check_glibc_floor "$payload"
     # GUI: Rust binary
     install -m 0755 "$GUI_BIN" "$appdir/usr/bin/proton-drive-gui"
-    # Build and ship Rust engine only
-    if command -v cargo >/dev/null 2>&1; then
-        if command -v cargo-zigbuild >/dev/null 2>&1 && command -v zig >/dev/null 2>&1 && [ -n "${target:-}" ]; then
-            ( cd "$ROOT" && cargo zigbuild --release -p proton-engine --target "$target" ) || die "proton-engine build failed"
-        elif [ "$(uname -m)" = "$arch" ]; then
-            ( cd "$ROOT" && cargo build --release -p proton-engine ) || die "proton-engine build failed"
-        fi
-        for ebin in "$ROOT/gui/target/${target:-}/release/proton-engine" "$ROOT/gui/target/x86_64-unknown-linux-gnu/release/proton-engine" "$ROOT/target/${target:-}/release/proton-engine" "$ROOT/target/x86_64-unknown-linux-gnu/release/proton-engine" "$ROOT/target/release/proton-engine"; do
-            [ -x "$ebin" ] && { install -m 0755 "$ebin" "$appdir/usr/bin/proton-engine"; break; }
+    # Build and ship the Rust engine. This used to fall through to a native
+    # build because `target` was local to the GUI/AppRun functions, which is
+    # how a GLIBC_2.39 engine slipped into a "2.28" release.
+    local engine_bin=""
+    if [ -n "$CROSS_TARGET" ]; then
+        ( cd "$ROOT" && cargo zigbuild --release -p proton-engine --target "$CROSS_TARGET" ) \
+            || die "proton-engine cross-build failed"
+        for ebin in "$ROOT/gui/target/$CROSS_TARGET/release/proton-engine" \
+                    "$ROOT/gui/target/x86_64-unknown-linux-gnu/release/proton-engine" \
+                    "$ROOT/target/$CROSS_TARGET/release/proton-engine" \
+                    "$ROOT/target/x86_64-unknown-linux-gnu/release/proton-engine"; do
+            [ -x "$ebin" ] && { engine_bin="$ebin"; break; }
+        done
+    else
+        ( cd "$ROOT" && cargo build --release -p proton-engine ) \
+            || die "proton-engine build failed"
+        for ebin in "$ROOT/gui/target/release/proton-engine" \
+                    "$ROOT/target/release/proton-engine"; do
+            [ -x "$ebin" ] && { engine_bin="$ebin"; break; }
         done
     fi
+    [ -n "$engine_bin" ] || die "proton-engine binary missing after the build"
+    install -m 0755 "$engine_bin" "$appdir/usr/bin/proton-engine"
+    check_glibc_floor "$appdir/usr/bin/proton-engine"
     # The app icon
     install -m 0644 "$SRC/protondrive-icon.svg" \
         "$appdir/usr/lib/proton-sync/protondrive-icon.svg"
 
-    install -m 0644 "$SRC/$DESKTOP_ID" "$appdir/$DESKTOP_ID"
-    install -m 0644 "$SRC/$DESKTOP_ID" "$appdir/usr/share/applications/$DESKTOP_ID"
-    install -m 0644 "$SRC/$METAINFO_ID" "$appdir/usr/share/metainfo/$METAINFO_ID"
+    # Fill the versions at build time so AppStream, the desktop entry and the
+    # binary can never disagree.
+    local release_date
+    release_date="$(date -u +%F)"
+    sed "s/@GUI_VERSION@/${GUI_VERSION}/g" "$SRC/$DESKTOP_ID" > "$appdir/$DESKTOP_ID"
+    install -m 0644 "$appdir/$DESKTOP_ID" "$appdir/usr/share/applications/$DESKTOP_ID"
+    sed "s/@GUI_VERSION@/${GUI_VERSION}/g; s/@RELEASE_DATE@/${release_date}/g" \
+        "$SRC/$METAINFO_ID" > "$appdir/usr/share/metainfo/$METAINFO_ID"
     # MIT requires the upstream copyright + permission notice to travel with
     # every copy of the Proton payload, so it ships inside the AppImage too.
     install -m 0644 "$SRC/licenses/Proton-Drive-SDK-MIT.txt" \
@@ -240,10 +320,14 @@ validate() {
         desktop-file-validate "$appdir/$DESKTOP_ID"
     fi
     if command -v appstreamcli >/dev/null; then
-        # validate-tree resolves the shipped binary and compares the metainfo
-        # filename against the component id, so both AppStream checks apply here
-        appstreamcli validate-tree "$appdir" >"$BUILD/appstream-validate.log" 2>&1 \
-            || log "appstreamcli reported issues (see build/appstream-validate.log)"
+        # --no-net keeps an unattended release independent of GitHub/Proton
+        # reachability; --strict still fails on real metadata problems.
+        if ! appstreamcli validate --no-net --strict \
+            "$appdir/usr/share/metainfo/$METAINFO_ID" \
+            >"$BUILD/appstream-validate.log" 2>&1; then
+            cat "$BUILD/appstream-validate.log" >&2
+            die "AppStream metadata validation failed"
+        fi
         grep -E '^(  [EWI]:|✘|✔)' "$BUILD/appstream-validate.log" || echo "AppStream: clean"
     fi
 }
@@ -255,6 +339,16 @@ build_one() {
     local out="$DIST/${APPIMAGE_NAME}-${VERSION}-GUI-${GUI_VERSION}-${arch}.AppImage"
 
     fetch_payload "$platform"
+    if [ "${REQUIRE_GLIBC_FLOOR:-0}" = "1" ]; then
+        command -v cargo-zigbuild >/dev/null 2>&1 && command -v zig >/dev/null 2>&1 \
+            || die "REQUIRE_GLIBC_FLOOR is set but cargo-zigbuild/zig are unavailable"
+        CROSS_TARGET="x86_64-unknown-linux-gnu.2.28"
+    elif command -v cargo-zigbuild >/dev/null 2>&1 && command -v zig >/dev/null 2>&1; then
+        CROSS_TARGET="x86_64-unknown-linux-gnu.2.28"
+    else
+        CROSS_TARGET=""
+        log "warning: cargo-zigbuild/zig not found - this local build is NOT glibc-pinned"
+    fi
     build_gui "$arch"
     build_apprun "$arch"
     make_appdir "$platform" "$appdir"
@@ -264,7 +358,7 @@ build_one() {
     log "building ${arch} AppImage"
     rm -f "$out"
 
-    local -a tool_args=( "$appdir" "$out" )
+    local -a tool_args=( --no-appstream --runtime-file "$TOOLS/runtime-x86_64" "$appdir" "$out" )
 
     local tool_log="$BUILD/appimagetool-${arch}.log"
     ARCH="$arch" APPIMAGE_EXTRACT_AND_RUN=1 "$TOOLS/appimagetool-x86_64.AppImage" "${tool_args[@]}" \
@@ -277,6 +371,7 @@ build_one() {
 
 log "Proton Drive CLI ${VERSION} -> AppImage"
 fetch_tool
+fetch_runtime
 mkdir -p "$BUILD" "$DIST"
 render_icon
 

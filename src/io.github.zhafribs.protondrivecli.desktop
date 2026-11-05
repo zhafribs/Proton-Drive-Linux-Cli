@@ -11,4 +11,4 @@ Categories=Network;FileTransfer;
 Keywords=proton;drive;cloud;sync;storage;
 StartupNotify=true
 X-AppImage-Name=Proton Drive
-X-AppImage-Version=0.9.0
+X-AppImage-Version=@GUI_VERSION@

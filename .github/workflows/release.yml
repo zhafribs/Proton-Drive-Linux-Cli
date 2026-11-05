@@ -29,9 +29,11 @@ on:
     paths:
       - upstream.lock
       - build.sh
+      - CHANGELOG.md
       - release-notes.md.tmpl
       - Cargo.toml
       - Cargo.lock
+      - rust-toolchain.toml
       - '.cargo/**'
       - 'crates/**'
       - 'src/**'
@@ -42,14 +44,63 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  verify:
+    # Read-only. Runs the tests and lint gate on every event, including PRs,
+    # before the write-capable release job can start.
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Use main as the default branch name
+        run: git config --global init.defaultBranch main
+
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install verification dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            librsvg2-bin desktop-file-utils appstream binutils \
+            libxkbcommon-dev libwayland-dev fonts-dejavu-core
+
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal --component clippy
+
+      - name: Cache the verification build
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+            gui/target
+          key: verify-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          restore-keys: |
+            verify-${{ runner.os }}-
+
+      - name: Test
+        run: cargo test --workspace --all-targets
+
+      - name: Clippy
+        run: cargo clippy --release --workspace --all-targets -- -D warnings
+
+      - name: Shell syntax and release-gate fixtures
+        run: |
+          bash -n build.sh scripts/*.sh
+          ./scripts/test-check-release.sh
+
   release:
+    needs: verify
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: write
     # Pinned (not ubuntu-latest): GitHub migrates ubuntu-latest to Ubuntu 26 on
     # 2026-10-19, and this job runs unattended every 6h - upgrade deliberately
     # by changing this line, not via a silent label migration.
@@ -59,11 +110,17 @@ jobs:
         run: git config --global init.defaultBranch main
 
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Fetch release tags for the version-bump gate
+        run: git fetch --tags --force
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends librsvg2-bin desktop-file-utils appstream
+          sudo apt-get install -y --no-install-recommends \
+            librsvg2-bin desktop-file-utils appstream binutils
 
       - name: Cache the Rust build (registry + cargo tools + target)
         uses: actions/cache@v6
@@ -81,9 +138,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/zig
-          key: zig-${{ runner.os }}-0.15.2
-          restore-keys: |
-            zig-${{ runner.os }}-
+          key: zig-${{ runner.os }}-0.15.2-02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239
 
       # The GUI is a Rust binary; it cross-builds with cargo-zigbuild so its
       # glibc floor is pinned to 2.28 (Debian 10 era) instead of the runner's
@@ -91,16 +146,24 @@ jobs:
       # package's launcher is not on cargo-zigbuild's search path.
       - name: Install the Rust toolchain and zig (GUI builds)
         run: |
-          rustup toolchain install stable --profile minimal \
-            --target x86_64-unknown-linux-gnu
-          rustup default stable
+          rustup toolchain install 1.99.1 --profile minimal \
+            --component clippy --target x86_64-unknown-linux-gnu
           ZIG_VERSION=0.15.2
+          ZIG_SHA256=02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239
+          if [ -x "$HOME/zig/zig" ] && [ "$("$HOME/zig/zig" version 2>/dev/null)" != "$ZIG_VERSION" ]; then
+            echo "cached zig is not $ZIG_VERSION; replacing it"
+            rm -rf "$HOME/zig"
+          fi
           if [ ! -x "$HOME/zig/zig" ]; then
             wget -q "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
                  -O "$RUNNER_TEMP/zig.tar.xz"
+            echo "${ZIG_SHA256}  $RUNNER_TEMP/zig.tar.xz" | sha256sum -c -
             mkdir -p "$HOME/zig"
             tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$HOME/zig" --strip-components=1
           fi
+          [ "$("$HOME/zig/zig" version)" = "$ZIG_VERSION" ] || {
+            echo "zig version mismatch" >&2; exit 1;
+          }
           echo "$HOME/zig" >> "$GITHUB_PATH"
           # 0.24.0 contains the fix that drops rustc's deprecated -Wl,-O1
           # before Zig's linker; a stale 0.23.x cached binary would warn.
@@ -118,12 +181,7 @@ jobs:
             download
           # The payload is Rust-only (GUI + engine + Rust AppRun + the upstream
           # Rust CLI). No Python/CPython bundle and no desktop wheels any more.
-          key: build-v4-${{ runner.os }}-${{ hashFiles('upstream.lock') }}
-          restore-keys: |
-            build-v4-${{ runner.os }}-
-            build-v3-${{ runner.os }}-
-            build-v2-${{ runner.os }}-
-            build-${{ runner.os }}-
+          key: build-v5-${{ runner.os }}-${{ hashFiles('upstream.lock') }}
 
       - name: Check Proton's download page for a new release
         id: upstream
@@ -139,7 +197,14 @@ jobs:
           git push
 
       - name: Build AppImages (x86_64)
+        env:
+          REQUIRE_GLIBC_FLOOR: "1"
         run: ./build.sh
+
+      - name: Verify the release gate
+        env:
+          ALLOW_SAME_VERSION: ${{ inputs.force_rebuild || false }}
+        run: ./scripts/check-release.sh
 
       - name: Generate release notes
         run: ./scripts/release-notes.sh "${{ steps.upstream.outputs.version }}" > "$RUNNER_TEMP/release-notes.md"
@@ -176,6 +241,7 @@ jobs:
             fi
           else
             gh release create "$TAG" \
+              --target "$(git rev-parse HEAD)" \
               --title "Proton Drive CLI ${VERSION} + GUI ${GUI} — AppImage (x86_64)" \
               --notes-file "$NOTES" \
               "${ASSETS[@]}"
@@ -183,6 +249,7 @@ jobs:
           fi
 
       - name: Keep the seven newest releases
+        if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
