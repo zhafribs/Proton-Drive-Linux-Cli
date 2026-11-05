@@ -1,3 +1,13 @@
+## 3.20.6 — 2026-11-05
+
+- **The updater verifies with GitHub's own asset digest.** The release API now
+  carries a `sha256:` digest for each asset, so the updater checks that first
+  instead of depending on a second download of `SHA256SUMS`. `SHA256SUMS` stays
+  as the fallback for older releases, with three retries before the build is
+  downloaded. A genuine failure now says whether the checksum could not be
+  fetched or the entry was missing, instead of the misleading "checksum entry
+  not found" after a full download.
+
 ## 3.20.5 — 2026-11-05
 
 - **Photos has its own Sync button.** "Sync photos" checks Proton Photos

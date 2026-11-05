@@ -10,6 +10,8 @@ use std::time::Duration;
 pub struct Asset {
     pub name: String,
     pub url: String,
+    /// The release API's own `sha256:<hex>` digest, when GitHub supplies it.
+    pub digest: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -30,6 +32,14 @@ impl Release {
             .find(|a| a.name == name)
             .map(|a| a.url.as_str())
     }
+
+    /// The release API's per-asset SHA-256, without the `sha256:` prefix.
+    pub fn asset_digest(&self, name: &str) -> Option<&str> {
+        self.assets
+            .iter()
+            .find(|a| a.name == name)
+            .and_then(|a| a.digest.as_deref())
+    }
 }
 
 /// "v0.9.0-gui3.14.0" -> ("0.9.0", "3.14.0").
@@ -45,9 +55,15 @@ pub fn parse_tag(tag: &str) -> Option<(String, String)> {
 }
 
 fn asset_from(v: &Value) -> Option<Asset> {
+    let digest = v
+        .get("digest")
+        .and_then(Value::as_str)
+        .and_then(|d| d.strip_prefix("sha256:"))
+        .map(str::to_string);
     Some(Asset {
         name: v.get("name")?.as_str()?.to_string(),
         url: v.get("browser_download_url")?.as_str()?.to_string(),
+        digest,
     })
 }
 
@@ -67,7 +83,13 @@ fn parse_release(v: &Value) -> Option<Release> {
         .iter()
         .filter_map(asset_from)
         .collect();
-    Some(Release { tag, cli, gui, published, assets })
+    Some(Release {
+        tag,
+        cli,
+        gui,
+        published,
+        assets,
+    })
 }
 
 /// GET the latest release (conditional on the cached ETag). Returns the
@@ -159,7 +181,10 @@ fn read_fresh(
     if let Some(dir) = cache_file.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let _ = std::fs::write(cache_file, serde_json::to_vec_pretty(&cache).unwrap_or_default());
+    let _ = std::fs::write(
+        cache_file,
+        serde_json::to_vec_pretty(&cache).unwrap_or_default(),
+    );
     Ok((rel, false))
 }
 
@@ -191,8 +216,7 @@ pub fn has_update(cur_cli: &str, rel: &Release) -> bool {
     !cur_cli.is_empty()
         && !rel.gui.is_empty()
         && (crate::util::is_newer(cur_cli, &rel.cli)
-            || (rel.cli == cur_cli
-                && crate::util::is_newer(crate::GUI_VERSION, &rel.gui)))
+            || (rel.cli == cur_cli && crate::util::is_newer(crate::GUI_VERSION, &rel.gui)))
 }
 
 // ------------------------------------------------------------- the update swap
@@ -216,10 +240,7 @@ fn appimage_path() -> Option<std::path::PathBuf> {
 /// file name. If that file is gone (a previous update installed a different
 /// name), the build is placed beside it instead of failing the whole update
 /// with "not running as an AppImage".
-fn install_target(
-    recorded: Option<&std::path::Path>,
-    asset: &str,
-) -> Option<std::path::PathBuf> {
+fn install_target(recorded: Option<&std::path::Path>, asset: &str) -> Option<std::path::PathBuf> {
     let recorded = recorded?;
     if recorded.is_file() {
         return Some(recorded.to_path_buf());
@@ -244,6 +265,24 @@ fn http_get_text(url: &str, timeout_s: u64) -> Result<String, String> {
     resp.body_mut()
         .read_to_string()
         .map_err(|e| format!("fetch body: {e}"))
+}
+
+/// The checksum asset can lag a just-published release or hit a transient CDN
+/// error; retry a few times instead of failing the whole update silently.
+fn http_get_text_retry(url: &str, timeout_s: u64) -> Result<String, String> {
+    let mut last = String::new();
+    for attempt in 0..3 {
+        match http_get_text(url, timeout_s) {
+            Ok(text) => return Ok(text),
+            Err(e) => {
+                last = e;
+                if attempt < 2 {
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+            }
+        }
+    }
+    Err(last)
 }
 
 /// The checksum line of SHA256SUMS for `name` ("<hash>  <name>"; the name
@@ -303,7 +342,10 @@ fn dir_writable(dir: &std::path::Path) -> bool {
 /// Download the AppImage for this machine and verify its checksum.
 pub fn download_update(rel: &Release, arch: &str) -> Result<std::path::PathBuf, String> {
     let name = if !rel.gui.is_empty() {
-        format!("ProtonDrive-CLI-{}-GUI-{}-{arch}.AppImage", rel.cli, rel.gui)
+        format!(
+            "ProtonDrive-CLI-{}-GUI-{}-{arch}.AppImage",
+            rel.cli, rel.gui
+        )
     } else {
         // legacy release tagged v<cli> without a GUI suffix
         format!("ProtonDrive-CLI-{}-{arch}.AppImage", rel.cli)
@@ -311,9 +353,22 @@ pub fn download_update(rel: &Release, arch: &str) -> Result<std::path::PathBuf, 
     let url = rel
         .asset_url(&name)
         .ok_or_else(|| format!("no build for {arch} in release {}", rel.tag))?;
-    let sums = rel
-        .asset_url("SHA256SUMS")
-        .ok_or_else(|| format!("no checksums in release {}", rel.tag))?;
+
+    // Resolve the checksum before the download: a checksum problem should not
+    // cost a 50 MB transfer, and the release API's own digest needs no second
+    // request. SHA256SUMS remains the fallback for older release JSON.
+    let want = match rel.asset_digest(&name) {
+        Some(digest) => digest.to_string(),
+        None => {
+            let sums = rel
+                .asset_url("SHA256SUMS")
+                .ok_or_else(|| format!("no checksums in release {}", rel.tag))?;
+            let text =
+                http_get_text_retry(sums, 60).map_err(|e| format!("checksum fetch failed: {e}"))?;
+            sum_for(&text, &name)
+                .ok_or_else(|| format!("no checksum entry for {name} in {}", rel.tag))?
+        }
+    };
 
     // Download beside the install target, not into /tmp: /tmp is usually a
     // tmpfs and the final move is a rename(), which cannot cross filesystems.
@@ -328,14 +383,6 @@ pub fn download_update(rel: &Release, arch: &str) -> Result<std::path::PathBuf, 
         let _ = std::fs::remove_file(&dest);
         return Err(e);
     }
-    let want = match http_get_text(sums, 30) {
-        Ok(text) => sum_for(&text, &name),
-        Err(_) => None,
-    };
-    let Some(want) = want else {
-        let _ = std::fs::remove_file(&dest);
-        return Err("checksum entry not found".to_string());
-    };
     match sha256_file(&dest) {
         Ok(got) if got == want => {}
         Ok(_) => {
@@ -437,7 +484,11 @@ pub fn update_recovery_check(
     };
     let old = mark.get("old").and_then(Value::as_str).map(String::from);
     let new = mark.get("new").and_then(Value::as_str).map(String::from);
-    if mark.get("attempted").and_then(Value::as_bool).unwrap_or(false) {
+    if mark
+        .get("attempted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
         // Second launch without a health ack: the new version never ran.
         let _ = std::fs::remove_file(&paths.update_mark_file);
         if let (Some(old), Some(new)) = (old, new) {
@@ -465,9 +516,10 @@ pub fn update_confirm_health(paths: &crate::paths::Paths) {
     };
     let _ = std::fs::remove_file(&paths.update_mark_file);
     if let Ok(v) = serde_json::from_str::<Value>(&text)
-        && let Some(old) = v.get("old").and_then(Value::as_str) {
-            let _ = std::fs::remove_file(old);
-        }
+        && let Some(old) = v.get("old").and_then(Value::as_str)
+    {
+        let _ = std::fs::remove_file(old);
+    }
 }
 
 /// Swap the running AppImage for the freshly downloaded one, then return
@@ -587,9 +639,11 @@ mod tests {
             "published_at": "2026-10-18T09:30:00Z",
             "assets": [
                 {"name": "ProtonDrive-CLI-0.9.0-GUI-3.13.2-x86_64.AppImage",
-                 "browser_download_url": "https://x/a.AppImage", "size": 100},
+                 "browser_download_url": "https://x/a.AppImage", "size": 100,
+                 "digest": "sha256:aabbcc"},
                 {"name": "SHA256SUMS",
-                 "browser_download_url": "https://x/SHA256SUMS", "size": 10}
+                 "browser_download_url": "https://x/SHA256SUMS", "size": 10,
+                 "digest": null}
             ]
         });
         let r = parse_release(&v).unwrap();
@@ -597,11 +651,13 @@ mod tests {
         assert_eq!(r.gui, "3.13.2");
         assert_eq!(r.published, "2026-10-18");
         assert_eq!(r.assets.len(), 2);
-        assert_eq!(
-            r.asset_url("SHA256SUMS"),
-            Some("https://x/SHA256SUMS")
-        );
+        assert_eq!(r.asset_url("SHA256SUMS"), Some("https://x/SHA256SUMS"));
         assert_eq!(r.asset_url("nope"), None);
+        assert_eq!(
+            r.asset_digest("ProtonDrive-CLI-0.9.0-GUI-3.13.2-x86_64.AppImage"),
+            Some("aabbcc")
+        );
+        assert_eq!(r.asset_digest("SHA256SUMS"), None);
     }
 
     #[test]
@@ -629,8 +685,14 @@ mod tests {
     #[test]
     fn staged_paths_are_plain_appends() {
         let t = std::path::PathBuf::from("/opt/bin/Proton.AppImage");
-        assert_eq!(sidecar(&t, ".new"), std::path::PathBuf::from("/opt/bin/Proton.AppImage.new"));
-        assert_eq!(sidecar(&t, ".old"), std::path::PathBuf::from("/opt/bin/Proton.AppImage.old"));
+        assert_eq!(
+            sidecar(&t, ".new"),
+            std::path::PathBuf::from("/opt/bin/Proton.AppImage.new")
+        );
+        assert_eq!(
+            sidecar(&t, ".old"),
+            std::path::PathBuf::from("/opt/bin/Proton.AppImage.old")
+        );
     }
 
     fn rel(cli: &str, gui: &str) -> Release {
