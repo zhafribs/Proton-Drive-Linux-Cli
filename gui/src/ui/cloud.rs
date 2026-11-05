@@ -1523,7 +1523,11 @@ fn row(
     } else {
         visuals.text_color()
     };
-    let weak = visuals.weak_text_color();
+    let weak = if selected {
+        visuals.selection.stroke.color
+    } else {
+        visuals.weak_text_color()
+    };
     let gap = ui.spacing().item_spacing.x;
 
     // Name (starts after the icon, stops before the Size column).
@@ -2091,6 +2095,11 @@ fn my_files_row(app: &mut App, ui: &mut egui::Ui, root_open: bool) {
     } else {
         egui::Color32::TRANSPARENT
     };
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::ListItem, ui.is_enabled(), "My files")
+    });
+    ui.ctx()
+        .accesskit_node_builder(resp.id, |n| n.set_selected(active));
     if fill != egui::Color32::TRANSPARENT {
         ui.painter().rect_filled(rect, egui::CornerRadius::same(9), fill);
     }
@@ -2173,6 +2182,11 @@ fn tree_rows(app: &mut App, ui: &mut egui::Ui, parent: &str, depth: usize) {
         } else {
             egui::Color32::TRANSPARENT
         };
+        resp.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::ListItem, ui.is_enabled(), e.name.as_str())
+        });
+        ui.ctx()
+            .accesskit_node_builder(resp.id, |n| n.set_selected(active));
         if fill != egui::Color32::TRANSPARENT {
             ui.painter().rect_filled(rect, egui::CornerRadius::same(7), fill);
         }

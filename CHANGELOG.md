@@ -1,3 +1,19 @@
+## 3.20.16 — 2026-11-06
+
+- **Feedback no longer disappears before you can read it.** Messages are
+  queued instead of replacing each other. Errors stay until **Dismiss** and
+  are exposed to screen readers as an Alert; ordinary confirmations still fade
+  after four seconds.
+- **Settings Discard now really discards.** Theme, scale, tray and notification
+  changes apply immediately, so Discard reloads those preferences from disk
+  instead of only resetting the sync draft. The save bar says which changes are
+  immediate.
+- **The file tree is in the accessibility tree.** “My files” and every folder
+  row expose their names and selected state; Enter still opens them.
+- **Selected-file metadata is readable.** Size and modified time switch to the
+  selection foreground on the accent fill instead of the low-contrast weak
+  grey.
+
 ## 3.20.15 — 2026-11-06
 
 - **Confirmation dialogs now block background file actions.** Double-click,

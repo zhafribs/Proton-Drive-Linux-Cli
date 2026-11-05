@@ -340,6 +340,14 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                 }
                 ui.label(egui::RichText::new(app.save_hint.clone()).weak());
             });
+            ui.label(
+                egui::RichText::new(
+                    "Appearance, tray and notification changes apply immediately. \
+                     Discard reloads them from disk.",
+                )
+                .size(11.5)
+                .weak(),
+            );
             ui.add_space(20.0);
         });
 }
@@ -371,6 +379,10 @@ pub fn reload(app: &mut App) {
     let extras = conf::read_extras(&app.paths.conf_file);
     app.conf = values.clone();
     app.conf_extras = extras.clone();
+    // Discard must undo the preferences that apply immediately (theme, scale,
+    // tray, notifications), not just the conf-backed draft.
+    app.prefs = crate::prefs::Prefs::load(&app.paths.prefs_file);
+    app.style_dirty = true;
     app.draft = Draft::load(&values, &extras, &app.prefs, &app.paths);
     app.save_hint.clear();
     // Kick a fresh root listing (Qt re-ran _sel_load_root on every load).
@@ -737,7 +749,7 @@ fn performance_card(app: &mut App, ui: &mut egui::Ui) {
             if ui.button("Run full check now").clicked() {
                 match service::request_full_check(&app.paths) {
                     Ok(()) => app.toast("Full check requested - checking now."),
-                    Err(e) => app.toast(format!("Could not request a full check: {e}")),
+                    Err(e) => app.toast_error(format!("Could not request a full check: {e}")),
                 }
             }
             if ui.button("Clear snapshot cache").clicked() {

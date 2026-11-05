@@ -275,7 +275,7 @@ pub struct App {
     pub dialog: Option<Dialog>,
     pub save_hint: String,
     pub sub_override: Option<(String, f64)>,
-    pub toast: Option<(String, f64)>,
+    pub toasts: std::collections::VecDeque<Toast>,
     pub upd: UpdateUi,
 
     pub hidden: bool,
@@ -607,6 +607,15 @@ fn stat_chip(ui: &mut egui::Ui, value: &str, label: &str, w: f32) {
     );
 }
 
+/// One queued message. Errors stay until dismissed; info expires after four
+/// seconds. A queue means a second message never silently replaces the first.
+#[derive(Clone)]
+pub struct Toast {
+    pub msg: String,
+    pub at: f64,
+    pub error: bool,
+}
+
 impl App {
     /// eframe's `AppCreator` returns a boxed app, not `Self` - hence the
     /// `new` name without a `Self` return.
@@ -782,7 +791,7 @@ impl App {
             dialog: None,
             save_hint: String::new(),
             sub_override: None,
-            toast: None,
+            toasts: std::collections::VecDeque::new(),
             upd: UpdateUi {
                 next_check: upd_next_check,
                 ..Default::default()
@@ -845,7 +854,22 @@ impl App {
     }
 
     pub fn toast(&mut self, msg: impl Into<String>) {
-        self.toast = Some((msg.into(), self.now()));
+        self.push_toast(msg.into(), false);
+    }
+
+    pub fn toast_error(&mut self, msg: impl Into<String>) {
+        self.push_toast(msg.into(), true);
+    }
+
+    fn push_toast(&mut self, msg: String, error: bool) {
+        if self.toasts.len() >= 4 {
+            self.toasts.pop_front();
+        }
+        self.toasts.push_back(Toast {
+            msg,
+            at: self.now(),
+            error,
+        });
     }
 
     fn now(&self) -> f64 {
@@ -1725,30 +1749,53 @@ impl App {
         // Same clock as `toast()`; ctx.time starts at app launch, so mixing
         // the two made most toasts expire on their first frame.
         let t = self.now();
-        if let Some((msg, at)) = &self.toast {
-            if t - *at > 4.0 {
-                self.toast = None;
-                return;
-            }
-            let age = (t - *at) as f32;
-            // Slide up and fade in over 150 ms, fade out over the last 300.
-            let (fade, slide) = if age < 0.15 {
-                (age / 0.15, (1.0 - age / 0.15) * 14.0)
-            } else if age > 3.7 {
-                ((4.0 - age) / 0.3, 0.0)
-            } else {
-                (1.0, 0.0)
-            };
+        if let Some(front) = self.toasts.front()
+            && !front.error
+            && t - front.at > 4.0
+        {
+            self.toasts.pop_front();
             ctx.request_repaint();
-            let msg = msg.clone();
-            egui::Area::new(egui::Id::unique("toast"))
-                .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-18.0, -18.0 + slide))
-                .show(ctx, |ui| {
-                    ui.set_opacity(fade.clamp(0.0, 1.0));
-                    egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        ui.label(msg);
+            return;
+        }
+        let Some(front) = self.toasts.front() else {
+            return;
+        };
+        let (msg, at, error) = (front.msg.clone(), front.at, front.error);
+        let age = (t - at) as f32;
+        // Errors stay until dismissed; info slides in and fades out.
+        let (fade, slide) = if error {
+            (1.0, 0.0)
+        } else if age < 0.15 {
+            (age / 0.15, (1.0 - age / 0.15) * 14.0)
+        } else if age > 3.7 {
+            ((4.0 - age) / 0.3, 0.0)
+        } else {
+            (1.0, 0.0)
+        };
+        if !error {
+            ctx.request_repaint();
+        }
+        let mut dismiss = false;
+        egui::Area::new(egui::Id::unique("toast"))
+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-18.0, -18.0 + slide))
+            .show(ctx, |ui| {
+                ui.set_opacity(fade.clamp(0.0, 1.0));
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let resp = ui.label(&msg);
+                        if error {
+                            resp.widget_info(|| {
+                                egui::WidgetInfo::labeled(egui::Role::Alert, true, &msg)
+                            });
+                            if ui.small_button("Dismiss").clicked() {
+                                dismiss = true;
+                            }
+                        }
                     });
                 });
+            });
+        if dismiss {
+            self.toasts.pop_front();
         }
     }
 
@@ -2246,7 +2293,7 @@ impl App {
                             local + cloud
                         ));
                     }
-                    Err(e) => self.toast(format!("Could not approve the deletion: {e}")),
+                    Err(e) => self.toast_error(format!("Could not approve the deletion: {e}")),
                 }
             }
             DlgAct::PhotoDeleteConfirm(uids) => {
@@ -2265,7 +2312,7 @@ impl App {
                 self.dialog = None;
                 match service::clear_snapshot_cache(&self.paths) {
                     Ok(()) => self.toast("Snapshot cache cleared. The next start will scan fully."),
-                    Err(e) => self.toast(format!("Could not clear the snapshot cache: {e}")),
+                    Err(e) => self.toast_error(format!("Could not clear the snapshot cache: {e}")),
                 }
             }
             DlgAct::MoveSel(rel) => {
