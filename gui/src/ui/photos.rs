@@ -2,16 +2,29 @@
 //!
 //! The official CLI owns both halves - `photo timeline -d --json` to list and
 //! `photo download` to fetch - exactly like the files browser; this page lists,
-//! groups by month and asks. There are no thumbnails: the CLI exposes no
-//! thumbnail bytes, and decoding JPEG/HEIC would drag an image codec into the
-//! binary for a nicety. The timeline is a dated list with name, resolution and
-//! size instead.
+//! groups by day and asks. JPEG and PNG thumbnails are decoded locally; other
+//! formats keep a labelled placeholder instead of a misleadingly blank tile.
 
-use super::{widgets, App};
+use super::{App, widgets};
 use crate::cli;
 use crate::theme;
 use eframe::egui;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// One decoded thumbnail plus its cache bookkeeping.
+pub struct Thumb {
+    pub stamp: f64,
+    pub used: u64,
+    pub tex: egui::TextureHandle,
+}
+
+/// How many thumbnails stay on the GPU. 256 x 256 px RGBA is about 67 MB.
+pub const THUMB_CACHE_MAX: usize = 256;
+
+/// The least recently used thumbnail, for eviction when the cache is full.
+pub fn lru_victim(entries: impl Iterator<Item = (String, u64)>) -> Option<String> {
+    entries.min_by_key(|(_, used)| *used).map(|(name, _)| name)
+}
 
 #[derive(Default)]
 pub struct PhotoState {
@@ -25,15 +38,21 @@ pub struct PhotoState {
     pub error: String,
     /// Selected photo uids.
     pub sel: Vec<String>,
-    /// Decoded thumbnails: name -> (file stamp, texture).
-    pub tex: std::collections::HashMap<String, (f64, egui::TextureHandle)>,
+    /// Decoded thumbnails, bounded by [`THUMB_CACHE_MAX`].
+    pub tex: std::collections::HashMap<String, Thumb>,
     /// Thumbnails being decoded right now.
     pub in_flight: std::collections::HashSet<String>,
     /// Names that failed to decode, with the file stamp at that moment: a file
     /// that comes back (or is restored) retries with its new stamp.
     pub failed: std::collections::HashMap<String, f64>,
-    /// "In sync · N in the cloud, M on disk" line from the engine's last cycle.
+    /// "Last photo sync ..." line from the engine's last cycle.
     pub last_sync: String,
+    /// Photos the engine says need attention (incomplete, differs, duplicate).
+    pub attention: usize,
+    /// Timeline grouped into day cards, rebuilt when the list changes.
+    pub groups: Vec<(String, Vec<usize>)>,
+    /// Names held more than once by the timeline: identity is ambiguous.
+    pub shared: BTreeSet<String>,
     /// Epoch seconds of the last timeline fetch, so a revisit can re-list.
     pub fetched_at: f64,
     /// A delete is in flight.
@@ -43,6 +62,10 @@ pub struct PhotoState {
     pub dir_stamp: f64,
     pub summary_ts: String,
     pub probed_at: f64,
+    /// A Photos sync was requested; cleared when the summary advances.
+    pub checking_at: Option<f64>,
+    /// Thumbnail recency clock, advanced once per frame.
+    pub thumb_gen: u64,
 }
 
 /// Where downloaded photos land: `PROTON_SYNC_PHOTOS_LOCAL`, else
@@ -90,27 +113,30 @@ struct SyncSummary {
     #[serde(default)]
     removed: u64,
     conflicts: u64,
+    #[serde(default)]
+    attention: u64,
     error: String,
 }
 
-fn read_summary(app: &mut App) -> String {
-    let path = app.paths.state_dir.join("photos-sync.json");
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return "Not synced yet - the engine syncs this folder with /photos.".to_string();
-    };
-    let Ok(s) = serde_json::from_str::<SyncSummary>(&text) else {
-        return String::new();
-    };
+fn render_summary(app: &mut App, s: &SyncSummary) -> String {
+    app.photos.attention = s.attention as usize;
     if !s.error.is_empty() {
-        return format!("Sync failed: {}", s.error);
+        if crate::health::is_login_error(&s.error) {
+            return "Sign in again to sync photos.".to_string();
+        }
+        let short: String = s.error.chars().take(180).collect();
+        return format!("Photo sync failed: {short}");
     }
     let when = chrono::DateTime::parse_from_rfc3339(&s.ts)
         .map(|t| crate::util::rel_time(Some(t)))
         .unwrap_or_default();
     let mut line = format!(
-        "In sync \u{b7} {} in the cloud, {} on disk",
+        "Last photo sync \u{b7} {} in the cloud, {} on disk",
         s.remote, s.local
     );
+    if s.attention > 0 {
+        line.push_str(&format!(" \u{b7} {} need attention", s.attention));
+    }
     if s.uploaded + s.downloaded + s.trashed + s.removed > 0 {
         line.push_str(&format!(
             " \u{b7} last pass {} up, {} down, {} trashed, {} removed",
@@ -118,12 +144,27 @@ fn read_summary(app: &mut App) -> String {
         ));
     }
     if s.conflicts > 0 {
-        line.push_str(&format!(" \u{b7} {} name clash(es) left alone", s.conflicts));
+        line.push_str(&format!(
+            " \u{b7} {} photo(s) not synced - versions differ",
+            s.conflicts
+        ));
     }
     if !when.is_empty() {
         line.push_str(&format!(" \u{b7} {when}"));
     }
     line
+}
+
+fn read_summary(app: &mut App) -> String {
+    let path = app.paths.state_dir.join("photos-sync.json");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        app.photos.attention = 0;
+        return "Not synced yet - the engine syncs this folder with /photos.".to_string();
+    };
+    let Ok(s) = serde_json::from_str::<SyncSummary>(&text) else {
+        return String::new();
+    };
+    render_summary(app, &s)
 }
 
 pub fn refresh(app: &mut App) {
@@ -148,7 +189,6 @@ pub fn refresh(app: &mut App) {
 
 pub fn on_fetched(app: &mut App, r: Result<Vec<cli::PhotoEntry>, String>) {
     app.photos.loading = false;
-    app.photos.last_sync = read_summary(app);
     match r {
         Ok(items) => {
             app.photos.status.clear();
@@ -156,16 +196,67 @@ pub fn on_fetched(app: &mut App, r: Result<Vec<cli::PhotoEntry>, String>) {
             let live: Vec<&str> = items.iter().map(|p| p.uid.as_str()).collect();
             app.photos.sel.retain(|u| live.contains(&u.as_str()));
             app.photos.items = items;
+            app.photos.groups = build_groups(&app.photos.items);
+            let (shared, names) = shared_and_names(&app.photos.items);
+            app.photos.shared = shared;
+            app.photos.failed.retain(|name, _| names.contains(name));
         }
         Err(e) => {
             app.photos.status.clear();
             app.photos.error = e;
         }
     }
+    app.photos.last_sync = read_summary(app);
+}
+
+/// Day cards and the set of names the timeline holds more than once.
+fn shared_and_names(items: &[cli::PhotoEntry]) -> (BTreeSet<String>, BTreeSet<String>) {
+    let mut seen = BTreeSet::new();
+    let mut shared = BTreeSet::new();
+    let mut names = BTreeSet::new();
+    for p in items {
+        names.insert(p.name.clone());
+        if !seen.insert(p.name.clone()) {
+            shared.insert(p.name.clone());
+        }
+    }
+    (shared, names)
+}
+
+/// Ask the engine for a photo pass. An optional uid forces that one repair
+/// past its backoff; the request is written before the wake so the engine
+/// cannot wake and find an empty request.
+pub fn request_sync(app: &mut App, uid: Option<&str>) {
+    if !app.active {
+        app.photos.status = if app.paused_by_user {
+            "Paused - resume on Home.".to_string()
+        } else {
+            "Sync is stopped - start it on Home.".to_string()
+        };
+        return;
+    }
+    if app.conf.get("PROTON_SYNC_PHOTOS").is_some_and(|v| v == "0") {
+        app.photos.status = "Photo sync is off in Settings.".to_string();
+        return;
+    }
+    let _ = std::fs::create_dir_all(&app.paths.state_dir);
+    let req = app.paths.state_dir.join("photos-request");
+    if let Err(e) = std::fs::write(&req, uid.unwrap_or("")) {
+        app.photos.error = format!("Could not ask the engine to sync photos: {e}");
+        return;
+    }
+    let _ = std::fs::write(&app.paths.wake_file, b"");
+    app.photos.error.clear();
+    app.photos.checking_at = Some(app.now());
+    app.photos.status = "Checking for new photos...".to_string();
 }
 
 pub fn download(app: &mut App, uids: Vec<String>) {
-    if uids.is_empty() || app.photos.busy {
+    if uids.is_empty() || app.photos.busy || app.photos.deleting {
+        return;
+    }
+    if app.health.status == "syncing" || app.health.phase.as_deref() == Some("photos") {
+        app.photos.status = "Wait for the current check to finish, then download.".to_string();
         return;
     }
     let dir = local_dir(app);
@@ -260,19 +351,39 @@ pub fn tick(app: &mut App) {
     // Files appearing or disappearing on disk (a download, a delete, a drop).
     let mut changed = app.photos.dir_stamp != 0.0 && dir_stamp != app.photos.dir_stamp;
     app.photos.dir_stamp = dir_stamp;
-    // A finished engine cycle, but only when it moved something or the cloud no
-    // longer matches what we show - the summary is rewritten every cycle, and
-    // reloading on that alone flickered.
+    // A new engine summary always updates the line and clears a pending
+    // "checking" state; only a real transfer or a changed cloud size re-lists
+    // the timeline, so an error or a no-op pass does not flicker the page.
     let summary = std::fs::read_to_string(app.paths.state_dir.join("photos-sync.json"))
         .ok()
         .and_then(|t| serde_json::from_str::<SyncSummary>(&t).ok());
     if let Some(s) = summary
         && s.ts != app.photos.summary_ts
     {
-        if s.uploaded + s.downloaded > 0 || s.remote as usize != app.photos.items.len() {
+        let error = !s.error.is_empty();
+        let moved = s.uploaded + s.downloaded + s.trashed + s.removed > 0;
+        let cloud_changed = s.remote as usize != app.photos.items.len();
+        app.photos.summary_ts = s.ts.clone();
+        app.photos.last_sync = render_summary(app, &s);
+        if app.photos.checking_at.take().is_some() {
+            app.photos.status.clear();
+        }
+        if !error && (moved || cloud_changed) {
             changed = true;
         }
-        app.photos.summary_ts = s.ts;
+    }
+    if let Some(t) = app.photos.checking_at {
+        if !app.active {
+            app.photos.checking_at = None;
+            app.photos.status = if app.paused_by_user {
+                "Paused - resume on Home.".to_string()
+            } else {
+                "Sync is stopped - start it on Home.".to_string()
+            };
+        } else if now - t > 180.0 {
+            app.photos.checking_at = None;
+            app.photos.status = "Still working in the background.".to_string();
+        }
     }
     if changed {
         refresh(app);
@@ -293,15 +404,15 @@ fn pretty_date(capture: &str) -> String {
         .unwrap_or_else(|_| capture.to_string())
 }
 
-/// Timeline order (newest first) grouped into days, newest day first.
-/// Cloned so rows can be drawn while the app borrows mutably.
-fn days(items: &[cli::PhotoEntry]) -> Vec<(String, Vec<cli::PhotoEntry>)> {
-    let mut out: Vec<(String, Vec<cli::PhotoEntry>)> = Vec::new();
-    for p in items {
+/// Timeline order (newest first) grouped into day cards, newest day first.
+/// Indices keep the per-frame cost to the visible tiles only.
+fn build_groups(items: &[cli::PhotoEntry]) -> Vec<(String, Vec<usize>)> {
+    let mut out: Vec<(String, Vec<usize>)> = Vec::new();
+    for (i, p) in items.iter().enumerate() {
         let d = day_of(&p.capture);
         match out.last_mut() {
-            Some((name, group)) if *name == d => group.push(p.clone()),
-            _ => out.push((d, vec![p.clone()])),
+            Some((name, group)) if *name == d => group.push(i),
+            _ => out.push((d, vec![i])),
         }
     }
     out
@@ -333,8 +444,7 @@ fn decode_thumb(bytes: &[u8]) -> Result<(usize, usize, Vec<u8>), String> {
     let (w, h, rgba) = if bytes.starts_with(&[0xFF, 0xD8]) {
         use zune_jpeg::zune_core::{colorspace::ColorSpace, options::DecoderOptions};
         let opts = DecoderOptions::new_fast().jpeg_set_out_colorspace(ColorSpace::RGBA);
-        let mut dec =
-            zune_jpeg::JpegDecoder::new_with_options(std::io::Cursor::new(bytes), opts);
+        let mut dec = zune_jpeg::JpegDecoder::new_with_options(std::io::Cursor::new(bytes), opts);
         let data = dec.decode().map_err(|e| format!("jpeg: {e:?}"))?;
         let info = dec.info().ok_or("jpeg: no header")?;
         (info.width as usize, info.height as usize, data)
@@ -407,12 +517,20 @@ fn request_thumb(app: &mut App, name: &str, path: std::path::PathBuf, stamp: f64
         let result = std::fs::read(&path)
             .map_err(|e| format!("read: {e}"))
             .and_then(|bytes| decode_thumb(&bytes));
-        let _ = tx.send(super::Back::PhotoThumb { name, stamp, result });
+        let _ = tx.send(super::Back::PhotoThumb {
+            name,
+            stamp,
+            result,
+        });
     });
 }
 
 pub fn draw(app: &mut App, ui: &mut egui::Ui) {
     let dir = local_dir(app);
+    if app.photos.groups.is_empty() && !app.photos.items.is_empty() {
+        app.photos.groups = build_groups(&app.photos.items);
+    }
+    app.photos.thumb_gen = app.photos.thumb_gen.wrapping_add(1);
 
     // --- pinned header: never scrolls away ---
     ui.horizontal(|ui| {
@@ -440,36 +558,105 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
         .size(12.0),
     );
     if !app.photos.last_sync.is_empty() {
+        let color = if app.photos.attention > 0 {
+            theme::WARNING_TEXT
+        } else {
+            ui.visuals().weak_text_color()
+        };
         ui.label(
             egui::RichText::new(&app.photos.last_sync)
-                .weak()
-                .size(12.0),
+                .size(12.0)
+                .color(color),
         );
     }
     ui.add_space(10.0);
 
-    // No Sync now and no Reload button: Home's (and the tray's) Sync now drives
-    // the engine, and the page re-reads itself when the folder or the engine's
-    // summary changes (photos::tick).
+    // Photos has its own sync control. The engine runs the photo pass even
+    // when the file pass fails, so this never depends on Home's button.
     ui.horizontal_wrapped(|ui| {
+        let photo_sync_on = app.conf.get("PROTON_SYNC_PHOTOS").is_none_or(|v| v != "0");
+        let syncing =
+            app.health.status == "syncing" || app.health.phase.as_deref() == Some("photos");
+        if app.active && photo_sync_on {
+            if widgets::secondary_button_hint(
+                ui,
+                "  Sync photos",
+                "Check Proton Photos now. Your Drive files sync right after.",
+            ) {
+                request_sync(app, None);
+            }
+        } else if !app.active {
+            ui.label(
+                egui::RichText::new(if app.paused_by_user {
+                    "Paused - resume on Home."
+                } else {
+                    "Sync is stopped - start it on Home."
+                })
+                .size(12.0)
+                .weak(),
+            );
+        } else {
+            ui.label(
+                egui::RichText::new("Photo sync is off in Settings.")
+                    .size(12.0)
+                    .weak(),
+            );
+        }
         if app.photos.sel.is_empty() {
             if ui
                 .add_enabled(
-                    !app.photos.busy && !app.photos.deleting && !app.photos.items.is_empty(),
-                    egui::Button::new("Download all"),
+                    !app.photos.busy
+                        && !app.photos.deleting
+                        && !syncing
+                        && !app.photos.items.is_empty(),
+                    egui::Button::new("Download missing"),
+                )
+                .on_hover_text(
+                    "Copy every photo that is not on this computer. Nothing in the cloud changes.",
                 )
                 .clicked()
             {
-                let all: Vec<String> = app.photos.items.iter().map(|p| p.uid.clone()).collect();
-                download(app, all);
+                let missing: Vec<String> = app
+                    .photos
+                    .items
+                    .iter()
+                    .filter(|p| {
+                        !app.photos.shared.contains(&p.name) && !dir.join(&p.name).is_file()
+                    })
+                    .map(|p| p.uid.clone())
+                    .collect();
+                if missing.is_empty() {
+                    app.photos.status = "Every photo is already on this computer.".to_string();
+                } else {
+                    download(app, missing);
+                }
             }
         } else {
             let sel = app.photos.sel.clone();
             if ui
-                .add_enabled(!app.photos.busy && !app.photos.deleting, egui::Button::new(format!("Download {} selected", sel.len())))
+                .add_enabled(
+                    !app.photos.busy && !app.photos.deleting && !syncing,
+                    egui::Button::new(format!("Download {} selected", sel.len())),
+                )
                 .clicked()
             {
-                download(app, sel.clone());
+                let missing: Vec<String> = app
+                    .photos
+                    .items
+                    .iter()
+                    .filter(|p| {
+                        sel.contains(&p.uid)
+                            && !app.photos.shared.contains(&p.name)
+                            && !dir.join(&p.name).is_file()
+                    })
+                    .map(|p| p.uid.clone())
+                    .collect();
+                if missing.is_empty() {
+                    app.photos.status =
+                        "The selected photos are already on this computer.".to_string();
+                } else {
+                    download(app, missing);
+                }
             }
             if ui
                 .add_enabled(
@@ -527,7 +714,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
             // off the top it is re-painted pinned (see below), so the date is
             // never drawn twice at the same time.
             let mut current: Option<(String, f32)> = None;
-            for (day, group) in days(&app.photos.items) {
+            for (day, group) in app.photos.groups.clone() {
                 ui.add_space(12.0);
                 let header_y = ui.cursor().top();
                 ui.label(egui::RichText::new(&day).strong().size(13.5));
@@ -540,8 +727,21 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                     ui.spacing_mut().item_spacing.x = GAP;
                     for row in group.chunks(cols.max(1)) {
                         ui.horizontal(|ui| {
-                            for p in row {
-                                tile(ui, app, p, &dir, size);
+                            for &i in row {
+                                // Cull before any stat, file read or decode:
+                                // a large timeline only pays for what is on
+                                // screen. The same height is reserved so the
+                                // scrollbar does not jump.
+                                let tile_rect = egui::Rect::from_min_size(
+                                    ui.cursor().min,
+                                    egui::vec2(size, size + TILE_LABEL_H),
+                                );
+                                if !ui.is_rect_visible(tile_rect) {
+                                    ui.allocate_space(tile_rect.size());
+                                    continue;
+                                }
+                                let p = app.photos.items[i].clone();
+                                tile(ui, app, &p, &dir, size);
                             }
                         });
                     }
@@ -611,43 +811,130 @@ fn grid_metrics(avail: f32) -> (usize, f32) {
     }
 }
 
-fn tile(
-    ui: &mut egui::Ui,
-    app: &mut App,
-    p: &cli::PhotoEntry,
-    dir: &std::path::Path,
-    size: f32,
-) {
+/// Height reserved under the image: name, status line and (when needed) the
+/// download action. Fixed so the cull and the real layout agree.
+const TILE_LABEL_H: f32 = 52.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TileState {
+    /// Two cloud photos share this name; the local file cannot be identified.
+    Duplicate,
+    /// No local copy.
+    Missing,
+    /// A 0-byte placeholder left by an interrupted download.
+    Incomplete,
+    /// A non-zero local file that differs from the cloud copy.
+    Mismatch,
+    Ready,
+}
+
+fn tile_state(local: Option<u64>, cloud: u64, shared: bool) -> TileState {
+    if shared {
+        TileState::Duplicate
+    } else {
+        match local {
+            None => TileState::Missing,
+            Some(0) if cloud > 0 => TileState::Incomplete,
+            Some(n) if cloud > 0 && n != cloud => TileState::Mismatch,
+            Some(_) => TileState::Ready,
+        }
+    }
+}
+
+fn caption_for(state: TileState, local: Option<u64>, cloud: u64) -> String {
+    let size = if cloud > 0 {
+        size_label(cloud)
+    } else {
+        "Size unknown".to_string()
+    };
+    match state {
+        TileState::Duplicate => "Duplicate name".to_string(),
+        TileState::Missing => format!("Not on this computer \u{b7} {size}"),
+        TileState::Incomplete => format!("Download incomplete \u{b7} {size}"),
+        TileState::Mismatch => format!(
+            "Both copies kept \u{b7} {} / {size}",
+            size_label(local.unwrap_or(0))
+        ),
+        TileState::Ready => size,
+    }
+}
+
+fn tile(ui: &mut egui::Ui, app: &mut App, p: &cli::PhotoEntry, dir: &std::path::Path, size: f32) {
     let path = dir.join(&p.name);
-    let local = path.is_file();
-    let stamp = if local { file_stamp(&path) } else { 0.0 };
+    let meta = std::fs::metadata(&path).ok();
+    let local_len = meta.as_ref().filter(|m| m.is_file()).map(|m| m.len());
+    let stamp = meta
+        .as_ref()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let state = tile_state(local_len, p.size, app.photos.shared.contains(&p.name));
+    let can_preview = matches!(state, TileState::Ready | TileState::Mismatch);
     let blocked = app
         .photos
         .failed
         .get(&p.name)
         .is_some_and(|s| (*s - stamp).abs() < 0.5);
-    if local
+    if can_preview
         && !blocked
-        && app.photos.tex.get(&p.name).is_none_or(|(s, _)| (*s - stamp).abs() >= 0.5)
+        && app
+            .photos
+            .tex
+            .get(&p.name)
+            .is_none_or(|t| (t.stamp - stamp).abs() >= 0.5)
     {
-        request_thumb(app, &p.name, path.clone(), stamp);
+        request_thumb(app, &p.name, path, stamp);
     }
-    let tex = app.photos.tex.get(&p.name).map(|(_, t)| t.clone());
+    let now_gen = app.photos.thumb_gen;
+    if let Some(t) = app.photos.tex.get_mut(&p.name) {
+        t.used = now_gen;
+    }
+    let tex = app.photos.tex.get(&p.name).map(|t| t.tex.clone());
     let selected = app.photos.sel.iter().any(|u| u == &p.uid);
+    let caption = caption_for(state, local_len, p.size);
+    let preview_caption = if can_preview && blocked {
+        format!(
+            "Can't preview \u{b7} {}",
+            caption_for(TileState::Ready, local_len, p.size)
+        )
+    } else {
+        caption
+    };
+    let when = if p.capture.is_empty() {
+        "No capture date".to_string()
+    } else {
+        pretty_date(&p.capture)
+    };
+    let dims = if p.width > 0 && p.height > 0 {
+        format!("{}x{}", p.width, p.height)
+    } else {
+        String::new()
+    };
+    let mut tip = format!("{when}\n{}\n{preview_caption}", p.name);
+    if !dims.is_empty() {
+        tip.push_str(&format!("\n{dims}"));
+    }
+    match state {
+        TileState::Duplicate => {
+            tip.push_str("\nTwo cloud photos share this name; rename one in Proton Photos.")
+        }
+        TileState::Mismatch => tip.push_str("\nRemove or replace the local file to resolve it."),
+        _ => {}
+    }
 
     ui.allocate_ui_with_layout(
-        egui::vec2(size, size + 30.0),
+        egui::vec2(size, size + TILE_LABEL_H),
         egui::Layout::top_down(egui::Align::Center),
         |ui| {
-            let (rect, resp) =
-                ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
             ui.painter().rect_filled(
                 rect,
                 egui::CornerRadius::same(10),
                 theme::glass_fill(ui.visuals()),
             );
             match &tex {
-                Some(t) => {
+                Some(t) if !(can_preview && blocked) => {
                     let [tw, th] = t.size();
                     let (tw, th) = (tw.max(1) as f32, th.max(1) as f32);
                     let scale = (rect.width() / tw).min(rect.height() / th);
@@ -662,7 +949,7 @@ fn tile(
                         egui::Color32::WHITE,
                     );
                 }
-                None => {
+                _ => {
                     // Not on disk yet, still decoding, or an unsupported format.
                     let icon = egui::Rect::from_center_size(
                         rect.center() - egui::vec2(0.0, 8.0),
@@ -684,6 +971,14 @@ fn tile(
                     egui::StrokeKind::Inside,
                 );
             }
+            if resp.has_focus() {
+                ui.painter().rect_stroke(
+                    rect,
+                    egui::CornerRadius::same(10),
+                    egui::Stroke::new(2.0, theme::accent(ui.visuals()).gamma_multiply(0.6)),
+                    egui::StrokeKind::Outside,
+                );
+            }
             if resp.clicked() {
                 if selected {
                     app.photos.sel.retain(|u| u != &p.uid);
@@ -691,29 +986,50 @@ fn tile(
                     app.photos.sel.push(p.uid.clone());
                 }
             }
-            let when = if p.capture.is_empty() {
-                "No capture date".to_string()
-            } else {
-                pretty_date(&p.capture)
-            };
-            resp.on_hover_text(format!("{when}\n{}", p.name));
+            let accessible = format!("{} - {}", p.name, preview_caption);
+            resp.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &accessible)
+            });
+            resp.on_hover_text(tip);
 
-            let label = widgets::elide(&p.name, 17);
-            ui.label(egui::RichText::new(label).size(11.0));
-            // No date under the photo: the day header carries it (and the tile's
-            // tooltip repeats it). Only a cloud-only photo needs a button here.
-            if !local
-                && ui
-                    .add_enabled(!app.photos.busy, egui::Button::new("Download"))
+            ui.add_space(2.0);
+            ui.label(egui::RichText::new(widgets::elide(&p.name, 17)).size(11.0));
+            let color = if matches!(
+                state,
+                TileState::Incomplete | TileState::Mismatch | TileState::Duplicate
+            ) {
+                theme::WARNING_TEXT
+            } else {
+                ui.visuals().weak_text_color()
+            };
+            ui.label(
+                egui::RichText::new(widgets::elide(&preview_caption, 24))
+                    .size(10.0)
+                    .color(color),
+            );
+            if matches!(state, TileState::Missing | TileState::Incomplete) {
+                let label = if state == TileState::Incomplete {
+                    "Re-download"
+                } else {
+                    "Download"
+                };
+                if ui
+                    .add_enabled(
+                        !app.photos.busy && !app.photos.deleting,
+                        egui::Button::new(label).small(),
+                    )
                     .clicked()
-            {
-                download(app, vec![p.uid.clone()]);
+                {
+                    if state == TileState::Incomplete {
+                        request_sync(app, Some(&p.uid));
+                    } else {
+                        download(app, vec![p.uid.clone()]);
+                    }
+                }
             }
         },
     );
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -739,15 +1055,42 @@ mod tests {
             photo("a.jpg", "2026-08-20 23:59"),
             photo("old.jpg", ""),
         ];
-        let groups = days(&items);
+        let groups = build_groups(&items);
         let names: Vec<&str> = groups.iter().map(|(d, _)| d.as_str()).collect();
         assert_eq!(
             names,
             vec!["Fri, 21 Aug 2026", "Thu, 20 Aug 2026", "Undated"]
         );
-        assert_eq!(groups[0].1.len(), 2);
-        assert_eq!(groups[0].1[0].name, "c.png");
-        assert_eq!(groups[2].1[0].name, "old.jpg");
+        assert_eq!(groups[0].1, vec![0, 1]);
+        assert_eq!(items[groups[0].1[0]].name, "c.png");
+        assert_eq!(items[groups[2].1[0]].name, "old.jpg");
+    }
+
+    #[test]
+    fn tile_states_are_honest_and_ordered() {
+        assert_eq!(tile_state(None, 10, true), TileState::Duplicate);
+        assert_eq!(tile_state(Some(10), 10, true), TileState::Duplicate);
+        assert_eq!(tile_state(None, 10, false), TileState::Missing);
+        assert_eq!(tile_state(Some(0), 10, false), TileState::Incomplete);
+        assert_eq!(tile_state(Some(4), 10, false), TileState::Mismatch);
+        assert_eq!(tile_state(Some(10), 10, false), TileState::Ready);
+        assert_eq!(tile_state(Some(0), 0, false), TileState::Ready);
+        assert!(caption_for(TileState::Incomplete, Some(0), 10).contains("incomplete"));
+        assert!(caption_for(TileState::Mismatch, Some(4), 10).contains("Both copies kept"));
+        assert_eq!(
+            caption_for(TileState::Missing, None, 0),
+            "Not on this computer \u{b7} Size unknown"
+        );
+    }
+
+    #[test]
+    fn thumbnails_evict_the_least_recently_used() {
+        let entries = vec![
+            ("a".to_string(), 3u64),
+            ("b".to_string(), 1),
+            ("c".to_string(), 2),
+        ];
+        assert_eq!(lru_victim(entries.into_iter()).as_deref(), Some("b"));
     }
 
     /// Every card uses the same grid, rows fill the width exactly, and the tile
@@ -796,5 +1139,3 @@ mod tests {
         );
     }
 }
-
-

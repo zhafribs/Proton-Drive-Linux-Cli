@@ -47,6 +47,8 @@ pub struct PhotoPlan {
     pub upload: Vec<String>,
     /// Remote uids to download.
     pub download: Vec<String>,
+    /// Remote uids whose local copy is a 0-byte placeholder to replace.
+    pub repair: Vec<String>,
     /// Names that differ in size on both sides: left alone, reported once.
     pub conflicts: Vec<String>,
     /// Photos deleted on disk: (name, uid) to send to the cloud trash.
@@ -62,6 +64,17 @@ pub struct Synced {
     pub size: u64,
 }
 
+/// A repair that failed: the cloud size it was meant to restore, how many
+/// attempts failed, and when the last one ran. Persisted so the 0-byte file
+/// is not retried on every wake, and so the cloud copy is never trashed just
+/// because its local placeholder is gone.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RepairFail {
+    pub size: u64,
+    pub tries: u32,
+    pub last_ts: u64,
+}
+
 /// The engine's memory of this folder: which photos are in sync, and which
 /// name clashes it already reported (so one is not reported every cycle).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -69,6 +82,7 @@ pub struct Synced {
 pub struct PhotoState {
     pub synced: BTreeMap<String, Synced>,
     pub handled: BTreeMap<String, (u64, u64)>,
+    pub repair_failed: BTreeMap<String, RepairFail>,
 }
 
 fn remote_by_name<'a>(remote: &'a [RemotePhoto], name: &str) -> Option<&'a RemotePhoto> {
@@ -76,6 +90,36 @@ fn remote_by_name<'a>(remote: &'a [RemotePhoto], name: &str) -> Option<&'a Remot
 }
 fn local_by_name<'a>(local: &'a [LocalPhoto], name: &str) -> Option<&'a LocalPhoto> {
     local.iter().find(|l| l.name == name)
+}
+
+/// Name indexes for the plan: one pass instead of O(n^2) scans on big
+/// libraries. Duplicate names keep the first entry, matching the old lookups.
+fn index_local(local: &[LocalPhoto]) -> BTreeMap<&str, &LocalPhoto> {
+    let mut out = BTreeMap::new();
+    for l in local {
+        out.entry(l.name.as_str()).or_insert(l);
+    }
+    out
+}
+fn index_remote(remote: &[RemotePhoto]) -> BTreeMap<&str, &RemotePhoto> {
+    let mut out = BTreeMap::new();
+    for r in remote {
+        out.entry(r.name.as_str()).or_insert(r);
+    }
+    out
+}
+
+/// Names the timeline holds more than once. Their identity is ambiguous while
+/// state is keyed by name, so nothing for them is transferred or trashed.
+fn shared_names(remote: &[RemotePhoto]) -> std::collections::BTreeSet<&str> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut shared = std::collections::BTreeSet::new();
+    for r in remote {
+        if !seen.insert(r.name.as_str()) {
+            shared.insert(r.name.as_str());
+        }
+    }
+    shared
 }
 
 /// The plan for one cycle - pure, so every rule is unit-tested.
@@ -90,28 +134,45 @@ pub fn plan(
     folder_looks_present: bool,
 ) -> PhotoPlan {
     let mut p = PhotoPlan::default();
+    let shared = shared_names(remote);
+    let local_index = index_local(local);
+    let remote_index = index_remote(remote);
+
     for l in local {
-        match remote_by_name(remote, &l.name) {
-            // Same name, same size: in sync (the caller records it).
-            Some(r) if r.size == l.size => {}
-            // Same name, different bytes: never overwrite either copy.
-            Some(r) => {
-                if state.handled.get(&l.name) != Some(&(l.size, r.size)) {
-                    p.conflicts.push(l.name.clone());
-                }
+        let Some(r) = remote_index.get(l.name.as_str()) else {
+            // A 0-byte image is a failed write, not a photo: never upload it.
+            if l.size == 0 {
+                continue;
             }
-            // Not in the cloud: new locally, or the cloud copy was deleted.
-            None => match state.synced.get(&l.name) {
+            match state.synced.get(&l.name) {
                 Some(_) => p.remove_local.push(l.name.clone()),
                 None => p.upload.push(l.name.clone()),
-            },
+            }
+            continue;
+        };
+        if shared.contains(l.name.as_str()) || r.size == 0 {
+            p.conflicts.push(l.name.clone());
+        } else if l.size == 0 {
+            // 0-byte placeholder: replace it from the verified cloud copy.
+            p.repair.push(r.uid.clone());
+        } else if r.size != l.size && state.handled.get(&l.name) != Some(&(l.size, r.size)) {
+            p.conflicts.push(l.name.clone());
         }
     }
     for r in remote {
-        if local_by_name(local, &r.name).is_some() {
-            continue; // handled above (in sync or conflict)
+        if local_index.contains_key(r.name.as_str()) {
+            continue; // handled above (in sync, repair, conflict)
+        }
+        if shared.contains(r.name.as_str()) {
+            p.conflicts.push(r.name.clone());
+            continue;
         }
         match state.synced.get(&r.name) {
+            // A failed repair vetoes trashing: the cloud copy may be the only
+            // good copy left.
+            Some(s) if s.uid == r.uid && state.repair_failed.contains_key(&r.uid) => {
+                p.conflicts.push(r.name.clone());
+            }
             // We had it synced and the file is gone: the user deleted it here.
             Some(s) if s.uid == r.uid => p.trash_remote.push((r.name.clone(), r.uid.clone())),
             // Never seen before: download it.
@@ -121,7 +182,10 @@ pub fn plan(
     p.upload.sort();
     p.download.sort();
     p.download.dedup();
+    p.repair.sort();
+    p.repair.dedup();
     p.conflicts.sort();
+    p.conflicts.dedup();
     p.trash_remote.sort();
     p.remove_local.sort();
     if !allow_deletes || !folder_looks_present {
@@ -131,6 +195,42 @@ pub fn plan(
         p.remove_local.clear();
     }
     p
+}
+
+/// Exponential backoff for a failed repair, capped at six hours.
+fn backoff_secs(tries: u32) -> u64 {
+    (600u64 << tries.saturating_sub(1).min(6)).min(6 * 3600)
+}
+
+/// Should this 0-byte file be repaired again? `force` is a manual request for
+/// this exact uid and bypasses the backoff once.
+pub fn repair_due(
+    failed: &BTreeMap<String, RepairFail>,
+    uid: &str,
+    size: u64,
+    now: u64,
+    force: bool,
+) -> bool {
+    if force {
+        return true;
+    }
+    let Some(fail) = failed.get(uid) else {
+        return true;
+    };
+    if fail.size != size {
+        return true; // the cloud copy changed; verify it afresh
+    }
+    if fail.tries >= 6 {
+        return false; // automatic retries exhausted; the tile can force one
+    }
+    now.saturating_sub(fail.last_ts) >= backoff_secs(fail.tries)
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// Result of one cycle, mirrored into `photos-sync.json` for the GUI.
@@ -146,6 +246,11 @@ pub struct Summary {
     pub trashed: usize,
     #[serde(default)]
     pub removed: usize,
+    /// Photos that are not fully in sync for a reason the user can act on:
+    /// incomplete download, size difference, duplicate name, or a failed
+    /// repair that is waiting to retry.
+    #[serde(default)]
+    pub attention: usize,
     pub error: String,
 }
 
@@ -167,7 +272,10 @@ pub fn scan_local(dir: &Path) -> Vec<LocalPhoto> {
         if !meta.is_file() || !is_image(&name) {
             continue;
         }
-        out.push(LocalPhoto { name, size: meta.len() });
+        out.push(LocalPhoto {
+            name,
+            size: meta.len(),
+        });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
@@ -224,7 +332,9 @@ fn write_json<T: Serialize>(path: &Path, v: &T) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let Ok(text) = serde_json::to_string(v) else { return };
+    let Ok(text) = serde_json::to_string(v) else {
+        return;
+    };
     let tmp = path.with_extension("json.tmp");
     if std::fs::write(&tmp, text).is_ok() {
         let _ = std::fs::rename(&tmp, path);
@@ -239,7 +349,11 @@ fn upload(cli: &Cli, dir: &Path, names: &[String]) -> Result<usize> {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        args.extend(chunk.iter().map(|n| dir.join(n).to_string_lossy().into_owned()));
+        args.extend(
+            chunk
+                .iter()
+                .map(|n| dir.join(n).to_string_lossy().into_owned()),
+        );
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         cli.run(&refs, false, None, true)
             .with_context(|| format!("uploading {} photo(s)", chunk.len()))?;
@@ -280,8 +394,117 @@ fn trash_remote(cli: &Cli, photos: &[(String, String)]) -> Result<usize> {
     Ok(done)
 }
 
-/// One sync cycle: list both sides, move what is missing, propagate deletions.
-pub fn sync(cli: &Cli, dir: &Path, state_dir: &Path, allow_deletes: bool) -> Result<Summary> {
+/// Persist the state and report whether the write landed. Repair bookkeeping
+/// must be durable before a download starts, or the trash veto can be lost.
+fn write_state(state_dir: &Path, state: &PhotoState) -> bool {
+    let path = state_path(state_dir);
+    let Ok(text) = serde_json::to_string(state) else {
+        return false;
+    };
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, &path).is_ok()
+}
+
+/// Names whose two copies differ, counted every cycle (not just the first).
+fn mismatch_names(
+    local: &[LocalPhoto],
+    remote: &[RemotePhoto],
+    shared: &std::collections::BTreeSet<&str>,
+) -> std::collections::BTreeSet<String> {
+    let mut out: std::collections::BTreeSet<String> =
+        shared.iter().map(|s| (*s).to_string()).collect();
+    for l in local {
+        let Some(r) = remote_by_name(remote, &l.name) else {
+            continue;
+        };
+        if shared.contains(l.name.as_str()) || (l.size > 0 && r.size > 0 && l.size != r.size) {
+            out.insert(l.name.clone());
+        }
+    }
+    out
+}
+
+/// Photos the page should warn about: incomplete, differing, duplicate, or a
+/// failed repair still waiting. Missing and unpreviewable are normal states.
+fn attention_count(local: &[LocalPhoto], remote: &[RemotePhoto], state: &PhotoState) -> usize {
+    let shared = shared_names(remote);
+    let mut names = mismatch_names(local, remote, &shared);
+    for r in remote {
+        if let Some(l) = local_by_name(local, &r.name)
+            && l.size == 0
+            && r.size > 0
+        {
+            names.insert(r.name.clone());
+        }
+        if state.repair_failed.contains_key(&r.uid) {
+            names.insert(r.name.clone());
+        }
+    }
+    names.len()
+}
+
+/// Replace a 0-byte local file with a verified download. The new copy lands in
+/// a temp dir first; the placeholder is touched only after its size checks out.
+fn repair_one(cli: &Cli, dir: &Path, remote: &RemotePhoto) -> Result<bool> {
+    let target = dir.join(&remote.name);
+    if let Ok(meta) = std::fs::metadata(&target)
+        && (!meta.is_file() || meta.len() != 0)
+    {
+        return Ok(false); // no longer a placeholder
+    }
+    if remote.size == 0 {
+        return Ok(false); // nothing to verify against
+    }
+    let tmp_root = dir.join(".proton-repair");
+    let _ = std::fs::remove_dir_all(&tmp_root);
+    std::fs::create_dir_all(&tmp_root)?;
+    let outcome = (|| -> Result<bool> {
+        let rpath = format!("/photos/{}", remote.uid);
+        let dest = tmp_root.to_string_lossy().into_owned();
+        let args = [
+            "photo",
+            "download",
+            "-c",
+            "rename",
+            rpath.as_str(),
+            dest.as_str(),
+        ];
+        cli.run(&args, false, None, true)?;
+        let files: Vec<PathBuf> = std::fs::read_dir(&tmp_root)?
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.is_file())
+            .collect();
+        if files.len() != 1 {
+            return Ok(false);
+        }
+        let produced = &files[0];
+        if std::fs::metadata(produced)?.len() != remote.size {
+            return Ok(false);
+        }
+        // The user may have written a real file during the download.
+        if let Ok(meta) = std::fs::metadata(&target)
+            && meta.len() != 0
+        {
+            return Ok(false);
+        }
+        std::fs::rename(produced, &target)?;
+        Ok(true)
+    })();
+    let _ = std::fs::remove_dir_all(&tmp_root);
+    outcome
+}
+
+/// One sync cycle: list both sides, move what is missing, repair 0-byte
+/// downloads, and propagate deletions. `force_uids` are manual retries from
+/// the Photos page; only those bypass the repair backoff.
+pub fn sync(
+    cli: &Cli,
+    dir: &Path,
+    state_dir: &Path,
+    allow_deletes: bool,
+    force_uids: &[String],
+) -> Result<Summary> {
     let remote = timeline(cli)?;
     let local = scan_local(dir);
     let mut state = read_state(state_dir);
@@ -298,13 +521,7 @@ pub fn sync(cli: &Cli, dir: &Path, state_dir: &Path, allow_deletes: bool) -> Res
         );
     }
 
-    let mut p = plan(
-        &local,
-        &remote,
-        &state,
-        allow_deletes,
-        folder_looks_present,
-    );
+    let mut p = plan(&local, &remote, &state, allow_deletes, folder_looks_present);
     // A mass delete crawls: whatever is left over is picked up next cycle.
     let mut capped = 0;
     if p.trash_remote.len() > MAX_DELETES {
@@ -319,18 +536,16 @@ pub fn sync(cli: &Cli, dir: &Path, state_dir: &Path, allow_deletes: bool) -> Res
         eprintln!("photos: {capped} more deletion(s) wait for the next cycle");
     }
 
+    let now = now_secs();
     let mut summary = Summary {
         ts: chrono::Utc::now().to_rfc3339(),
         remote: remote.len(),
         local: local.len(),
-        conflicts: p.conflicts.len(),
+        conflicts: mismatch_names(&local, &remote, &shared_names(&remote)).len(),
         ..Default::default()
     };
     for name in &p.conflicts {
-        if let (Some(l), Some(r)) = (
-            local_by_name(&local, name),
-            remote_by_name(&remote, name),
-        ) {
+        if let (Some(l), Some(r)) = (local_by_name(&local, name), remote_by_name(&remote, name)) {
             state.handled.insert(name.clone(), (l.size, r.size));
             eprintln!(
                 "photos: {name} differs (local {} B, cloud {} B); keeping both",
@@ -343,22 +558,97 @@ pub fn sync(cli: &Cli, dir: &Path, state_dir: &Path, allow_deletes: bool) -> Res
             && remote_by_name(&remote, name).map(|r| r.size) == Some(*rs)
     });
 
-    summary.uploaded = upload(cli, dir, &p.upload)?;
-    summary.downloaded = download(cli, dir, &p.download)?;
-    // Deletions last: a failed transfer above must not cost anything.
-    summary.trashed = trash_remote(cli, &p.trash_remote)?;
-    for name in &p.remove_local {
-        match std::fs::remove_file(dir.join(name)) {
-            Ok(()) => summary.removed += 1,
-            Err(e) => eprintln!("photos: could not remove {}: {e}", dir.join(name).display()),
+    // Transfers. A failed batch is remembered, not fatal: the same cycle still
+    // tries to repair any 0-byte result it left behind.
+    let mut hard: Option<anyhow::Error> = None;
+    if let Err(e) = upload(cli, dir, &p.upload) {
+        hard = Some(e);
+    } else {
+        summary.uploaded = p.upload.len();
+    }
+    if hard.is_none() {
+        match download(cli, dir, &p.download) {
+            Ok(n) => summary.downloaded = n,
+            Err(e) => hard = Some(e),
         }
     }
 
-    // Remember what is in sync now: names the next cycle may delete safely.
-    // Transfers above changed both sides, so re-read them: a photo uploaded in
-    // this cycle is only in sync once its uid is known, and without that the
-    // next cycle would re-download it instead of trashing a local delete.
-    let moved = !p.upload.is_empty() || !p.download.is_empty() || !p.trash_remote.is_empty();
+    let login_error = hard
+        .as_ref()
+        .is_some_and(|e| proton_core::health::is_login_error(&format!("{e:#}")));
+    let mut repaired = false;
+    if !login_error {
+        let after = scan_local(dir);
+        let mut repairs = p.repair.clone();
+        for uid in &p.download {
+            if let Some(r) = remote.iter().find(|r| &r.uid == uid)
+                && let Some(l) = local_by_name(&after, &r.name)
+                && l.size == 0
+                && r.size > 0
+            {
+                repairs.push(uid.clone());
+            }
+        }
+        repairs.sort();
+        repairs.dedup();
+        for uid in repairs {
+            let Some(remote) = remote.iter().find(|r| r.uid == uid) else {
+                continue;
+            };
+            let placeholder = std::fs::metadata(dir.join(&remote.name))
+                .map(|m| m.is_file() && m.len() == 0)
+                .unwrap_or(false);
+            if !placeholder {
+                continue;
+            }
+            let force = force_uids.iter().any(|u| u == &uid);
+            if !repair_due(&state.repair_failed, &uid, remote.size, now, force) {
+                continue;
+            }
+            // Persist the attempt before downloading: this is what stops a
+            // lost 0-byte file from being read as a local delete next cycle.
+            let entry = state.repair_failed.entry(uid.clone()).or_default();
+            entry.size = remote.size;
+            entry.tries = entry.tries.saturating_add(1);
+            entry.last_ts = now;
+            if !write_state(state_dir, &state) {
+                eprintln!("photos: cannot persist repair attempt for {}", remote.name);
+                continue;
+            }
+            match repair_one(cli, dir, remote) {
+                Ok(true) => {
+                    state.repair_failed.remove(&uid);
+                    let _ = write_state(state_dir, &state);
+                    summary.downloaded += 1;
+                    repaired = true;
+                }
+                Ok(false) => eprintln!("photos: repair incomplete for {}", remote.name),
+                Err(e) => eprintln!("photos: repair failed for {}: {e:#}", remote.name),
+            }
+        }
+    }
+
+    // Deletions last: a failed transfer above must not cost anything.
+    if hard.is_none() {
+        match trash_remote(cli, &p.trash_remote) {
+            Ok(n) => summary.trashed = n,
+            Err(e) => hard = Some(e),
+        }
+        for name in &p.remove_local {
+            match std::fs::remove_file(dir.join(name)) {
+                Ok(()) => summary.removed += 1,
+                Err(e) => eprintln!("photos: could not remove {}: {e}", dir.join(name).display()),
+            }
+        }
+    }
+
+    // Remember what is in sync now. A failed cycle keeps the previous memory
+    // rather than rebuilding it from a doubtful scan.
+    let moved = !p.upload.is_empty()
+        || !p.download.is_empty()
+        || !p.trash_remote.is_empty()
+        || !p.remove_local.is_empty()
+        || repaired;
     let final_remote = if moved {
         timeline(cli).unwrap_or(remote)
     } else {
@@ -367,25 +657,46 @@ pub fn sync(cli: &Cli, dir: &Path, state_dir: &Path, allow_deletes: bool) -> Res
     let final_local = if moved { scan_local(dir) } else { local };
     summary.remote = final_remote.len();
     summary.local = final_local.len();
+    let shared = shared_names(&final_remote);
 
-    state.synced.clear();
-    for r in &final_remote {
-        if local_by_name(&final_local, &r.name).is_some_and(|l| l.size == r.size) {
-            state.synced.insert(
-                r.name.clone(),
-                Synced {
-                    uid: r.uid.clone(),
-                    size: r.size,
-                },
-            );
+    if hard.is_none() {
+        state.synced.clear();
+        for r in &final_remote {
+            if shared.contains(r.name.as_str()) || r.size == 0 {
+                continue; // ambiguous, or no verified size to compare
+            }
+            if local_by_name(&final_local, &r.name).is_some_and(|l| l.size == r.size) {
+                state.synced.insert(
+                    r.name.clone(),
+                    Synced {
+                        uid: r.uid.clone(),
+                        size: r.size,
+                    },
+                );
+            }
         }
+        // Photos just trashed must not stay in state as if they were synced.
+        for (name, _) in &p.trash_remote {
+            state.synced.remove(name);
+        }
+        // Keep a failed-repair entry while the local copy is still broken or
+        // gone: it is the veto that stops the cloud copy from being trashed.
+        state.repair_failed.retain(|uid, fail| {
+            let Some(r) = final_remote.iter().find(|r| &r.uid == uid) else {
+                return false;
+            };
+            r.size == fail.size
+                && !local_by_name(&final_local, &r.name).is_some_and(|l| l.size == r.size)
+        });
     }
-    // Photos just trashed still need their state entry dropped by name.
-    for (name, _) in &p.trash_remote {
-        state.synced.remove(name);
+    summary.conflicts = mismatch_names(&final_local, &final_remote, &shared).len();
+    summary.attention = attention_count(&final_local, &final_remote, &state);
+    let _ = write_state(state_dir, &state);
+    if let Some(e) = hard {
+        summary.error = format!("{e:#}");
+        write_json(&summary_path(state_dir), &summary);
+        return Err(e);
     }
-
-    write_json(&state_path(state_dir), &state);
     write_json(&summary_path(state_dir), &summary);
     Ok(summary)
 }
@@ -482,7 +793,10 @@ mod tests {
             ..Default::default()
         };
         let p = plan(&[], &r, &state, true, true);
-        assert_eq!(p.trash_remote, vec![("gone.jpg".to_string(), "u1".to_string())]);
+        assert_eq!(
+            p.trash_remote,
+            vec![("gone.jpg".to_string(), "u1".to_string())]
+        );
 
         // Unknown to the state: a download, never a delete.
         let fresh = plan(&[], &r, &PhotoState::default(), true, true);
@@ -532,7 +846,10 @@ mod tests {
         assert!(first.upload.is_empty() && first.download.is_empty());
         state.handled.insert("x.jpg".into(), (10, 99));
         assert!(plan(&l, &r, &state, true, true).conflicts.is_empty());
-        assert_eq!(plan(&[local("x.jpg", 11)], &r, &state, true, true).conflicts, vec!["x.jpg"]);
+        assert_eq!(
+            plan(&[local("x.jpg", 11)], &r, &state, true, true).conflicts,
+            vec!["x.jpg"]
+        );
     }
 
     #[test]
@@ -542,6 +859,212 @@ mod tests {
         assert!(is_image("c.png"));
         assert!(!is_image("notes.txt"));
         assert!(!is_image("no-extension"));
+    }
+
+    #[test]
+    fn zero_byte_local_copy_is_a_repair_not_a_conflict() {
+        let l = vec![local("broken.jpg", 0)];
+        let r = vec![remote("u1", "broken.jpg", 99)];
+        let mut state = PhotoState::default();
+        // An old conflict memory must not hide the repair.
+        state.handled.insert("broken.jpg".into(), (0, 99));
+        let p = plan(&l, &r, &state, true, true);
+        assert_eq!(p.repair, vec!["u1"]);
+        assert!(p.conflicts.is_empty());
+        assert!(p.download.is_empty() && p.upload.is_empty() && p.trash_remote.is_empty());
+    }
+
+    #[test]
+    fn zero_byte_local_with_no_cloud_copy_is_never_uploaded() {
+        let p = plan(
+            &[local("empty.png", 0)],
+            &[],
+            &PhotoState::default(),
+            true,
+            true,
+        );
+        assert!(p.upload.is_empty());
+        assert!(p.download.is_empty() && p.remove_local.is_empty());
+    }
+
+    #[test]
+    fn shared_cloud_names_transfer_nothing_and_never_trash() {
+        let r = vec![remote("u1", "same.jpg", 10), remote("u2", "same.jpg", 20)];
+        let state = PhotoState {
+            synced: [synced("same.jpg", "u1", 10)].into(),
+            ..Default::default()
+        };
+        let p = plan(&[], &r, &state, true, true);
+        assert!(p.download.is_empty() && p.trash_remote.is_empty());
+        assert_eq!(p.conflicts, vec!["same.jpg"]);
+
+        let p2 = plan(&[local("same.jpg", 10)], &r, &state, true, true);
+        assert!(p2.upload.is_empty() && p2.download.is_empty() && p2.trash_remote.is_empty());
+    }
+
+    #[test]
+    fn a_failed_repair_vetoes_trashing_the_cloud_copy() {
+        let r = vec![remote("u1", "gone.jpg", 10)];
+        let mut state = PhotoState {
+            synced: [synced("gone.jpg", "u1", 10)].into(),
+            ..Default::default()
+        };
+        state.repair_failed.insert(
+            "u1".into(),
+            RepairFail {
+                size: 10,
+                tries: 1,
+                last_ts: 0,
+            },
+        );
+        let p = plan(&[], &r, &state, true, true);
+        assert!(p.trash_remote.is_empty());
+        assert_eq!(p.conflicts, vec!["gone.jpg"]);
+    }
+
+    #[test]
+    fn repair_backoff_is_bounded_and_resets_on_size_change() {
+        let mut failed = BTreeMap::new();
+        assert!(repair_due(&failed, "u1", 10, 100, false));
+        failed.insert(
+            "u1".into(),
+            RepairFail {
+                size: 10,
+                tries: 1,
+                last_ts: 100,
+            },
+        );
+        assert!(!repair_due(&failed, "u1", 10, 699, false));
+        assert!(repair_due(&failed, "u1", 10, 700, false));
+        assert!(repair_due(&failed, "u1", 11, 100, false));
+        failed.get_mut("u1").unwrap().tries = 6;
+        assert!(!repair_due(&failed, "u1", 10, u64::MAX, false));
+        assert!(
+            repair_due(&failed, "u1", 10, u64::MAX, true),
+            "manual retry"
+        );
+    }
+
+    #[test]
+    fn attention_counts_each_name_once() {
+        let l = vec![local("a.jpg", 10), local("b.jpg", 0), local("ok.jpg", 5)];
+        let r = vec![
+            remote("u1", "a.jpg", 99),
+            remote("u2", "b.jpg", 20),
+            remote("u3", "ok.jpg", 5),
+            remote("u4", "missing.jpg", 1),
+        ];
+        let shared = shared_names(&r);
+        assert_eq!(mismatch_names(&l, &r, &shared).len(), 1);
+        assert_eq!(attention_count(&l, &r, &PhotoState::default()), 2);
+    }
+
+    fn fake_cli(root: &std::path::Path, body: &str) -> Cli {
+        use std::os::unix::fs::PermissionsExt;
+        let path = root.join("fake-cli");
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        Cli::for_test(path)
+    }
+
+    fn test_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("pd-photos-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("photos")).unwrap();
+        std::fs::create_dir_all(root.join("state")).unwrap();
+        root
+    }
+
+    const TIMELINE: &str = r#"[{"uid":"u1","name":{"ok":true,"value":"a.png"},"activeRevision":{"claimedSize":100}},{"uid":"u2","name":{"ok":true,"value":"b.png"},"activeRevision":{"claimedSize":200}}]"#;
+
+    /// A failed repair is on disk before the download starts, so a later
+    /// deleted placeholder can never trash the only good copy.
+    #[test]
+    fn failed_repair_is_persisted_and_vetoes_trash_next_cycle() {
+        let root = test_root("veto");
+        let photos = root.join("photos");
+        let state_dir = root.join("state");
+        let marker = root.join("trashed");
+        let mut state = PhotoState::default();
+        state.synced.insert(
+            "a.png".into(),
+            Synced {
+                uid: "u1".into(),
+                size: 100,
+            },
+        );
+        write_json(&state_path(&state_dir), &state);
+        std::fs::write(photos.join("a.png"), b"").unwrap();
+        let script = format!(
+            "case \"$*\" in\n\
+             *timeline*) printf '%s' '{TIMELINE}' ;;\n\
+             *trash*) : > '{}' ;;\n\
+             *download*) echo 'download failed' >&2; exit 1 ;;\n\
+             esac\n",
+            marker.display()
+        );
+        let cli = fake_cli(&root, &script);
+
+        assert!(sync(&cli, &photos, &state_dir, true, &[]).is_err());
+        let persisted = read_state(&state_dir);
+        assert!(
+            persisted.repair_failed.contains_key("u1"),
+            "attempt is durable"
+        );
+
+        std::fs::remove_file(photos.join("a.png")).unwrap();
+        let _ = sync(&cli, &photos, &state_dir, true, &[]);
+        assert!(!marker.exists(), "must not trash the cloud copy");
+        assert!(read_state(&state_dir).repair_failed.contains_key("u1"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A verified temp download replaces the 0-byte placeholder and leaves the
+    /// repair bookkeeping clean.
+    #[test]
+    fn a_verified_repair_replaces_the_zero_byte_file() {
+        let root = test_root("repair-ok");
+        let photos = root.join("photos");
+        let state_dir = root.join("state");
+        std::fs::write(photos.join("a.png"), b"").unwrap();
+        let script = format!(
+            "case \"$*\" in\n\
+             *timeline*) printf '%s' '{TIMELINE}' ;;\n\
+             *download*) mkdir -p \"$6\"\n\
+               case \"$6\" in\n\
+                 *.proton-repair*) head -c 100 /dev/zero > \"$6/a.png\" ;;\n\
+                 *) head -c 200 /dev/zero > \"$6/b.png\" ;;\n\
+               esac ;;\n\
+             esac\n"
+        );
+        let cli = fake_cli(&root, &script);
+        let out = sync(&cli, &photos, &state_dir, true, &[]).unwrap();
+        assert_eq!(std::fs::metadata(photos.join("a.png")).unwrap().len(), 100);
+        assert!(read_state(&state_dir).repair_failed.is_empty());
+        assert!(out.downloaded >= 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// If the user writes a real file while the repair downloads, the verified
+    /// temp copy is discarded instead of overwriting it.
+    #[test]
+    fn repair_never_overwrites_a_file_that_appeared_meanwhile() {
+        let root = test_root("repair-race");
+        let photos = root.join("photos");
+        let state_dir = root.join("state");
+        let target = photos.join("a.png");
+        std::fs::write(&target, b"").unwrap();
+        let script = format!(
+            "case \"$*\" in\n\
+             *timeline*) printf '%s' '{TIMELINE}' ;;\n\
+             *download*) mkdir -p \"$6\"; head -c 100 /dev/zero > \"$6/a.png\"; printf real > '{}' ;;\n\
+             esac\n",
+            target.display()
+        );
+        let cli = fake_cli(&root, &script);
+        let _ = sync(&cli, &photos, &state_dir, true, &[]);
+        assert_eq!(std::fs::read(&target).unwrap(), b"real");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -558,4 +1081,3 @@ mod tests {
         assert!(!deletes_enabled(&conf));
     }
 }
-

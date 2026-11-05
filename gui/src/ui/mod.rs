@@ -1155,11 +1155,24 @@ impl App {
                                 egui::TextureOptions::LINEAR,
                             );
                             // Bound the cache: a big timeline must not keep
-                            // every thumbnail on the GPU.
-                            if self.photos.tex.len() >= 256 {
-                                self.photos.tex.clear();
+                            // every thumbnail on the GPU. Evict the least
+                            // recently used instead of clearing them all, so
+                            // scrolling does not re-decode the whole page.
+                            if self.photos.tex.len() >= photos::THUMB_CACHE_MAX
+                                && let Some(victim) = photos::lru_victim(
+                                    self.photos.tex.iter().map(|(k, v)| (k.clone(), v.used)),
+                                )
+                            {
+                                self.photos.tex.remove(&victim);
                             }
-                            self.photos.tex.insert(name, (stamp, tex));
+                            self.photos.tex.insert(
+                                name,
+                                photos::Thumb {
+                                    stamp,
+                                    used: self.photos.thumb_gen,
+                                    tex,
+                                },
+                            );
                         }
                         Err(_) => {
                             self.photos.failed.insert(name, stamp);

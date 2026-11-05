@@ -183,6 +183,12 @@ pub fn run_loop() -> Result<()> {
         // A "Run full check now" request also disables the cached fast path
         // for exactly this cycle.
         let force_full = full.swap(false, std::sync::atomic::Ordering::Relaxed);
+        // The Photos page's button asks for a photo pass, optionally forcing
+        // one specific repair past its backoff.
+        let photo_request = take_photo_request(&state_dir().join("photos-request"));
+        if let Some(force) = &photo_request {
+            run_photos(&cli, &values, force);
+        }
         let result = run_once_cycle(
             &cli,
             &local_root,
@@ -193,6 +199,7 @@ pub fn run_loop() -> Result<()> {
             force_full,
         );
         let mut retrying = false;
+        let mut file_login_grace = false;
         match result {
             Ok(()) => {
                 retry_at = None;
@@ -218,21 +225,6 @@ pub fn run_loop() -> Result<()> {
                     );
                     fingerprint_started = true;
                 }
-                // Photos: additive two-way sync of the photo folder with
-                // /photos. Only once the folder exists - the Photos page
-                // creates it, so nobody gets a library they did not ask for.
-                if crate::photos::enabled(&values)
-                    && let Some(dir) = crate::photos::local_dir(&values)
-                    && dir.is_dir()
-                    && let Err(e) = crate::photos::sync(
-                        &cli,
-                        &dir,
-                        &state_dir(),
-                        crate::photos::deletes_enabled(&values),
-                    )
-                {
-                    eprintln!("photos: {e:#}");
-                }
             }
             Err(err) => {
                 let message = format!("{err:#}");
@@ -240,6 +232,7 @@ pub fn run_loop() -> Result<()> {
                 // At boot the keyring can still be locked. Retry quietly for
                 // a short grace period instead of flashing "session expired".
                 let in_grace = login && boot.elapsed() < Duration::from_secs(60);
+                file_login_grace = in_grace;
                 if !in_grace {
                     let status = if login { "needs_login" } else { "error" };
                     crate::health::write_health(&Health {
@@ -256,6 +249,11 @@ pub fn run_loop() -> Result<()> {
                     retry_at = None;
                 }
             }
+        }
+        // Photo sync is independent of the file cycle's success: it runs even
+        // when the file pass errored. A manual request already ran above.
+        if photo_request.is_none() && !file_login_grace {
+            run_photos(&cli, &values, &[]);
         }
         if retrying {
             crate::health::write_schedule_retry(interval, 10);
@@ -847,6 +845,49 @@ fn acquire_process_lock() -> anyhow::Result<std::fs::File> {
     Ok(fh)
 }
 
+/// Read and remove the Photos page's request. Empty means "check photos now";
+/// one uid means the user asked to retry that specific repair.
+fn take_photo_request(path: &Path) -> Option<Vec<String>> {
+    let text = fs::read_to_string(path).ok()?;
+    let _ = fs::remove_file(path);
+    Some(
+        text.lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+/// One photo pass. A failure is logged and never stops the file cycle. The
+/// health file says "syncing" for the duration so a direct Download in the GUI
+/// cannot race the engine's own transfer.
+fn run_photos(cli: &Cli, values: &std::collections::BTreeMap<String, String>, force: &[String]) {
+    if !crate::photos::enabled(values) {
+        return;
+    }
+    let Some(dir) = crate::photos::local_dir(values) else {
+        return;
+    };
+    if !dir.is_dir() {
+        return;
+    }
+    let before = proton_core::health::read(&crate::health::health_path());
+    let mut during = before.clone();
+    during.phase = Some("photos".to_string());
+    crate::health::write_health(&during);
+    if let Err(e) = crate::photos::sync(
+        cli,
+        &dir,
+        &state_dir(),
+        crate::photos::deletes_enabled(values),
+        force,
+    ) {
+        eprintln!("photos: {e:#}");
+    }
+    crate::health::write_health(&before);
+}
+
 /// Take a GUI request file: `true` only when one was there and is now gone,
 /// so a request wakes the engine exactly once. Public because the one-shot
 /// engine commands consume a pending request too.
@@ -1120,6 +1161,21 @@ mod tests {
         assert!(take_request(&path), "a written request wakes the engine");
         assert!(!path.exists(), "the engine removes what it consumed");
         assert!(!take_request(&path), "one request wakes once");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn photo_request_carries_an_optional_repair_uid() {
+        let dir = std::env::temp_dir().join(format!("pd-photo-request-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("photos-request");
+        assert_eq!(take_photo_request(&path), None);
+        std::fs::write(&path, b"").unwrap();
+        assert_eq!(take_photo_request(&path), Some(Vec::new()));
+        assert!(!path.exists());
+        std::fs::write(&path, b"uid-1\n\n").unwrap();
+        assert_eq!(take_photo_request(&path), Some(vec!["uid-1".to_string()]));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

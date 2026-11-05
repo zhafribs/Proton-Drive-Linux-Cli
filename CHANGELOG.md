@@ -1,3 +1,26 @@
+## 3.20.5 — 2026-11-05
+
+- **Photos has its own Sync button.** "Sync photos" checks Proton Photos
+  without going through Home, and the photo pass now runs even when the file
+  pass fails. Home's button and the tray still run a full sync.
+- **Interrupted photo downloads repair themselves.** A 0-byte local file left
+  by a failed download is re-fetched into a temp folder, checked against the
+  cloud size, then atomically swapped in. The file is never deleted first, a
+  real file that appears during the download is left alone, and repeated
+  failures back off instead of retrying every wake. A failed repair also vetoes
+  trashing the cloud copy if the empty placeholder is later removed.
+- **Honest photo tiles.** Each tile shows its size and says whether it is
+  missing, incomplete, a differing copy, or a duplicate name. The header reads
+  "Last photo sync" with an attention count instead of claiming "In sync", and
+  download failures are reported instead of leaving the old success line.
+- **Large libraries stay responsive.** Only tiles on screen are measured and
+  decoded; thumbnails use a least-recently-used cache instead of clearing the
+  whole cache when it fills.
+- Known limits: two cloud photos with the same name still cannot be told apart
+  locally (the app reports the duplicate and transfers neither), and a
+  non-zero partial file stays a "both copies kept" conflict rather than being
+  overwritten.
+
 ## 3.20.4 — 2026-11-05
 
 - **Large deletions now wait for your approval.** A batch affecting 25 or more
