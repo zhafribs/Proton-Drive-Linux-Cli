@@ -1389,8 +1389,11 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
             }
             apply_menu_item(app, menu_item);
 
-            // Delete key = move to trash (Qt event filter).
-            let del = ui.input(|i| i.key_pressed(egui::Key::Delete));
+            // Delete key = move to trash (Qt event filter), but never while a
+            // text field owns the keyboard or a dialog is already open.
+            let del = ui.input(|i| i.key_pressed(egui::Key::Delete))
+                && !ui.ctx().text_edit_focused()
+                && app.dialog.is_none();
             if del && !trash_view && !busy && !app.cloud.sel.is_empty() {
                 app.dialog = Some(super::Dialog::ConfirmTrash { n: app.cloud.sel.len() });
             }
@@ -1452,6 +1455,11 @@ fn row(
         egui::Sense::click_and_drag(),
     );
     let selected = app.cloud.sel.contains(&e.rel);
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::ListItem, ui.is_enabled(), e.name.as_str())
+    });
+    ui.ctx()
+        .accesskit_node_builder(resp.id, |n| n.set_selected(selected));
     let visuals = ui.visuals();
     if selected {
         ui.painter().rect_filled(rect, 2.0, visuals.selection.bg_fill);
@@ -1460,6 +1468,14 @@ fn row(
             rect,
             2.0,
             visuals.widgets.hovered.bg_fill.gamma_multiply(0.45),
+        );
+    }
+    if resp.has_focus() {
+        ui.painter().rect_stroke(
+            rect,
+            2.0,
+            egui::Stroke::new(1.5, visuals.selection.stroke.color),
+            egui::StrokeKind::Inside,
         );
     }
     let cy = rect.center().y;
@@ -1567,7 +1583,7 @@ fn row(
 
     // Selection: plain click replaces, ctrl toggles, shift ranges; Qt also
     // moved the current item when right-clicking outside the selection.
-    if resp.clicked() || raw_click {
+    if resp.clicked_by(egui::PointerButton::Primary) || raw_click {
         let mods = ui.input(|i| i.modifiers);
         let sel = &mut app.cloud.sel;
         if mods.ctrl || mods.command {
@@ -1608,6 +1624,31 @@ fn row(
 
     if resp.double_clicked() || raw_double {
         *open_rel = Some(e.rel.clone());
+    }
+    // Keyboard: Enter opens, Space toggles selection, matching the pointer
+    // behaviour. Focus is requested on click so the next Tab/Enter lands here.
+    if resp.clicked_by(egui::PointerButton::Primary) || raw_click {
+        resp.request_focus();
+    }
+    if resp.gained_focus() {
+        resp.scroll_to_me(Some(egui::Align::Center));
+    }
+    if app.dialog.is_none()
+        && resp.has_focus()
+        && ui.input(|i| i.key_pressed(egui::Key::Enter))
+    {
+        *open_rel = Some(e.rel.clone());
+    }
+    if app.dialog.is_none()
+        && resp.has_focus()
+        && ui.input(|i| i.key_pressed(egui::Key::Space))
+    {
+        if let Some(pos) = app.cloud.sel.iter().position(|r| r == &e.rel) {
+            app.cloud.sel.remove(pos);
+        } else {
+            app.cloud.sel.push(e.rel.clone());
+        }
+        app.cloud.anchor = Some(e.rel.clone());
     }
 
     resp.context_menu(|ui| row_menu_body(app, ui, menu_item));

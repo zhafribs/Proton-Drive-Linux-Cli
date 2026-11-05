@@ -708,9 +708,16 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
 
     if !app.photos.error.is_empty() {
         ui.add_space(8.0);
-        ui.label(
-            egui::RichText::new(&app.photos.error).color(theme::danger_text(ui.visuals())),
-        );
+        let error = app.photos.error.clone();
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(!app.photos.busy, egui::Button::new("Retry"))
+                .clicked()
+            {
+                refresh(app);
+            }
+            ui.label(egui::RichText::new(&error).color(theme::danger_text(ui.visuals())));
+        });
     }
     if !app.photos.status.is_empty() {
         ui.add_space(8.0);
@@ -1027,16 +1034,24 @@ fn tile(ui: &mut egui::Ui, app: &mut App, p: &cli::PhotoEntry, dir: &std::path::
                     egui::StrokeKind::Outside,
                 );
             }
-            if resp.clicked() {
+            if resp.clicked() || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space))) {
                 if selected {
                     app.photos.sel.retain(|u| u != &p.uid);
                 } else {
                     app.photos.sel.push(p.uid.clone());
                 }
             }
+            if resp.clicked() {
+                resp.request_focus();
+            }
             let accessible = format!("{} - {}", p.name, preview_caption);
             resp.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &accessible)
+                egui::WidgetInfo::selected(
+                    egui::Role::CheckBox,
+                    ui.is_enabled(),
+                    selected,
+                    &accessible,
+                )
             });
             resp.on_hover_text(tip);
 

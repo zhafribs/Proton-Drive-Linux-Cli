@@ -1420,11 +1420,14 @@ impl App {
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         if !self.tray_warned {
             self.tray_warned = true;
-            notify::send(
-                "Proton Drive",
+            let message = if self.tray.is_some() {
                 "Still running - syncing continues in the background. Right-click the tray \
-                 icon to quit.",
-            );
+                 icon to quit."
+            } else {
+                "Still running - syncing continues in the background. Start the app again \
+                 to reopen this window."
+            };
+            notify::send("Proton Drive", message);
         }
     }
 
@@ -2342,12 +2345,18 @@ impl eframe::App for App {
 
         if self.hide_on_start {
             self.hide_on_start = false;
-            self.hide_window(ctx);
+            if hides_to_tray(true, self.tray.is_some()) {
+                self.hide_window(ctx);
+            } else {
+                // main.rs starts the viewport hidden when start-in-tray is
+                // set. With no tray there is no way back, so show it now.
+                self.show_from_tray(ctx);
+            }
         }
 
         if ctx.input(|i| i.viewport().close_requested()) && !self.quitting {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            if self.prefs.close_to_tray() {
+            if hides_to_tray(self.prefs.close_to_tray(), self.tray.is_some()) {
                 self.hide_to_tray(ctx);
             } else {
                 self.quit(ctx);
@@ -2468,6 +2477,25 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         self.toast_ui(&ctx);
         self.dialog_ui(&ctx);
+    }
+}
+
+/// A close/start-in-tray request only hides when a tray actually exists to
+/// restore the window from. On a tray-less desktop, closing must quit.
+fn hides_to_tray(enabled: bool, tray_available: bool) -> bool {
+    enabled && tray_available
+}
+
+#[cfg(test)]
+mod tray_policy_tests {
+    use super::hides_to_tray;
+
+    #[test]
+    fn hiding_requires_a_real_tray() {
+        assert!(hides_to_tray(true, true));
+        assert!(!hides_to_tray(true, false));
+        assert!(!hides_to_tray(false, true));
+        assert!(!hides_to_tray(false, false));
     }
 }
 

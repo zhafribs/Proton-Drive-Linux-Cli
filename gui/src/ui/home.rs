@@ -130,9 +130,20 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
             }
             ui.add_space(10.0);
 
-            // Under the subtitle, where it has always been. Compact padding
-            // lets all three fit on one line even at the minimum width.
-            if !signed_out && !signing_in && !needs_login {
+            // Under the subtitle. A blocked account gets the action it needs
+            // in place, not only behind the account menu.
+            if signing_in {
+                ui.label(egui::RichText::new("Signing in\u{2026}").weak());
+            } else if signed_out || needs_login {
+                let label = if needs_login { "  Sign in again" } else { "  Sign in" };
+                if widgets::primary_button_hint(
+                    ui,
+                    label,
+                    "Sign in with your Proton account to start syncing.",
+                ) {
+                    app.action_login();
+                }
+            } else {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     ui.spacing_mut().button_padding.x = 10.0;

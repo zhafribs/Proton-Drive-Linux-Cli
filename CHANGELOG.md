@@ -1,3 +1,24 @@
+## 3.20.12 — 2026-11-06
+
+- **A blocked account is one click from signing in.** Home shows **Sign in** (or
+  **Sign in again** when the session expired) directly under the status, instead
+  of hiding the only sign-in action inside the account menu.
+- **No more vanishing window on tray-less desktops.** Close-to-tray and
+  start-in-tray only hide the window when a StatusNotifier tray actually
+  exists; otherwise closing quits normally. The background notification no
+  longer tells you to right-click a tray icon that is not there.
+- **Delete no longer fires while typing.** The file-list Delete shortcut is
+  ignored while a text field owns the keyboard, and while a dialog is open, so
+  pressing Delete in search cannot propose trashing the previous selection.
+- **Photos errors are retryable.** A failed timeline fetch shows its error with
+  a **Retry** button instead of leaving the page stuck until an unrelated sync.
+- **Keyboard and screen-reader support for the file list and photo grid.**
+  Rows and tiles expose their name and selected state to AccessKit; Enter opens
+  a row, Space toggles selection, and clicking a row moves keyboard focus to it.
+  Sidebar navigation rows now expose their selected state too.
+- **Primary CTA contrast.** The cyan cap over the violet buttons dropped white
+  label contrast to about 3.8:1; the flat violet button passes WCAG AA.
+
 ## 3.20.11 — 2026-11-05
 
 - **The shipped licence file now covers the signing crates.** Regenerating it

@@ -795,6 +795,16 @@ fn background_card(app: &mut App, ui: &mut egui::Ui) {
                     egui::WindowLevel::Normal
                 }));
         }
+        if app.tray.is_none() {
+            ui.label(
+                egui::RichText::new(
+                    "No system tray is available on this desktop. Closing quits, and \
+                     the quiet-start option is ignored.",
+                )
+                .size(11.5)
+                .weak(),
+            );
+        }
         let mut v = app.draft.close_tray;
         if widgets::toggle(ui, "Keep running when I close the window", &mut v, None) {
             app.draft.close_tray = v;

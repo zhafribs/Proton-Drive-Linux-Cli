@@ -51,19 +51,9 @@ pub fn primary_button_hint(ui: &mut egui::Ui, text: &str, hint: &str) -> bool {
     if !hint.is_empty() {
         response.clone().on_hover_text(hint);
     }
-    // Gradient-CTA: violet base with a cyan cap gives the soft vertical
-    // gradient without a mesh.
-    let rect = response.rect;
-    let r = (rect.height() * 0.5).round().clamp(1.0, 255.0) as u8;
-    let top = egui::Rect::from_min_max(
-        rect.min,
-        egui::pos2(rect.max.x, rect.min.y + rect.height() * 0.55),
-    );
-    ui.painter().rect_filled(
-        top,
-        egui::CornerRadius::same(r),
-        theme::CYAN.gamma_multiply(0.30),
-    );
+    // Flat violet, not the old cyan cap: the overlay dropped white-on-cyan
+    // contrast to ~3.8:1. The label is painted by egui before any overlay,
+    // so a gradient would also tint the text itself.
     response.clicked()
 }
 
@@ -75,17 +65,11 @@ pub fn primary_button_full(ui: &mut egui::Ui, text: &str) -> bool {
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), text));
     let radius = theme::pill();
     let fill = if response.hovered() {
-        theme::ACCENT.gamma_multiply(1.12)
+        theme::ACCENT.gamma_multiply(0.92)
     } else {
         theme::ACCENT
     };
     ui.painter().rect_filled(rect, radius, fill);
-    let top = egui::Rect::from_min_max(
-        rect.min,
-        egui::pos2(rect.max.x, rect.min.y + rect.height() * 0.55),
-    );
-    ui.painter()
-        .rect_filled(top, radius, theme::CYAN.gamma_multiply(0.30));
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
@@ -582,6 +566,11 @@ pub fn nav_row(ui: &mut egui::Ui, icon: NavIcon, label: &str, selected: bool) ->
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::ListItem, ui.is_enabled(), label)
+    });
+    ui.ctx()
+        .accesskit_node_builder(resp.id, |n| n.set_selected(selected));
     if resp.has_focus() {
         ui.painter().rect_stroke(
             rect,

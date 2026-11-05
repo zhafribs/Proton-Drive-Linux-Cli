@@ -1,6 +1,6 @@
 //! Aurora Glass styling: a deep-navy page under slowly drifting aurora
-//! light, translucent glass surfaces, gradient violet→cyan call-to-action
-//! buttons and a glowing status orb. Dark is the hero theme; the light
+//! light, translucent glass surfaces, flat violet call-to-action buttons
+//! and a glowing status orb. Dark is the hero theme; the light
 //! theme is the same language in frosted daylight. egui paints everything
 //! with a handful of discs and rounded rects - no textures, no shaders, no
 //! per-frame allocations.
