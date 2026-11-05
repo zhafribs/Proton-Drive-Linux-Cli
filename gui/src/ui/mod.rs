@@ -313,26 +313,49 @@ pub fn expand_user(s: &str) -> PathBuf {
 }
 
 /// Decode a PNG into (width, height, RGBA8) - used for the window and menu
-/// icon and the sidebar texture. RGB sources get an opaque alpha added.
+/// icon, the sidebar texture and photo thumbnails.
+///
+/// EXPAND turns palette entries into RGB/RGBA, tRNS into alpha and sub-8-bit
+/// samples into 8-bit; STRIP_16 drops 16-bit channels to 8-bit. Without this,
+/// perfectly valid indexed wallpapers (small on disk, large in pixels) failed
+/// with "Can't preview".
 pub fn decode_png(bytes: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
-    let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
     let mut reader = decoder.read_info().ok()?;
     let mut buf = vec![0u8; reader.output_buffer_size()?];
     let info = reader.next_frame(&mut buf).ok()?;
     let (w, h) = (info.width as usize, info.height as usize);
+    if info.bit_depth != png::BitDepth::Eight {
+        return None;
+    }
+    let samples = info.color_type.samples();
+    let data = buf.get(..w.checked_mul(h)?.checked_mul(samples)?)?;
     let rgba = match info.color_type {
-        png::ColorType::Rgba => {
-            buf.truncate(w * h * 4);
-            buf
-        }
+        png::ColorType::Rgba => data.to_vec(),
         png::ColorType::Rgb => {
             let mut out = Vec::with_capacity(w * h * 4);
-            for px in buf[..w * h * 3].as_chunks::<3>().0 {
+            for px in data.as_chunks::<3>().0 {
                 out.extend_from_slice(&[px[0], px[1], px[2], 255]);
             }
             out
         }
-        _ => return None,
+        png::ColorType::Grayscale => {
+            let mut out = Vec::with_capacity(w * h * 4);
+            for &g in data {
+                out.extend_from_slice(&[g, g, g, 255]);
+            }
+            out
+        }
+        png::ColorType::GrayscaleAlpha => {
+            let mut out = Vec::with_capacity(w * h * 4);
+            for px in data.as_chunks::<2>().0 {
+                out.extend_from_slice(&[px[0], px[0], px[0], px[1]]);
+            }
+            out
+        }
+        // EXPAND should have converted palette entries; keep the guard.
+        png::ColorType::Indexed => return None,
     };
     Some((w, h, rgba))
 }
@@ -1174,8 +1197,9 @@ impl App {
                                 },
                             );
                         }
-                        Err(_) => {
-                            self.photos.failed.insert(name, stamp);
+                        Err(e) => {
+                            let unsupported = e.starts_with("unsupported image format");
+                            self.photos.failed.insert(name, (stamp, unsupported));
                         }
                     }
                 }
@@ -2497,6 +2521,113 @@ mod glyph_tests {
              The bundled fonts do not contain them - check that eframe is built \
              with the `system_fonts` feature in gui/Cargo.toml."
         );
+    }
+}
+
+#[cfg(test)]
+mod png_decode_tests {
+    use super::decode_png;
+
+    fn encode(
+        w: u32,
+        h: u32,
+        color: png::ColorType,
+        depth: png::BitDepth,
+        palette: Option<Vec<u8>>,
+        trns: Option<Vec<u8>>,
+        data: &[u8],
+    ) -> Vec<u8> {
+        let mut out = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut out, w, h);
+            enc.set_color(color);
+            enc.set_depth(depth);
+            if let Some(p) = palette {
+                enc.set_palette(p);
+            }
+            if let Some(t) = trns {
+                enc.set_trns(t);
+            }
+            let mut writer = enc.write_header().unwrap();
+            writer.write_image_data(data).unwrap();
+        }
+        out
+    }
+
+    #[test]
+    fn indexed_pngs_decode_with_palette_and_alpha() {
+        // 8-bit indexed: two pixels, red then green.
+        let png = encode(
+            2,
+            1,
+            png::ColorType::Indexed,
+            png::BitDepth::Eight,
+            Some(vec![255, 0, 0, 0, 255, 0]),
+            None,
+            &[0, 1],
+        );
+        let (w, h, rgba) = decode_png(&png).expect("indexed 8-bit");
+        assert_eq!((w, h), (2, 1));
+        assert_eq!(&rgba[..8], &[255, 0, 0, 255, 0, 255, 0, 255]);
+
+        // 4-bit indexed with transparency: four pixels packed two per byte.
+        let png = encode(
+            4,
+            1,
+            png::ColorType::Indexed,
+            png::BitDepth::Four,
+            Some(vec![0, 0, 0, 255, 255, 255]),
+            Some(vec![128]),
+            &[0x01, 0x01],
+        );
+        let (w, h, rgba) = decode_png(&png).expect("indexed 4-bit");
+        assert_eq!((w, h), (4, 1));
+        assert_eq!(&rgba[..8], &[0, 0, 0, 128, 255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn grayscale_and_16_bit_pngs_decode() {
+        let png = encode(
+            2,
+            1,
+            png::ColorType::Grayscale,
+            png::BitDepth::Eight,
+            None,
+            None,
+            &[10, 200],
+        );
+        let (_, _, rgba) = decode_png(&png).expect("gray");
+        assert_eq!(&rgba[..8], &[10, 10, 10, 255, 200, 200, 200, 255]);
+
+        let png = encode(
+            2,
+            1,
+            png::ColorType::GrayscaleAlpha,
+            png::BitDepth::Eight,
+            None,
+            None,
+            &[10, 128, 200, 255],
+        );
+        let (_, _, rgba) = decode_png(&png).expect("gray alpha");
+        assert_eq!(&rgba[..8], &[10, 10, 10, 128, 200, 200, 200, 255]);
+
+        // 16-bit RGB is stripped to its high byte.
+        let png = encode(
+            1,
+            1,
+            png::ColorType::Rgb,
+            png::BitDepth::Sixteen,
+            None,
+            None,
+            &[0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc],
+        );
+        let (_, _, rgba) = decode_png(&png).expect("16-bit");
+        assert_eq!(&rgba[..4], &[0x12, 0x56, 0x9a, 255]);
+    }
+
+    #[test]
+    fn garbage_is_not_a_png() {
+        assert!(decode_png(b"not a png").is_none());
     }
 }
 

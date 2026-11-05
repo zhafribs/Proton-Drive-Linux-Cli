@@ -1,3 +1,14 @@
+## 3.20.7 — 2026-11-05
+
+- **Palette PNG photos preview again.** Indexed-color PNGs (4-bit or 8-bit,
+  with or without transparency), grayscale and 16-bit PNGs are expanded to
+  RGBA8 before decoding. The files were downloaded intact; only the thumbnail
+  decoder rejected their color type, which is why small wallpapers showed no
+  preview.
+- **Preview wording stops blaming the file.** A format the app cannot decode
+  says "No preview for this format"; a genuine decode failure says "Preview
+  failed". The tile tooltip states that the downloaded file is unchanged.
+
 ## 3.20.6 — 2026-11-05
 
 - **The updater verifies with GitHub's own asset digest.** The release API now

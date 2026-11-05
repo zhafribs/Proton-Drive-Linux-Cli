@@ -42,9 +42,10 @@ pub struct PhotoState {
     pub tex: std::collections::HashMap<String, Thumb>,
     /// Thumbnails being decoded right now.
     pub in_flight: std::collections::HashSet<String>,
-    /// Names that failed to decode, with the file stamp at that moment: a file
-    /// that comes back (or is restored) retries with its new stamp.
-    pub failed: std::collections::HashMap<String, f64>,
+    /// Names that failed to decode, with the file stamp and whether the
+    /// failure was an unsupported format: a file that comes back (or is
+    /// restored) retries with its new stamp.
+    pub failed: std::collections::HashMap<String, (f64, bool)>,
     /// "Last photo sync ..." line from the engine's last cycle.
     pub last_sync: String,
     /// Photos the engine says need attention (incomplete, differs, duplicate).
@@ -859,6 +860,14 @@ fn caption_for(state: TileState, local: Option<u64>, cloud: u64) -> String {
     }
 }
 
+fn preview_label(unsupported: bool) -> &'static str {
+    if unsupported {
+        "No preview for this format"
+    } else {
+        "Preview failed"
+    }
+}
+
 fn tile(ui: &mut egui::Ui, app: &mut App, p: &cli::PhotoEntry, dir: &std::path::Path, size: f32) {
     let path = dir.join(&p.name);
     let meta = std::fs::metadata(&path).ok();
@@ -871,11 +880,13 @@ fn tile(ui: &mut egui::Ui, app: &mut App, p: &cli::PhotoEntry, dir: &std::path::
         .unwrap_or(0.0);
     let state = tile_state(local_len, p.size, app.photos.shared.contains(&p.name));
     let can_preview = matches!(state, TileState::Ready | TileState::Mismatch);
-    let blocked = app
+    let failed = app
         .photos
         .failed
         .get(&p.name)
-        .is_some_and(|s| (*s - stamp).abs() < 0.5);
+        .filter(|(s, _)| (*s - stamp).abs() < 0.5);
+    let blocked = failed.is_some();
+    let unsupported = failed.is_some_and(|(_, unsupported)| *unsupported);
     if can_preview
         && !blocked
         && app
@@ -895,7 +906,8 @@ fn tile(ui: &mut egui::Ui, app: &mut App, p: &cli::PhotoEntry, dir: &std::path::
     let caption = caption_for(state, local_len, p.size);
     let preview_caption = if can_preview && blocked {
         format!(
-            "Can't preview \u{b7} {}",
+            "{} \u{b7} {}",
+            preview_label(unsupported),
             caption_for(TileState::Ready, local_len, p.size)
         )
     } else {
@@ -921,6 +933,13 @@ fn tile(ui: &mut egui::Ui, app: &mut App, p: &cli::PhotoEntry, dir: &std::path::
         }
         TileState::Mismatch => tip.push_str("\nRemove or replace the local file to resolve it."),
         _ => {}
+    }
+    if can_preview && blocked {
+        tip.push_str(if unsupported {
+            "\nDownloaded intact; this format has no thumbnail."
+        } else {
+            "\nThe preview could not be decoded; the downloaded file is unchanged."
+        });
     }
 
     ui.allocate_ui_with_layout(
@@ -1091,6 +1110,12 @@ mod tests {
             ("c".to_string(), 2),
         ];
         assert_eq!(lru_victim(entries.into_iter()).as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn preview_wording_does_not_blame_the_file() {
+        assert_eq!(preview_label(true), "No preview for this format");
+        assert_eq!(preview_label(false), "Preview failed");
     }
 
     /// Every card uses the same grid, rows fill the width exactly, and the tile
