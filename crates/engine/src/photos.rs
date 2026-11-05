@@ -83,6 +83,11 @@ pub struct PhotoState {
     pub synced: BTreeMap<String, Synced>,
     pub handled: BTreeMap<String, (u64, u64)>,
     pub repair_failed: BTreeMap<String, RepairFail>,
+    /// A previous empty-folder or short-timeline hold. Deletions stay off
+    /// until every known remote photo is present locally again, so a partial
+    /// GUI download cannot re-arm the empty-folder guard.
+    #[serde(default)]
+    pub hold: bool,
 }
 
 fn remote_by_name<'a>(remote: &'a [RemotePhoto], name: &str) -> Option<&'a RemotePhoto> {
@@ -120,6 +125,22 @@ fn shared_names(remote: &[RemotePhoto]) -> std::collections::BTreeSet<&str> {
         }
     }
     shared
+}
+
+/// Is the initial timeline credible enough to delete by? A first run has no
+/// memory and is trusted. After that, skipped entries, an empty timeline, or
+/// losing more than half of the known library holds the whole cycle. The
+/// post-cycle check uses the known executed-deletion count instead.
+fn remote_looks_present(remote: &[RemotePhoto], state: &PhotoState, skipped: usize) -> bool {
+    if state.synced.is_empty() {
+        // A first run has no baseline to protect and will not delete anything.
+        // Unreadable entries are skipped and retried next cycle.
+        return true;
+    }
+    if skipped > 0 {
+        return false;
+    }
+    !remote.is_empty() && remote.len() * 2 >= state.synced.len()
 }
 
 /// The plan for one cycle - pure, so every rule is unit-tested.
@@ -188,9 +209,13 @@ pub fn plan(
     p.conflicts.dedup();
     p.trash_remote.sort();
     p.remove_local.sort();
-    if !allow_deletes || !folder_looks_present {
-        // Either the switch is off, or the folder smells like an unmounted
-        // disk: do not destroy anything, just report what would have happened.
+    if !allow_deletes
+        || !folder_looks_present
+        || !remote_looks_present(remote, state, 0)
+    {
+        // Either the switch is off, or the listing smells like an unmounted
+        // disk / bad API response: do not destroy anything, just report what
+        // would have happened.
         p.trash_remote.clear();
         p.remove_local.clear();
     }
@@ -282,18 +307,33 @@ pub fn scan_local(dir: &Path) -> Vec<LocalPhoto> {
 }
 
 /// The cloud timeline (`photo timeline -d --json`).
-pub fn timeline(cli: &Cli) -> Result<Vec<RemotePhoto>> {
+///
+/// Returns the readable photos and how many entries were skipped. A non-array
+/// response, or an array whose entries are all unreadable, is an error: turning
+/// that into "empty" is how a bad API response becomes a local deletion.
+pub fn timeline(cli: &Cli) -> Result<(Vec<RemotePhoto>, usize)> {
     let v = cli.run_json(&["photo", "timeline", "-d"], true)?;
-    let arr = v.as_array().cloned().unwrap_or_default();
+    let arr = v
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("photo timeline: expected a JSON array"))?;
     let mut out = Vec::new();
-    for e in &arr {
+    let mut skipped = 0usize;
+    for e in arr {
         let uid = e.get("uid").and_then(|x| x.as_str()).unwrap_or("");
-        let name = e
-            .get("name")
+        let name_obj = e.get("name");
+        let ok = name_obj
+            .and_then(|n| n.get("ok"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let name = name_obj
             .and_then(|n| n.get("value"))
             .and_then(|n| n.as_str())
             .unwrap_or("");
-        if uid.is_empty() || name.is_empty() {
+        if !ok
+            || !crate::filter::valid_remote_name(uid)
+            || !crate::filter::valid_remote_name(name)
+        {
+            skipped += 1;
             continue;
         }
         // `claimedSize` is the original file size; `totalStorageSize` is the
@@ -310,7 +350,13 @@ pub fn timeline(cli: &Cli) -> Result<Vec<RemotePhoto>> {
             size,
         });
     }
-    Ok(out)
+    if out.is_empty() && !arr.is_empty() {
+        anyhow::bail!(
+            "photo timeline: {} entries had no readable name/uid",
+            arr.len()
+        );
+    }
+    Ok((out, skipped))
 }
 
 fn state_path(state_dir: &Path) -> PathBuf {
@@ -402,7 +448,37 @@ fn write_state(state_dir: &Path, state: &PhotoState) -> bool {
         return false;
     };
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, &path).is_ok()
+    (|| -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&tmp)?;
+        std::io::Write::write_all(&mut file, text.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp, &path)?;
+        if let Some(parent) = path.parent()
+            && let Ok(dir) = std::fs::File::open(parent)
+        {
+            let _ = dir.sync_all();
+        }
+        Ok(())
+    })()
+    .is_ok()
+}
+
+/// Local photo removals go beside the folder, on the same filesystem. Renaming
+/// into `$XDG_STATE_HOME` fails with EXDEV on the external drives people often
+/// use for photos.
+fn trash_local_photo(dir: &Path, name: &str) -> Result<()> {
+    let trash = dir.join(".proton-photos-trash");
+    std::fs::create_dir_all(&trash)?;
+    let mut dst = trash.join(name);
+    let mut suffix = 1u32;
+    while dst.exists() {
+        suffix += 1;
+        dst = trash.join(format!("{name}.{suffix}"));
+    }
+    std::fs::rename(dir.join(name), &dst)
+        .with_context(|| format!("moving {} to {}", dir.join(name).display(), dst.display()))?;
+    Ok(())
 }
 
 /// Names whose two copies differ, counted every cycle (not just the first).
@@ -505,32 +581,145 @@ pub fn sync(
     allow_deletes: bool,
     force_uids: &[String],
 ) -> Result<Summary> {
-    let remote = timeline(cli)?;
+    let (remote, skipped) = match timeline(cli) {
+        Ok(v) => v,
+        Err(e) => {
+            let summary = Summary {
+                ts: chrono::Utc::now().to_rfc3339(),
+                error: format!(
+                    "Photo timeline could not be read: {e:#}. Nothing was changed."
+                ),
+                attention: 1,
+                ..Default::default()
+            };
+            eprintln!("photos: {}", summary.error);
+            write_json(&summary_path(state_dir), &summary);
+            return Ok(summary);
+        }
+    };
     let local = scan_local(dir);
     let mut state = read_state(state_dir);
+    let hold_marker = dir.join(".proton-photos-hold");
+
+    // The GUI leaves this marker before downloading into a folder that is
+    // missing known photos, so the hold exists even if no engine pass has run
+    // since the folder was emptied.
+    if hold_marker.is_file() {
+        if state.synced.is_empty() {
+            let _ = std::fs::remove_file(&hold_marker);
+        } else if !state.hold {
+            state.hold = true;
+            let _ = write_state(state_dir, &state);
+        }
+    }
+
+    // A previous empty-folder/short-timeline hold is released only when every
+    // known photo still in the cloud is present locally. This is what stops a
+    // single GUI download from making the folder non-empty and re-arming the
+    // guard for the rest of the library.
+    if state.hold {
+        let known: Vec<&RemotePhoto> = remote
+            .iter()
+            .filter(|r| state.synced.contains_key(&r.name))
+            .collect();
+        let missing = known
+            .iter()
+            .filter(|r| local_by_name(&local, &r.name).is_none())
+            .count();
+        if missing > 0 {
+            let summary = Summary {
+                ts: chrono::Utc::now().to_rfc3339(),
+                remote: remote.len(),
+                local: local.len(),
+                error: format!(
+                    "Photo folder is recovering: {} of {} known photo(s) are local. Nothing was changed; finish restoring the folder first.",
+                    known.len() - missing,
+                    known.len()
+                ),
+                attention: 1,
+                ..Default::default()
+            };
+            eprintln!("photos: {}", summary.error);
+            write_json(&summary_path(state_dir), &summary);
+            return Ok(summary);
+        }
+        state.hold = false;
+        let _ = write_state(state_dir, &state);
+        let _ = std::fs::remove_file(&hold_marker);
+    }
+
+    // A short or unreadable timeline is far more likely to be an API hiccup
+    // than a mass deletion. Hold the whole cycle, keep the previous state and
+    // tell the user instead of deleting 25 photos per cycle.
+    if !remote_looks_present(&remote, &state, skipped) {
+        state.hold = true;
+        let _ = write_state(state_dir, &state);
+        let _ = std::fs::write(&hold_marker, b"");
+        let summary = Summary {
+            ts: chrono::Utc::now().to_rfc3339(),
+            remote: remote.len(),
+            local: local.len(),
+            error: if skipped > 0 {
+                format!(
+                    "Photo timeline: {skipped} entries could not be read. Nothing was changed; retry later or fix those cloud entries."
+                )
+            } else {
+                format!(
+                    "Photo timeline looks incomplete ({} readable, {} known). Nothing was changed. If you deleted these photos in Proton, move the stale local copies out of {} and remove {} to reset the baseline.",
+                    remote.len(),
+                    state.synced.len(),
+                    dir.display(),
+                    state_path(state_dir).display()
+                )
+            },
+            attention: 1,
+            ..Default::default()
+        };
+        eprintln!("photos: {}", summary.error);
+        write_json(&summary_path(state_dir), &summary);
+        return Ok(summary);
+    }
 
     // An empty folder with a populated state is the signature of an unmounted
     // disk, a moved folder or a failed mount - never a library the user just
-    // wiped. Refuse to delete anything in that case.
+    // wiped. Hold the whole cycle: downloading a new cloud photo here would
+    // make the folder non-empty and defeat the guard next cycle.
     let folder_looks_present = !(local.is_empty() && !state.synced.is_empty());
     if !folder_looks_present {
-        eprintln!(
-            "photos: {} is empty but {} photo(s) are known to be synced; skipping deletions",
-            dir.display(),
-            state.synced.len()
-        );
+        state.hold = true;
+        let _ = write_state(state_dir, &state);
+        let _ = std::fs::write(&hold_marker, b"");
+        let summary = Summary {
+            ts: chrono::Utc::now().to_rfc3339(),
+            remote: remote.len(),
+            local: local.len(),
+            error: format!(
+                "Photo folder {} is empty but {} photo(s) are known to be synced. Nothing was changed. Restore the folder or fix the sync path, or remove {} if you deleted them intentionally.",
+                dir.display(),
+                state.synced.len(),
+                state_path(state_dir).display()
+            ),
+            attention: 1,
+            ..Default::default()
+        };
+        eprintln!("photos: {}", summary.error);
+        write_json(&summary_path(state_dir), &summary);
+        return Ok(summary);
     }
 
     let mut p = plan(&local, &remote, &state, allow_deletes, folder_looks_present);
-    // A mass delete crawls: whatever is left over is picked up next cycle.
+    // A mass delete crawls: whatever is left over is picked up next cycle, and
+    // its state entry is kept so it is not mistaken for a new photo.
+    let mut deferred_trash: Vec<(String, String)> = Vec::new();
+    let mut deferred_remove: Vec<String> = Vec::new();
     let mut capped = 0;
     if p.trash_remote.len() > MAX_DELETES {
         capped += p.trash_remote.len() - MAX_DELETES;
-        p.trash_remote.truncate(MAX_DELETES);
+        deferred_trash = p.trash_remote.split_off(MAX_DELETES);
     }
     if p.remove_local.len() > MAX_DELETES {
         capped += p.remove_local.len() - MAX_DELETES;
-        p.remove_local.truncate(MAX_DELETES);
+        deferred_remove = p.remove_local.split_off(MAX_DELETES);
     }
     if capped > 0 {
         eprintln!("photos: {capped} more deletion(s) wait for the next cycle");
@@ -635,9 +824,9 @@ pub fn sync(
             Err(e) => hard = Some(e),
         }
         for name in &p.remove_local {
-            match std::fs::remove_file(dir.join(name)) {
+            match trash_local_photo(dir, name) {
                 Ok(()) => summary.removed += 1,
-                Err(e) => eprintln!("photos: could not remove {}: {e}", dir.join(name).display()),
+                Err(e) => eprintln!("photos: could not trash {}: {e:#}", dir.join(name).display()),
             }
         }
     }
@@ -649,17 +838,55 @@ pub fn sync(
         || !p.trash_remote.is_empty()
         || !p.remove_local.is_empty()
         || repaired;
-    let final_remote = if moved {
-        timeline(cli).unwrap_or(remote)
+    // Re-list only when something moved. The post-cycle check may account for
+    // deletions this cycle actually executed, but must still see every photo
+    // The post-cycle list must still contain every known photo that should
+    // remain after the remote deletions this cycle executed.
+    let trashed: std::collections::BTreeSet<&str> = p
+        .trash_remote
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect();
+    let expected: Vec<&String> = state
+        .synced
+        .keys()
+        .filter(|name| {
+            remote_by_name(&remote, name).is_some() && !trashed.contains(name.as_str())
+        })
+        .collect();
+    let (final_remote, final_trusted) = if moved {
+        match timeline(cli) {
+            Ok((photos, skipped))
+                if skipped == 0
+                    && expected
+                        .iter()
+                        .all(|name| remote_by_name(&photos, name).is_some()) =>
+            {
+                (photos, true)
+            }
+            Ok(_) => {
+                eprintln!(
+                    "photos: post-cycle timeline looks incomplete; keeping the previous state"
+                );
+                (remote, false)
+            }
+            Err(e) => {
+                eprintln!(
+                    "photos: post-cycle timeline failed: {e:#}; keeping the previous state"
+                );
+                (remote, false)
+            }
+        }
     } else {
-        remote
+        (remote, true)
     };
     let final_local = if moved { scan_local(dir) } else { local };
     summary.remote = final_remote.len();
     summary.local = final_local.len();
     let shared = shared_names(&final_remote);
 
-    if hard.is_none() {
+    if hard.is_none() && final_trusted && folder_looks_present {
+        let old_synced = state.synced.clone();
         state.synced.clear();
         for r in &final_remote {
             if shared.contains(r.name.as_str()) || r.size == 0 {
@@ -678,6 +905,18 @@ pub fn sync(
         // Photos just trashed must not stay in state as if they were synced.
         for (name, _) in &p.trash_remote {
             state.synced.remove(name);
+        }
+        // Deferred past the per-cycle cap still exist on both sides; keep
+        // their old entry so the next cycle does not treat them as new.
+        for (name, _) in &deferred_trash {
+            if let Some(old) = old_synced.get(name) {
+                state.synced.insert(name.clone(), old.clone());
+            }
+        }
+        for name in &deferred_remove {
+            if let Some(old) = old_synced.get(name) {
+                state.synced.insert(name.clone(), old.clone());
+            }
         }
         // Keep a failed-repair entry while the local copy is still broken or
         // gone: it is the veto that stops the cloud copy from being trashed.
@@ -807,32 +1046,574 @@ mod tests {
     /// A photo trashed in the cloud removes the local copy - same rule.
     #[test]
     fn cloud_delete_removes_the_local_copy() {
-        let l = vec![local("gone.jpg", 10)];
+        let l = vec![local("gone.jpg", 10), local("stay.jpg", 20)];
+        let r = vec![remote("u2", "stay.jpg", 20)];
         let state = PhotoState {
-            synced: [synced("gone.jpg", "u1", 10)].into(),
+            synced: [
+                synced("gone.jpg", "u1", 10),
+                synced("stay.jpg", "u2", 20),
+            ]
+            .into(),
             ..Default::default()
         };
-        let p = plan(&l, &[], &state, true, true);
+        let p = plan(&l, &r, &state, true, true);
         assert_eq!(p.remove_local, vec!["gone.jpg"]);
         assert!(p.upload.is_empty());
 
         // A file that was never synced is uploaded instead.
         let fresh = plan(&l, &[], &PhotoState::default(), true, true);
-        assert_eq!(fresh.upload, vec!["gone.jpg"]);
+        assert_eq!(fresh.upload.len(), 2);
         assert!(fresh.remove_local.is_empty());
     }
 
-    /// The guards: the switch, and an empty folder that looks unmounted.
+    /// The guards: the switch, an empty folder that looks unmounted, and a
+    /// timeline that lost most of the known library.
     #[test]
     fn deletions_need_the_switch_and_a_live_folder() {
         let l = vec![local("gone.jpg", 10)];
+        let r = vec![remote("u2", "other.jpg", 20)];
         let state = PhotoState {
             synced: [synced("gone.jpg", "u1", 10)].into(),
             ..Default::default()
         };
-        assert!(plan(&l, &[], &state, false, true).remove_local.is_empty());
-        assert!(plan(&l, &[], &state, true, false).remove_local.is_empty());
-        assert_eq!(plan(&l, &[], &state, true, true).remove_local.len(), 1);
+        assert!(plan(&l, &r, &state, false, true).remove_local.is_empty());
+        assert!(plan(&l, &r, &state, true, false).remove_local.is_empty());
+        assert_eq!(plan(&l, &r, &state, true, true).remove_local.len(), 1);
+    }
+
+    #[test]
+    fn empty_or_short_timeline_holds_deletions() {
+        let locals = (0..10)
+            .map(|i| local(&format!("p{i}.jpg"), 10))
+            .collect::<Vec<_>>();
+        let state = PhotoState {
+            synced: (0..10)
+                .map(|i| synced(&format!("p{i}.jpg"), &format!("u{i}"), 10))
+                .collect(),
+            ..Default::default()
+        };
+        // Empty remote: never delete.
+        let empty = plan(&locals, &[], &state, true, true);
+        assert!(empty.remove_local.is_empty());
+        // Three of ten known photos: too short, hold.
+        let short = (0..3)
+            .map(|i| remote(&format!("u{i}"), &format!("p{i}.jpg"), 10))
+            .collect::<Vec<_>>();
+        assert!(plan(&locals, &short, &state, true, true).remove_local.is_empty());
+        // Half the library is the line; five of ten is allowed.
+        let half = (0..5)
+            .map(|i| remote(&format!("u{i}"), &format!("p{i}.jpg"), 10))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            plan(&locals, &half, &state, true, true).remove_local.len(),
+            5
+        );
+        // A short timeline plus a partial local scan must not trash remote
+        // photos that are present in the short listing but absent locally.
+        let partial_local = vec![local("p0.jpg", 10)];
+        let short_remote = (0..3)
+            .map(|i| remote(&format!("u{i}"), &format!("p{i}.jpg"), 10))
+            .collect::<Vec<_>>();
+        assert!(
+            plan(&partial_local, &short_remote, &state, true, true)
+                .trash_remote
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn remote_presence_guard_counts_unreadable_entries() {
+        let state = PhotoState {
+            synced: [synced("a.jpg", "u1", 10)].into(),
+            ..Default::default()
+        };
+        let r = vec![remote("u1", "a.jpg", 10)];
+        assert!(remote_looks_present(&r, &state, 0));
+        assert!(!remote_looks_present(&r, &state, 1));
+        assert!(remote_looks_present(&[], &PhotoState::default(), 0));
+        // A first run has no baseline to protect: skipped rows are retried,
+        // not a reason to freeze the whole photo pass.
+        assert!(remote_looks_present(&[], &PhotoState::default(), 1));
+        assert!(!remote_looks_present(&[], &state, 0));
+    }
+
+    #[test]
+    fn local_photo_removals_go_to_trash() {
+        let dir = std::env::temp_dir().join(format!("pd-photo-trash-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.jpg"), b"one").unwrap();
+        std::fs::write(dir.join("b.jpg"), b"two").unwrap();
+        trash_local_photo(&dir, "a.jpg").unwrap();
+        // A second file with the same name must not overwrite the first.
+        std::fs::write(dir.join("a.jpg"), b"again").unwrap();
+        trash_local_photo(&dir, "a.jpg").unwrap();
+        assert_eq!(std::fs::read(dir.join(".proton-photos-trash/a.jpg")).unwrap(), b"one");
+        assert_eq!(
+            std::fs::read(dir.join(".proton-photos-trash/a.jpg.2")).unwrap(),
+            b"again"
+        );
+        assert!(!dir.join("a.jpg").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unreadable_timeline_writes_a_visible_summary() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("pd-photo-timeline-sum-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let photos = root.join("photos");
+        let state_dir = root.join("state");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(photos.join("a.jpg"), b"12345").unwrap();
+        let state = PhotoState {
+            synced: [synced("a.jpg", "u1", 5)].into(),
+            ..Default::default()
+        };
+        assert!(write_state(&state_dir, &state));
+        let fake = root.join("fake-proton-drive");
+        std::fs::write(&fake, "#!/bin/sh\necho '{}'\n").unwrap();
+        let mut perms = std::fs::metadata(&fake).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake, perms).unwrap();
+        let cli = Cli::for_test(fake);
+
+        let summary = sync(&cli, &photos, &state_dir, true, &[]).unwrap();
+        assert!(summary.error.contains("could not be read"));
+        assert_eq!(summary.attention, 1);
+        assert_eq!(std::fs::read(photos.join("a.jpg")).unwrap(), b"12345");
+        assert_eq!(read_state(&state_dir).synced.len(), 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn unreadable_timeline_is_an_error_not_an_empty_library() {        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("pd-photo-timeline-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("fake-proton-drive");
+        std::fs::write(&fake, "#!/bin/sh\necho '{}'\n").unwrap();
+        let mut perms = std::fs::metadata(&fake).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake, perms).unwrap();
+        let cli = Cli::for_test(fake.clone());
+
+        assert!(timeline(&cli).is_err());
+        std::fs::write(&fake, "#!/bin/sh\necho '[]'\n").unwrap();
+        assert_eq!(timeline(&cli).unwrap().0.len(), 0);
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\necho '[{\"uid\":\"../x\",\"name\":{\"ok\":true,\"value\":\"a.jpg\"}}]'\n",
+        )
+        .unwrap();
+        assert!(timeline(&cli).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_empty_timeline_holds_the_whole_cycle_and_keeps_state() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("pd-photo-hold-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let photos = root.join("photos");
+        let state_dir = root.join("state");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(photos.join("a.jpg"), b"local").unwrap();
+        let state = PhotoState {
+            synced: [synced("a.jpg", "u1", 5)].into(),
+            ..Default::default()
+        };
+        assert!(write_state(&state_dir, &state));
+        let fake = root.join("fake-proton-drive");
+        std::fs::write(&fake, "#!/bin/sh\necho '[]'\n").unwrap();
+        let mut perms = std::fs::metadata(&fake).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake, perms).unwrap();
+        let cli = Cli::for_test(fake);
+
+        let summary = sync(&cli, &photos, &state_dir, true, &[]).unwrap();
+        assert!(summary.error.contains("incomplete"));
+        assert_eq!(summary.removed, 0);
+        assert_eq!(std::fs::read(photos.join("a.jpg")).unwrap(), b"local");
+        assert_eq!(read_state(&state_dir).synced.len(), 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn engine_side_bulk_delete_does_not_lock_the_next_cycle() {        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("pd-photo-bulk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let photos = root.join("photos");
+        let state_dir = root.join("state");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let mut state = PhotoState::default();
+        for i in 0..30 {
+            let name = format!("p{i}.jpg");
+            if i < 10 {
+                std::fs::write(photos.join(&name), b"12345").unwrap();
+            }
+            state.synced.insert(
+                name.clone(),
+                Synced {
+                    uid: format!("u{i}"),
+                    size: 5,
+                },
+            );
+        }
+        assert!(write_state(&state_dir, &state));
+        let json = |range: std::ops::Range<usize>| {
+            let rows: Vec<String> = range
+                .map(|i| {
+                    format!(
+                        "{{\"uid\":\"u{i}\",\"name\":{{\"ok\":true,\"value\":\"p{i}.jpg\"}},\"activeRevision\":{{\"claimedSize\":5}}}}"
+                    )
+                })
+                .collect();
+            format!("[{}]", rows.join(","))
+        };
+        std::fs::write(root.join("t1.json"), json(0..30)).unwrap();
+        std::fs::write(root.join("t2.json"), json(0..10)).unwrap();
+        let fake = root.join("fake-proton-drive");
+        std::fs::write(
+            &fake,
+            concat!(
+                "#!/bin/sh\n",
+                "dir=$(dirname \"$0\")\n",
+                "if [ \"$1\" = photo ] && [ \"$2\" = timeline ]; then\n",
+                "  n=$(cat \"$dir/count\" 2>/dev/null || echo 0)\n",
+                "  if [ \"$n\" = 0 ]; then cat \"$dir/t1.json\"; echo 1 > \"$dir/count\"; else cat \"$dir/t2.json\"; fi\n",
+                "else\n",
+                "  echo '[]'\n",
+                "fi\n",
+            ),
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&fake).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake, perms).unwrap();
+        let cli = Cli::for_test(fake);
+
+        let summary = sync(&cli, &photos, &state_dir, true, &[]).unwrap();
+        assert_eq!(summary.trashed, 20);
+        assert_eq!(read_state(&state_dir).synced.len(), 10);
+        for i in 0..10 {
+            assert!(photos.join(format!("p{i}.jpg")).exists());
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// More deletions than the per-cycle cap must crawl across cycles without
+    /// re-downloading the deferred photos as "new".
+    #[test]
+    fn bulk_delete_over_the_cap_crawls_without_re_download() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("pd-photo-cap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let photos = root.join("photos");
+        let state_dir = root.join("state");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(photos.join("p00.jpg"), b"12345").unwrap();
+        let mut state = PhotoState::default();
+        for i in 0..30 {
+            state.synced.insert(
+                format!("p{i:02}.jpg"),
+                Synced {
+                    uid: format!("u{i}"),
+                    size: 5,
+                },
+            );
+        }
+        assert!(write_state(&state_dir, &state));
+        let json = |ids: &[usize]| {
+            let rows: Vec<String> = ids
+                .iter()
+                .map(|i| {
+                    format!(
+                        "{{\"uid\":\"u{i}\",\"name\":{{\"ok\":true,\"value\":\"p{i:02}.jpg\"}},\"activeRevision\":{{\"claimedSize\":5}}}}"
+                    )
+                })
+                .collect();
+            format!("[{}]", rows.join(","))
+        };
+        std::fs::write(root.join("t1.json"), json(&(0..30).collect::<Vec<_>>())).unwrap();
+        std::fs::write(root.join("t2.json"), json(&[0, 26, 27, 28, 29])).unwrap();
+        std::fs::write(root.join("t3.json"), json(&[0])).unwrap();
+        let fake = root.join("fake-proton-drive");
+        std::fs::write(
+            &fake,
+            concat!(
+                "#!/bin/sh\n",
+                "dir=$(dirname \"$0\")\n",
+                "if [ \"$1\" = photo ] && [ \"$2\" = timeline ]; then\n",
+                "  n=$(cat \"$dir/count\" 2>/dev/null || echo 0)\n",
+                "  case \"$n\" in\n",
+                "    0) cat \"$dir/t1.json\"; echo 1 > \"$dir/count\" ;;\n",
+                "    1|2) cat \"$dir/t2.json\"; echo $((n+1)) > \"$dir/count\" ;;\n",
+                "    *) cat \"$dir/t3.json\" ;;\n",
+                "  esac\n",
+                "else\n",
+                "  echo '[]'\n",
+                "fi\n",
+            ),
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&fake).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake, perms).unwrap();
+        let cli = Cli::for_test(fake);
+
+        let first = sync(&cli, &photos, &state_dir, true, &[]).unwrap();
+        assert_eq!(first.trashed, 25);
+        assert_eq!(read_state(&state_dir).synced.len(), 5);
+        assert!(photos.join("p00.jpg").exists());
+
+        let second = sync(&cli, &photos, &state_dir, true, &[]).unwrap();
+        assert_eq!(second.trashed, 4);
+        assert_eq!(read_state(&state_dir).synced.len(), 1);
+        assert!(photos.join("p00.jpg").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn empty_folder_holds_the_whole_cycle() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("pd-photo-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let photos = root.join("photos");
+        let state_dir = root.join("state");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let state = PhotoState {
+            synced: (0..4)
+                .map(|i| synced(&format!("p{i}.jpg"), &format!("u{i}"), 5))
+                .collect(),
+            ..Default::default()
+        };
+        assert!(write_state(&state_dir, &state));
+        let fake = root.join("fake-proton-drive");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\ndir=$(dirname \"$0\")\necho \"$@\" >> \"$dir/calls.log\"\nif [ \"$1\" = photo ] && [ \"$2\" = timeline ]; then echo '[{\"uid\":\"u0\",\"name\":{\"ok\":true,\"value\":\"p0.jpg\"},\"activeRevision\":{\"claimedSize\":5}},{\"uid\":\"u1\",\"name\":{\"ok\":true,\"value\":\"p1.jpg\"},\"activeRevision\":{\"claimedSize\":5}},{\"uid\":\"u2\",\"name\":{\"ok\":true,\"value\":\"p2.jpg\"},\"activeRevision\":{\"claimedSize\":5}},{\"uid\":\"u3\",\"name\":{\"ok\":true,\"value\":\"p3.jpg\"},\"activeRevision\":{\"claimedSize\":5}}]'; else echo '[]'; fi\n",
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&fake).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake, perms).unwrap();
+        let cli = Cli::for_test(fake);
+        let images = || {
+            std::fs::read_dir(&photos)
+                .unwrap()
+                .flatten()
+                .filter(|e| e.file_name().to_string_lossy().ends_with(".jpg"))
+                .count()
+        };
+
+        let first = sync(&cli, &photos, &state_dir, true, &[]).unwrap();
+        assert!(first.error.contains("empty"));
+        assert!(read_state(&state_dir).hold);
+        assert!(photos.join(".proton-photos-hold").is_file());
+        assert_eq!(read_state(&state_dir).synced.len(), 4);
+        assert_eq!(images(), 0);
+
+        // The GUI can download one tile while the hold is active. That must
+        // not re-arm the empty-folder guard and trash the rest.
+        std::fs::write(photos.join("p0.jpg"), b"12345").unwrap();
+        let partial = sync(&cli, &photos, &state_dir, true, &[]).unwrap();
+        assert!(partial.error.contains("recovering"));
+        assert!(read_state(&state_dir).hold);
+        assert_eq!(read_state(&state_dir).synced.len(), 4);
+        assert_eq!(images(), 1);
+
+        // Once the known library is back, the hold releases without deleting.
+        for i in 1..4 {
+            std::fs::write(photos.join(format!("p{i}.jpg")), b"12345").unwrap();
+        }
+        let recovered = sync(&cli, &photos, &state_dir, true, &[]).unwrap();
+        assert!(recovered.error.is_empty());
+        assert!(!read_state(&state_dir).hold);
+        assert!(!photos.join(".proton-photos-hold").exists());
+        assert_eq!(read_state(&state_dir).synced.len(), 4);
+        assert_eq!(images(), 4);
+
+        let calls = std::fs::read_to_string(root.join("calls.log")).unwrap();
+        assert_eq!(calls.lines().count(), 3);
+        assert!(calls.lines().all(|l| l.starts_with("photo timeline")));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The GUI can download before the engine has seen the empty folder. Its
+    /// marker must arm the hold on the very first pass.
+    #[test]
+    fn gui_hold_marker_arms_before_the_first_sync() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("pd-photo-gui-race-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let photos = root.join("photos");
+        let state_dir = root.join("state");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let state = PhotoState {
+            synced: (0..4)
+                .map(|i| synced(&format!("p{i}.jpg"), &format!("u{i}"), 5))
+                .collect(),
+            ..Default::default()
+        };
+        assert!(write_state(&state_dir, &state));
+        // Simulate the GUI: one tile downloaded, marker written, no engine pass.
+        std::fs::write(photos.join("p0.jpg"), b"12345").unwrap();
+        std::fs::write(photos.join(".proton-photos-hold"), b"").unwrap();
+        let fake = root.join("fake-proton-drive");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\ndir=$(dirname \"$0\")\necho \"$@\" >> \"$dir/calls.log\"\nif [ \"$1\" = photo ] && [ \"$2\" = timeline ]; then echo '[{\"uid\":\"u0\",\"name\":{\"ok\":true,\"value\":\"p0.jpg\"},\"activeRevision\":{\"claimedSize\":5}},{\"uid\":\"u1\",\"name\":{\"ok\":true,\"value\":\"p1.jpg\"},\"activeRevision\":{\"claimedSize\":5}},{\"uid\":\"u2\",\"name\":{\"ok\":true,\"value\":\"p2.jpg\"},\"activeRevision\":{\"claimedSize\":5}},{\"uid\":\"u3\",\"name\":{\"ok\":true,\"value\":\"p3.jpg\"},\"activeRevision\":{\"claimedSize\":5}}]'; else echo '[]'; fi\n",
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&fake).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake, perms).unwrap();
+        let cli = Cli::for_test(fake);
+
+        let held = sync(&cli, &photos, &state_dir, true, &[]).unwrap();
+        assert!(held.error.contains("recovering"));
+        assert!(read_state(&state_dir).hold);
+        assert_eq!(read_state(&state_dir).synced.len(), 4);
+
+        for i in 1..4 {
+            std::fs::write(photos.join(format!("p{i}.jpg")), b"12345").unwrap();
+        }
+        let recovered = sync(&cli, &photos, &state_dir, true, &[]).unwrap();
+        assert!(recovered.error.is_empty());
+        assert!(!read_state(&state_dir).hold);
+        assert!(!photos.join(".proton-photos-hold").exists());
+
+        let calls = std::fs::read_to_string(root.join("calls.log")).unwrap();
+        assert_eq!(calls.lines().count(), 2);
+        assert!(calls.lines().all(|l| l.starts_with("photo timeline")));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A cycle can hit the 25-per-cycle cap in both directions at once. The
+    /// post-cycle baseline must count only remote deletions, or the next cycle
+    /// holds forever.
+    #[test]
+    fn mixed_over_cap_deletes_crawl_without_locking() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("pd-photo-mixed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let photos = root.join("photos");
+        let state_dir = root.join("state");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let mut state = PhotoState::default();
+        for i in 0..60 {
+            let name = format!("p{i:02}.jpg");
+            if i >= 30 {
+                std::fs::write(photos.join(&name), b"12345").unwrap();
+            }
+            state.synced.insert(
+                name.clone(),
+                Synced {
+                    uid: format!("u{i}"),
+                    size: 5,
+                },
+            );
+        }
+        assert!(write_state(&state_dir, &state));
+        let json = |ids: &[usize]| {
+            let rows: Vec<String> = ids
+                .iter()
+                .map(|i| {
+                    format!(
+                        "{{\"uid\":\"u{i}\",\"name\":{{\"ok\":true,\"value\":\"p{i:02}.jpg\"}},\"activeRevision\":{{\"claimedSize\":5}}}}"
+                    )
+                })
+                .collect();
+            format!("[{}]", rows.join(","))
+        };
+        std::fs::write(root.join("t1.json"), json(&(0..30).collect::<Vec<_>>())).unwrap();
+        std::fs::write(root.join("t2.json"), json(&[25, 26, 27, 28, 29])).unwrap();
+        std::fs::write(root.join("t3.json"), json(&[])).unwrap();
+        let fake = root.join("fake-proton-drive");
+        std::fs::write(
+            &fake,
+            concat!(
+                "#!/bin/sh\n",
+                "dir=$(dirname \"$0\")\n",
+                "if [ \"$1\" = photo ] && [ \"$2\" = timeline ]; then\n",
+                "  n=$(cat \"$dir/count\" 2>/dev/null || echo 0)\n",
+                "  case \"$n\" in\n",
+                "    0) cat \"$dir/t1.json\"; echo 1 > \"$dir/count\" ;;\n",
+                "    1|2) cat \"$dir/t2.json\"; echo $((n+1)) > \"$dir/count\" ;;\n",
+                "    *) cat \"$dir/t3.json\" ;;\n",
+                "  esac\n",
+                "else\n",
+                "  echo '[]'\n",
+                "fi\n",
+            ),
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&fake).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake, perms).unwrap();
+        let cli = Cli::for_test(fake);
+
+        let first = sync(&cli, &photos, &state_dir, true, &[]).unwrap();
+        assert_eq!(first.trashed, 25);
+        assert_eq!(first.removed, 25);
+        assert_eq!(read_state(&state_dir).synced.len(), 10);
+
+        let second = sync(&cli, &photos, &state_dir, true, &[]).unwrap();
+        assert_eq!(second.trashed, 5);
+        assert_eq!(second.removed, 5);
+        assert_eq!(read_state(&state_dir).synced.len(), 0);
+        assert_eq!(std::fs::read_dir(&photos).unwrap().count(), 1); // the trash dir
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_short_timeline_holds_the_whole_cycle() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("pd-photo-short-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let photos = root.join("photos");
+        let state_dir = root.join("state");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let mut state = PhotoState::default();
+        for i in 0..10 {
+            let name = format!("p{i}.jpg");
+            std::fs::write(photos.join(&name), b"12345").unwrap();
+            state.synced.insert(
+                name.clone(),
+                Synced {
+                    uid: format!("u{i}"),
+                    size: 5,
+                },
+            );
+        }
+        assert!(write_state(&state_dir, &state));
+        let fake = root.join("fake-proton-drive");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\necho '[{\"uid\":\"u0\",\"name\":{\"ok\":true,\"value\":\"p0.jpg\"},\"activeRevision\":{\"claimedSize\":5}},{\"uid\":\"u1\",\"name\":{\"ok\":true,\"value\":\"p1.jpg\"},\"activeRevision\":{\"claimedSize\":5}},{\"uid\":\"u2\",\"name\":{\"ok\":true,\"value\":\"p2.jpg\"},\"activeRevision\":{\"claimedSize\":5}}]'\n",
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&fake).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake, perms).unwrap();
+        let cli = Cli::for_test(fake);
+
+        let summary = sync(&cli, &photos, &state_dir, true, &[]).unwrap();
+        assert!(summary.error.contains("incomplete"));
+        assert_eq!(read_state(&state_dir).synced.len(), 10);
+        for i in 0..10 {
+            assert!(photos.join(format!("p{i}.jpg")).exists());
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Same name, different bytes: never overwrite, never loop.

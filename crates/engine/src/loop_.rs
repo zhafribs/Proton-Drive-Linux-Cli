@@ -290,7 +290,11 @@ pub fn run_once_cycle(
 
     let mut local = scan_local(Path::new(local_root), filter);
     let state_path = state_dir().join("state.json");
-    let st = state::read(&state_path);
+    // Fail closed: a corrupt history would make every path look new and
+    // disable the wipe/mass-delete guards. Stop before scanning or deleting.
+    let st = state::read_checked(&state_path)
+        .map_err(|e| anyhow::anyhow!("reading {}: {e}", state_path.display()))?
+        .unwrap_or_default();
 
     // Nothing on disk and no state: a first sync. Read the cloud tree and
     // download it in one overlapped pass instead of walking it, planning,
@@ -337,7 +341,9 @@ pub fn run_once_cycle(
     let remote = remote.tree;
     // A fast-path edit already advanced state.json; reload it so the planner
     // sees both sides matching instead of planning the same update again.
-    let st = state::read(&state_path);
+    let st = state::read_checked(&state_path)
+        .map_err(|e| anyhow::anyhow!("reading {}: {e}", state_path.display()))?
+        .unwrap_or_default();
 
     let approval = delete_approval::take(
         &state_dir().join("deletes-approval.json"),
@@ -428,7 +434,9 @@ pub fn run_once_cycle(
         preserve: Some(&BTreeSet::new()),
     };
     let saved = refresh_state(&remote2, &local2, &st, &options);
-    let _ = state::write(&state_path, &saved);
+    if let Err(e) = state::write(&state_path, &saved) {
+        eprintln!("state: write failed: {e}");
+    }
 
     // Fingerprint/cache write is deliberately after planning and transfers:
     // it must never delay the file the user is waiting for.
@@ -497,7 +505,9 @@ fn scoped_remote(
         return Ok(None);
     }
     let state_path = state_dir().join("state.json");
-    let mut state = proton_core::state::read(&state_path);
+    let mut state = proton_core::state::read_checked(&state_path)
+        .map_err(|e| anyhow::anyhow!("reading {}: {e}", state_path.display()))?
+        .unwrap_or_default();
     let mut state_dirty = false;
     let fast = FastEdit {
         cli,
@@ -518,8 +528,10 @@ fn scoped_remote(
         }
         Ok(())
     })?;
-    if state_dirty {
-        let _ = proton_core::state::write(&state_path, &state);
+    if state_dirty
+        && let Err(e) = proton_core::state::write(&state_path, &state)
+    {
+        eprintln!("state: fast-edit write failed: {e}");
     }
     Ok(Some(crate::scan::RemoteScan { tree, full: false }))
 }
@@ -548,6 +560,9 @@ impl FastEdit<'_> {
         if event.event_type != 2 || event.trashed {
             return false;
         }
+        if !crate::filter::valid_remote_name(&event.child) {
+            return false;
+        }
         let child_uid = format!("{volume}~{}", event.child);
         let Some((rel, node)) = tree
             .iter()
@@ -556,6 +571,9 @@ impl FastEdit<'_> {
         else {
             return false;
         };
+        if !crate::execute::safe_rel(&rel) {
+            return false;
+        }
         if node.kind != "file" {
             return false;
         }
@@ -629,12 +647,22 @@ impl FastEdit<'_> {
             let _ = fs::remove_dir_all(&temp);
             return false;
         }
+        // Never fast-path an unknown or short download over the local file.
+        let short = fs::metadata(&src)
+            .map(|m| node.size != Some(m.len()))
+            .unwrap_or(true);
+        if short {
+            let _ = fs::remove_dir_all(&temp);
+            return false;
+        }
         let part = parent_dir.join(format!(
             ".proton-edit-{}-{}.part",
             std::process::id(),
             event.child
         ));
-        let copied = fs::copy(&src, &part).and_then(|_| fs::rename(&part, &local));
+        let copied = fs::copy(&src, &part)
+            .and_then(|_| fs::File::open(&part)?.sync_all())
+            .and_then(|_| fs::rename(&part, &local));
         let _ = fs::remove_dir_all(&temp);
         if copied.is_err() {
             let _ = fs::remove_file(&part);
@@ -732,6 +760,10 @@ fn inotify_watch(
             return;
         };
         for entry in entries.flatten() {
+            let name = entry.file_name();
+            if crate::filter::Filter::skip_name(&name.to_string_lossy()) {
+                continue;
+            }
             if entry.file_type().is_ok_and(|t| t.is_dir()) {
                 add_tree(fd, &entry.path(), dirs);
             }
@@ -775,10 +807,13 @@ fn inotify_watch(
                 if let Ok(name) = std::ffi::CStr::from_bytes_until_nul(raw)
                     && let Some(dir) = dirs.get(&event.wd)
                 {
-                    let path = dir.join(name.to_string_lossy().as_ref());
-                    if path.is_dir() {
-                        add_tree(fd, &path, &mut dirs);
-                        settled = true;
+                    let name = name.to_string_lossy();
+                    if !crate::filter::Filter::skip_name(&name) {
+                        let path = dir.join(name.as_ref());
+                        if path.is_dir() {
+                            add_tree(fd, &path, &mut dirs);
+                            settled = true;
+                        }
                     }
                 }
             }

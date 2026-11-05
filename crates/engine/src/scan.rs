@@ -166,7 +166,7 @@ fn parse_listing(
             .and_then(|n| n.get("value"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if !ok || name.is_empty() || Filter::skip_name(name) {
+        if !ok || !crate::filter::valid_remote_name(name) || Filter::skip_name(name) {
             continue;
         }
         let child_rel = if rel.is_empty() {

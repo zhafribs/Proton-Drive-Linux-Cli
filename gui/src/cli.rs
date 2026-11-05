@@ -298,6 +298,12 @@ pub struct PhotoEntry {
     pub height: u32,
 }
 
+/// A photo name or uid is a plain path component. Without this a malformed
+/// timeline can escape the photo folder or build a `/photos/../x` path.
+pub fn valid_photo_name(s: &str) -> bool {
+    !s.is_empty() && s != "." && s != ".." && !s.contains('/') && !s.contains('\0')
+}
+
 /// Parse `photo timeline -d --json` into timeline rows, newest capture first.
 fn parse_photos(json: &str) -> Result<Vec<PhotoEntry>, String> {
     let raw: Vec<Value> = serde_json::from_str(if json.trim().is_empty() { "[]" } else { json })
@@ -315,7 +321,12 @@ fn parse_photos(json: &str) -> Result<Vec<PhotoEntry>, String> {
             .and_then(|n| n.get("value"))
             .and_then(Value::as_str)
             .unwrap_or("");
-        if uid.is_empty() || !name_ok || name.is_empty() {
+        if uid.is_empty()
+            || !name_ok
+            || name.is_empty()
+            || !valid_photo_name(uid)
+            || !valid_photo_name(name)
+        {
             continue;
         }
         let media = e
@@ -412,6 +423,36 @@ pub fn trash_photos(uids: &[String]) -> Result<usize, String> {
     Ok(uids.len())
 }
 
+/// Before a GUI download into a folder that is missing known photos, leave a
+/// marker. The engine turns it into a persistent hold, so a partial download
+/// cannot make the folder look healthy and let the rest be trashed.
+pub fn arm_photo_hold(dir: &std::path::Path, state_dir: &std::path::Path) {
+    let Ok(text) = std::fs::read_to_string(state_dir.join("photos-state.json")) else {
+        return;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&text) else {
+        return;
+    };
+    let marker = dir.join(".proton-photos-hold");
+    let Some(synced) = value.get("synced").and_then(Value::as_object) else {
+        let _ = std::fs::remove_file(marker);
+        return;
+    };
+    if synced.is_empty() {
+        let _ = std::fs::remove_file(marker);
+        return;
+    }
+    // Known names, not counts: an unrelated download must not satisfy the
+    // check while a known photo is still missing.
+    let missing = synced.keys().any(|name| !dir.join(name).is_file());
+    if missing {
+        let _ = std::fs::create_dir_all(dir);
+        let _ = std::fs::write(marker, b"");
+    } else {
+        let _ = std::fs::remove_file(marker);
+    }
+}
+
 /// Download photos by node uid into `dir`, creating it. Duplicate names are
 /// renamed: the timeline can hold several photos with the same file name.
 pub fn download_photos(uids: &[String], dir: &std::path::Path) -> Result<usize, String> {
@@ -420,6 +461,7 @@ pub fn download_photos(uids: &[String], dir: &std::path::Path) -> Result<usize, 
     }
     std::fs::create_dir_all(dir)
         .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    arm_photo_hold(dir, &crate::paths::resolve().state_dir);
     let Some(cli) = resolve_cli() else {
         return Err("proton-drive CLI not found".into());
     };
@@ -662,5 +704,54 @@ mod tests {
                 "/home/me/ProtonPhotos",
             ]
         );
+    }
+
+    #[test]
+    fn timeline_drops_names_and_uids_that_could_escape_the_photo_folder() {
+        let json = r#"[
+            {"uid":"../u","name":{"ok":true,"value":"a.jpg"}},
+            {"uid":"u1","name":{"ok":true,"value":"../x"}},
+            {"uid":"u2","name":{"ok":true,"value":"ok.jpg"}}
+        ]"#;
+        let rows = parse_photos(json).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].uid, "u2");
+        assert_eq!(rows[0].name, "ok.jpg");
+        assert!(!valid_photo_name("../x"));
+        assert!(valid_photo_name("x.jpg"));
+    }
+
+    #[test]
+    fn gui_arms_a_hold_until_the_known_photos_are_local() {
+        let root = std::env::temp_dir().join(format!("pd-gui-hold-{}", std::process::id()));
+        let photos = root.join("photos");
+        let state = root.join("state");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(
+            state.join("photos-state.json"),
+            r#"{"synced":{"a.jpg":{"uid":"u1","size":5},"b.jpg":{"uid":"u2","size":5}}}"#,
+        )
+        .unwrap();
+        let marker = photos.join(".proton-photos-hold");
+
+        arm_photo_hold(&photos, &state);
+        assert!(marker.exists(), "empty folder must arm the hold");
+
+        // Unrelated photos must not satisfy the known-name check.
+        std::fs::write(photos.join("new1.jpg"), b"12345").unwrap();
+        std::fs::write(photos.join("new2.jpg"), b"12345").unwrap();
+        arm_photo_hold(&photos, &state);
+        assert!(marker.exists(), "unrelated photos must keep the hold");
+
+        std::fs::write(photos.join("a.jpg"), b"12345").unwrap();
+        arm_photo_hold(&photos, &state);
+        assert!(marker.exists(), "a partial download must keep the hold");
+
+        std::fs::write(photos.join("b.jpg"), b"12345").unwrap();
+        arm_photo_hold(&photos, &state);
+        assert!(!marker.exists(), "the full library releases the hold");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

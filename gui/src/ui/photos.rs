@@ -122,11 +122,18 @@ struct SyncSummary {
 fn render_summary(app: &mut App, s: &SyncSummary) -> String {
     app.photos.attention = s.attention as usize;
     if !s.error.is_empty() {
+        app.photos.attention = app.photos.attention.max(1);
         if crate::health::is_login_error(&s.error) {
             return "Sign in again to sync photos.".to_string();
         }
-        let short: String = s.error.chars().take(180).collect();
-        return format!("Photo sync failed: {short}");
+        let hold = s.error.starts_with("Photo timeline")
+            || s.error.starts_with("Photo folder");
+        let prefix = if hold {
+            "Photo sync is on hold: "
+        } else {
+            "Photo sync failed: "
+        };
+        return format!("{prefix}{}", s.error);
     }
     let when = chrono::DateTime::parse_from_rfc3339(&s.ts)
         .map(|t| crate::util::rel_time(Some(t)))
@@ -316,11 +323,31 @@ pub fn delete(app: &mut App, uids: Vec<String>) {
     std::thread::spawn(move || {
         let r = cli::trash_photos(&uids).inspect(|_| {
             for name in &names {
-                let _ = std::fs::remove_file(dir.join(name));
+                trash_local_photo(&dir, name);
             }
         });
         let _ = tx.send(super::Back::PhotosDeleted(r));
     });
+}
+
+/// Local deletions are recoverable: rename into a trash folder inside the
+/// photo directory, never unlink. That folder is a directory, so `scan_local`
+/// ignores it.
+fn trash_local_photo(dir: &std::path::Path, name: &str) {
+    if !cli::valid_photo_name(name) {
+        return;
+    }
+    let trash = dir.join(".proton-photos-trash");
+    if std::fs::create_dir_all(&trash).is_err() {
+        return;
+    }
+    let mut dst = trash.join(name);
+    let mut suffix = 1u32;
+    while dst.exists() {
+        suffix += 1;
+        dst = trash.join(format!("{name}.{suffix}"));
+    }
+    let _ = std::fs::rename(dir.join(name), dst);
 }
 
 pub fn on_deleted(app: &mut App, r: Result<usize, String>) {
@@ -560,7 +587,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
     );
     if !app.photos.last_sync.is_empty() {
         let color = if app.photos.attention > 0 {
-            theme::WARNING_TEXT
+            theme::warning_text(ui.visuals())
         } else {
             ui.visuals().weak_text_color()
         };
@@ -681,7 +708,9 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
 
     if !app.photos.error.is_empty() {
         ui.add_space(8.0);
-        ui.label(egui::RichText::new(&app.photos.error).color(theme::ERROR));
+        ui.label(
+            egui::RichText::new(&app.photos.error).color(theme::danger_text(ui.visuals())),
+        );
     }
     if !app.photos.status.is_empty() {
         ui.add_space(8.0);
@@ -1017,7 +1046,7 @@ fn tile(ui: &mut egui::Ui, app: &mut App, p: &cli::PhotoEntry, dir: &std::path::
                 state,
                 TileState::Incomplete | TileState::Mismatch | TileState::Duplicate
             ) {
-                theme::WARNING_TEXT
+                theme::warning_text(ui.visuals())
             } else {
                 ui.visuals().weak_text_color()
             };

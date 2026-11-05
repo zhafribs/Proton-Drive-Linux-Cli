@@ -188,7 +188,9 @@ fn dry_run_cmd(_args: &[String]) -> Result<()> {
     let remote = scan_remote(&cli, &remote_root, &filter, force_full)
         .context("scanning remote tree")?
         .tree;
-    let st = state::read(&state_dir.join("state.json"));
+    let st = state::read_checked(&state_dir.join("state.json"))
+        .context("reading state.json")?
+        .unwrap_or_default();
 
     let config = PlanConfig {
         propagate_deletes,

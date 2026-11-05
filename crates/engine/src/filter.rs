@@ -12,10 +12,16 @@ fn skip_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"^\.Trash-\d+$|^\.~lock\..*#$|^~\$.*|^\.#.*|^\..*\.sw[a-p]$|^\._.*|^\.DS_Store$",
+            r"^\.Trash-\d+$|^\.~lock\..*#$|^~\$.*|^\.#.*|^\..*\.sw[a-p]$|^\._.*|^\.DS_Store$|^\.proton-sync-staging$|^\.proton-photos-(trash|hold)$",
         )
         .unwrap()
     })
+}
+
+/// A remote listing may only contribute a plain path component. This blocks
+/// `..`, absolute names and embedded separators before they reach any join.
+pub fn valid_remote_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains('/') && !name.contains('\0')
 }
 
 #[derive(Clone, Debug, Default)]

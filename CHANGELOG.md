@@ -1,3 +1,30 @@
+## 3.20.8 — 2026-11-05
+
+- **A conflict can no longer overwrite your local edit.** The remote revision
+  is downloaded into staging, verified, and saved under the conflict name
+  first; only then is the untouched local file uploaded. If the copy fails,
+  nothing is uploaded and the path is retried next cycle. Conflict names are
+  unique, so two conflicts in the same second cannot overwrite each other.
+- **Interrupted downloads are verified before they replace anything.**
+  Downloads land in `.proton-sync-staging` beside the destination, are checked
+  against the cloud size and fsynced, then renamed into place. A short or
+  missing file leaves the existing local file untouched and is retried. This
+  covers both normal sync and the first-sync path.
+- **A bad Photos timeline can no longer delete your library.** A non-array
+  response is reported as an error and nothing moves; unreadable entries, an
+  empty timeline, or a response that loses more than half of the known library
+  hold the whole photo cycle and report the reason instead of trashing local
+  files 25 at a time. Local photo removals go to `.proton-photos-trash` inside
+  the photo folder (same filesystem), never `unlink`.
+- **A corrupt `state.json` stops the cycle.** Sync now fails closed when the
+  history cannot be read, instead of treating every path as new and disabling
+  the wipe and mass-delete guards. State writes fsync the file and best-effort
+  the directory before finishing.
+- **Cloud paths are validated before any local join.** Names containing `/`,
+  `..`, NUL or an absolute component are refused at the listing boundary and
+  again before execution, so a malformed snapshot cannot write or delete
+  outside the sync root.
+
 ## 3.20.7 — 2026-11-05
 
 - **Palette PNG photos preview again.** Indexed-color PNGs (4-bit or 8-bit,

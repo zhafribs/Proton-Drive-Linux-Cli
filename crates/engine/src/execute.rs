@@ -6,9 +6,10 @@ use crate::cli::{self, Cli};
 use crate::filter::Filter;
 use anyhow::{Context, Result};
 use proton_core::snapshot::{RemoteEntry, RemoteTree};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 fn state_dir() -> std::path::PathBuf {
     if let Some(xdg) = std::env::var_os("XDG_STATE_HOME") {
@@ -90,6 +91,230 @@ fn trash_local_path(rel: &str, local_root: &Path, trash_dir: &Path) -> Result<()
     Ok(())
 }
 
+/// A cloud-supplied relative path is safe only if every component is a plain
+/// name. Without this a malicious or malformed listing could escape the sync
+/// root with `..` before any guard runs.
+pub(crate) fn safe_rel(rel: &str) -> bool {
+    !rel.is_empty()
+        && rel
+            .split('/')
+            .all(|c| !c.is_empty() && c != "." && c != ".." && !c.contains('\0'))
+}
+
+fn staging_root(local_root: &Path, parent: &str) -> Result<std::path::PathBuf> {
+    let base = if parent.is_empty() {
+        local_root.to_path_buf()
+    } else {
+        local_root.join(parent)
+    };
+    fs::create_dir_all(&base)?;
+    let root = base.join(".proton-sync-staging");
+    match fs::symlink_metadata(&root) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            anyhow::bail!(
+                "refusing a staging directory that is a symlink: {}",
+                root.display()
+            )
+        }
+        Ok(meta) if !meta.is_dir() => {
+            anyhow::bail!("staging path is not a directory: {}", root.display())
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => fs::create_dir_all(&root)?,
+        Err(e) => return Err(e.into()),
+    }
+    Ok(root)
+}
+
+static STAGE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn new_stage(local_root: &Path, parent: &str) -> Result<std::path::PathBuf> {
+    let seq = STAGE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let path = staging_root(local_root, parent)?
+        .join(format!("{}-{seq}-{nanos}", std::process::id()));
+    // `create_dir`, not `create_dir_all`: a stale or planted directory with
+    // this name must never be reused as a download target.
+    fs::create_dir(&path)?;
+    Ok(path)
+}
+
+/// Download `rels` into a private staging directory, verify each file's size,
+/// then move only the verified files into place. A missing or short download
+/// never touches the final path, so it cannot become the local truth.
+///
+/// The caller already holds the CLI lock.
+pub(crate) fn staged_download(
+    cli: &Cli,
+    remote_root: &str,
+    local_root: &Path,
+    parent: &str,
+    rels: &[(String, u64)],
+    retries: usize,
+) -> BTreeSet<String> {
+    let mut failed = BTreeSet::new();
+    if rels.is_empty() {
+        return failed;
+    }
+    for (rel, _) in rels {
+        if !safe_rel(rel) {
+            eprintln!("REFUSE unsafe path from the cloud: {rel:?}");
+            failed.insert(rel.clone());
+        }
+    }
+    if !failed.is_empty() {
+        failed.extend(rels.iter().map(|(rel, _)| rel.clone()));
+        return failed;
+    }
+
+    let stage = match new_stage(local_root, parent) {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("FAILED staging directory: {e:#}");
+            failed.extend(rels.iter().map(|(rel, _)| rel.clone()));
+            return failed;
+        }
+    };
+    let rpaths: Vec<String> = rels
+        .iter()
+        .map(|(rel, _)| cli::remote_path(remote_root, rel))
+        .collect();
+    let mut args: Vec<&str> = vec!["fs", "download"];
+    args.extend(rpaths.iter().map(String::as_str));
+    args.extend(["-f", "remove", "-d", "merge"]);
+    let stage_s = stage.to_string_lossy().into_owned();
+    args.push(&stage_s);
+
+    let mut res = cli.run(&args, false, Some(3600), false);
+    for attempt in 1..retries.max(1) {
+        if res.is_ok() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2 * attempt as u64));
+        res = cli.run(&args, false, Some(3600), false);
+    }
+
+    match res {
+        Ok(_) => {
+            for (rel, expected) in rels {
+                let source = stage.join(name_of(rel));
+                let verified = fs::metadata(&source)
+                    .is_ok_and(|m| m.is_file() && m.len() == *expected);
+                if !verified {
+                    eprintln!("FAILED verify {} (staged size is not {expected})", rel);
+                    failed.insert(rel.clone());
+                    continue;
+                }
+                if let Err(e) = fs::File::open(&source).and_then(|f| f.sync_all()) {
+                    eprintln!("FAILED sync {}: {e}", rel);
+                    failed.insert(rel.clone());
+                    continue;
+                }
+                let dest = local_root.join(rel);
+                if let Some(dir) = dest.parent()
+                    && let Err(e) = fs::create_dir_all(dir)
+                {
+                    eprintln!("FAILED prepare {}: {e}", rel);
+                    failed.insert(rel.clone());
+                    continue;
+                }
+                if let Err(e) = fs::rename(&source, &dest) {
+                    eprintln!("FAILED place {}: {e}", rel);
+                    failed.insert(rel.clone());
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("FAILED download batch ({} path(s)): {e}", rels.len());
+            failed.extend(rels.iter().map(|(rel, _)| rel.clone()));
+        }
+    }
+    let _ = fs::remove_dir_all(&stage);
+    failed
+}
+
+/// Download one file, verify it, then rename it to `dest`.
+fn staged_download_one(
+    cli: &Cli,
+    remote_root: &str,
+    local_root: &Path,
+    rel: &str,
+    expected: u64,
+    dest: &Path,
+) -> Result<()> {
+    if !safe_rel(rel) {
+        anyhow::bail!("unsafe path from the cloud: {rel:?}");
+    }
+    let stage = new_stage(local_root, &parent_of(rel))?;
+    let rpath = cli::remote_path(remote_root, rel);
+    let stage_s = stage.to_string_lossy().into_owned();
+    let res = cli.run(
+        &[
+            "fs",
+            "download",
+            &rpath,
+            "-f",
+            "remove",
+            "-d",
+            "merge",
+            &stage_s,
+        ],
+        false,
+        Some(3600),
+        true,
+    );
+    let outcome = (|| -> Result<()> {
+        res?;
+        let source = stage.join(name_of(rel));
+        let meta = fs::metadata(&source)?;
+        if !meta.is_file() || meta.len() != expected {
+            anyhow::bail!(
+                "downloaded {} bytes, expected {expected}",
+                meta.len()
+            );
+        }
+        fs::File::open(&source)?.sync_all()?;
+        if let Some(dir) = dest.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        fs::rename(&source, dest)?;
+        Ok(())
+    })();
+    let _ = fs::remove_dir_all(&stage);
+    outcome
+}
+
+/// A conflict filename that does not exist yet, so two conflicts in the same
+/// second cannot overwrite each other.
+fn conflict_rel(rel: &str, ts: &str, local_root: &Path) -> String {
+    let dir = parent_of(rel);
+    let base = name_of(rel);
+    let (stem, ext) = match base.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s, format!(".{e}")),
+        _ => (base.as_str(), String::new()),
+    };
+    for n in 0u32.. {
+        let suffix = if n == 0 {
+            String::new()
+        } else {
+            format!(" {}", n + 1)
+        };
+        let name = format!("{stem} (conflict {ts}{suffix}){ext}");
+        let candidate = if dir.is_empty() {
+            name
+        } else {
+            format!("{dir}/{name}")
+        };
+        if !local_root.join(&candidate).exists() {
+            return candidate;
+        }
+    }
+    unreachable!()
+}
+
 pub fn execute(
     actions: &[Action],
     remote: &RemoteTree,
@@ -105,9 +330,22 @@ pub fn execute(
     let mut failed: BTreeSet<String> = BTreeSet::new();
     let mut downloaded: BTreeSet<String> = BTreeSet::new();
     let mut deferred_up: Vec<String> = Vec::new();
-    let mut deferred_dl: Vec<String> = Vec::new();
+    let mut deferred_dl: Vec<(String, u64)> = Vec::new();
 
     for action in actions {
+        // One gate before any join or CLI call: a cached snapshot, a crafted
+        // listing or a stale state row must never escape the sync root.
+        let bad = match action {
+            Action::MvRemote { old, new } | Action::MvLocal { old, new } => {
+                !safe_rel(old) || !safe_rel(new)
+            }
+            other => !safe_rel(other.rel()),
+        };
+        if bad {
+            eprintln!("REFUSE unsafe path from the cloud: {:?}", action.rel());
+            failed.insert(action.rel().to_string());
+            continue;
+        }
         match action {
             Action::Up { rel, node } => {
                 if !node.is_file() {
@@ -116,7 +354,12 @@ pub fn execute(
                 deferred_up.push(rel.clone());
             }
             Action::Dl { rel, node } if node.kind != "dir" => {
-                deferred_dl.push(rel.clone());
+                let Some(size) = node.size else {
+                    eprintln!("FAILED download {}: the cloud listing has no size", rel);
+                    failed.insert(rel.clone());
+                    continue;
+                };
+                deferred_dl.push((rel.clone(), size));
             }
             Action::Dl { rel, node } => {
                 if node.kind == "dir" {
@@ -176,47 +419,35 @@ pub fn execute(
                     eprintln!("MOVE   local {} -> {}", old, new);
                 }
             }
-            Action::Conflict { rel, .. } => {
-                // save remote as conflict, upload local
+            Action::Conflict { rel, remote, .. } => {
+                // Copy the remote revision to a conflict path first. The
+                // canonical local file is never written, so the user's edit
+                // survives even if every later step fails.
                 let ts = chrono::Utc::now().format("%Y-%m-%d %H-%M-%S").to_string();
-                let base = name_of(rel);
-                let parts: Vec<&str> = base.rsplitn(2, '.').collect();
-                let (stem, ext) = if parts.len() == 2 && !parts[0].is_empty() {
-                    (parts[1], format!(".{}", parts[0]))
-                } else {
-                    (base.as_str(), String::new())
+                let conflict_name = conflict_rel(rel, &ts, local_root);
+                let Some(expected) = remote.size else {
+                    eprintln!("FAILED conflict copy for {}: no cloud size", rel);
+                    failed.insert(rel.clone());
+                    continue;
                 };
-                let dir = parent_of(rel);
-                let conflict_name = if dir.is_empty() {
-                    format!("{} (conflict {}){}", stem, ts, ext)
-                } else {
-                    format!("{}/{} (conflict {}){}", dir, stem, ts, ext)
-                };
-                // download remote version to conflict path
-                let _ = cli.run(
-                    &[
-                        "fs",
-                        "download",
-                        &cli::remote_path(remote_root, rel),
-                        &local_root.join(&dir).to_string_lossy(),
-                        "-f",
-                        "remove",
-                        "-d",
-                        "merge",
-                    ],
-                    false,
-                    Some(3600),
-                    true,
-                );
-                // rename downloaded to conflict name (best effort)
-                let _ = fs::rename(
-                    local_root.join(&dir).join(&base),
-                    local_root.join(&conflict_name),
-                );
+                let dest = local_root.join(&conflict_name);
+                if let Err(e) = staged_download_one(
+                    &cli,
+                    remote_root,
+                    local_root,
+                    rel,
+                    expected,
+                    &dest,
+                ) {
+                    eprintln!("FAILED conflict copy for {}: {e:#}", rel);
+                    failed.insert(rel.clone());
+                    continue;
+                }
                 eprintln!("CONFLICT {} (kept remote copy as {})", rel, conflict_name);
-                // upload local as canonical
-                let parent_rpath = cli::remote_path(remote_root, &dir);
-                let _ = cli.run(
+                // Only now upload the untouched local revision. `-d merge`
+                // keeps the conflict copy; the canonical name is updated.
+                let parent_rpath = cli::remote_path(remote_root, &parent_of(rel));
+                if let Err(e) = cli.run(
                     &[
                         "fs",
                         "upload",
@@ -230,14 +461,16 @@ pub fn execute(
                     false,
                     Some(3600),
                     true,
-                );
+                ) {
+                    eprintln!("FAILED conflict upload for {}: {e:#}", rel);
+                    failed.insert(rel.clone());
+                }
             }
         }
     }
     let transfers = cli::cfg_int("PROTON_SYNC_TRANSFERS", 4, 10);
     let mut batches: Vec<Batch> = Vec::new();
-    let mut up_by_parent: std::collections::BTreeMap<String, Vec<String>> =
-        std::collections::BTreeMap::new();
+    let mut up_by_parent: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for rel in &deferred_up {
         up_by_parent
             .entry(parent_of(rel))
@@ -253,35 +486,38 @@ pub fn execute(
                 upload: true,
                 parent: parent.clone(),
                 rels: chunk.to_vec(),
+                sizes: Vec::new(),
             });
         }
     }
-    let mut dl_by_parent: std::collections::BTreeMap<String, Vec<String>> =
-        std::collections::BTreeMap::new();
-    for rel in &deferred_dl {
+    let mut dl_by_parent: BTreeMap<String, Vec<(String, u64)>> = BTreeMap::new();
+    for (rel, size) in &deferred_dl {
         dl_by_parent
             .entry(parent_of(rel))
             .or_default()
-            .push(rel.clone());
+            .push((rel.clone(), *size));
     }
     for (parent, rels) in &dl_by_parent {
         fs::create_dir_all(local_root.join(parent))?;
         for chunk in rels.chunks(MAX_BATCH) {
+            let (names, sizes) = chunk.iter().cloned().unzip();
             batches.push(Batch {
                 upload: false,
                 parent: parent.clone(),
-                rels: chunk.to_vec(),
+                rels: names,
+                sizes,
             });
         }
     }
 
     let total_files: u64 = batches.iter().map(|b| b.rels.len() as u64).sum();
     let done_files = std::sync::atomic::AtomicU64::new(0);
+    let retries = cli::cfg_int("PROTON_SYNC_RETRIES", 3, 10);
     report_transfer(0, total_files, &[]);
     let outcomes = cli::with_cli_lock(|| {
         Ok(cli::run_parallel(batches, transfers, |b| {
             let n = b.rels.len() as u64;
-            let res = if b.upload {
+            let res: Result<BTreeSet<String>> = if b.upload {
                 let locals: Vec<String> = b
                     .rels
                     .iter()
@@ -293,18 +529,22 @@ pub fn execute(
                 args.extend(locals.iter().map(|s| s.as_str()));
                 args.push(&parent_rpath);
                 cli.run(&args, false, Some(3600), false)
+                    .map(|_| BTreeSet::new())
             } else {
-                let rpaths: Vec<String> = b
+                let pairs: Vec<(String, u64)> = b
                     .rels
                     .iter()
-                    .map(|r| cli::remote_path(remote_root, r))
+                    .cloned()
+                    .zip(b.sizes.iter().cloned())
                     .collect();
-                let target = local_root.join(&b.parent).to_string_lossy().into_owned();
-                let mut args: Vec<&str> = vec!["fs", "download"];
-                args.extend(rpaths.iter().map(|s| s.as_str()));
-                args.extend(["-f", "remove", "-d", "merge"]);
-                args.push(&target);
-                cli.run(&args, false, Some(3600), false)
+                Ok(staged_download(
+                    &cli,
+                    remote_root,
+                    local_root,
+                    &b.parent,
+                    &pairs,
+                    retries,
+                ))
             };
             let done = done_files.fetch_add(n, std::sync::atomic::Ordering::Relaxed) + n;
             let names: Vec<String> = b
@@ -326,9 +566,11 @@ pub fn execute(
 
     for (b, res) in outcomes {
         match res {
-            Ok(_) => {
+            Ok(failed_rels) => {
                 for rel in &b.rels {
-                    if b.upload {
+                    if failed_rels.contains(rel) {
+                        failed.insert(rel.clone());
+                    } else if b.upload {
                         eprintln!("UPLOAD {}", rel);
                     } else {
                         eprintln!("DOWNLOAD {}", rel);
@@ -377,6 +619,7 @@ struct Batch {
     upload: bool,
     parent: String,
     rels: Vec<String>,
+    sizes: Vec<u64>,
 }
 
 #[cfg(test)]
@@ -433,5 +676,114 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&trash);
         assert!(trash_local_path("gone.txt", &root, &trash).is_err());
+    }
+
+    fn fake_cli(dir: &std::path::Path, body: &str) -> Cli {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("fake-proton-drive");
+        fs::write(&path, body).unwrap();
+        let mut perms = fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms).unwrap();
+        Cli::for_test(path)
+    }
+
+    /// The download script's last argument is the target directory.
+    const DOWNLOAD_SCRIPT: &str = "#!/bin/sh\ntarget=\"\"\nfor a in \"$@\"; do target=\"$a\"; done\nprintf 'hello' > \"$target/a.txt\"\n";
+
+    #[test]
+    fn staged_download_verifies_then_moves() {
+        let root = temp("stage-ok");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let cli = fake_cli(&root, DOWNLOAD_SCRIPT);
+        let failed = staged_download(
+            &cli,
+            "/my-files",
+            &root,
+            "",
+            &[("a.txt".to_string(), 5)],
+            1,
+        );
+        assert!(failed.is_empty());
+        assert_eq!(fs::read(root.join("a.txt")).unwrap(), b"hello");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn short_download_never_replaces_the_local_file() {
+        let root = temp("stage-short");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("a.txt"), b"old").unwrap();
+        let cli = fake_cli(&root, DOWNLOAD_SCRIPT);
+        let failed = staged_download(
+            &cli,
+            "/my-files",
+            &root,
+            "",
+            &[("a.txt".to_string(), 9)],
+            1,
+        );
+        assert!(failed.contains("a.txt"));
+        assert_eq!(fs::read(root.join("a.txt")).unwrap(), b"old");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn unsafe_rel_fails_the_whole_batch() {
+        let root = temp("stage-unsafe");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let cli = fake_cli(&root, DOWNLOAD_SCRIPT);
+        let failed = staged_download(
+            &cli,
+            "/my-files",
+            &root,
+            "",
+            &[("../escape.txt".to_string(), 5), ("a.txt".to_string(), 5)],
+            1,
+        );
+        assert!(failed.contains("../escape.txt"));
+        assert!(failed.contains("a.txt"));
+        assert!(!root.join("a.txt").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn conflict_copy_keeps_local_bytes_and_uses_a_unique_name() {
+        let root = temp("conflict");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("dir")).unwrap();
+        fs::write(root.join("dir/photo.jpg"), b"local").unwrap();
+        let cli = fake_cli(
+            &root,
+            "#!/bin/sh\ntarget=\"\"\nfor a in \"$@\"; do target=\"$a\"; done\nprintf 'cloud' > \"$target/photo.jpg\"\n",
+        );
+        let copy = conflict_rel("dir/photo.jpg", "2026-01-01 00-00-00", &root);
+        assert_eq!(copy, "dir/photo (conflict 2026-01-01 00-00-00).jpg");
+        let dest = root.join(&copy);
+        staged_download_one(&cli, "/my-files", &root, "dir/photo.jpg", 5, &dest).unwrap();
+        assert_eq!(fs::read(root.join("dir/photo.jpg")).unwrap(), b"local");
+        assert_eq!(fs::read(&dest).unwrap(), b"cloud");
+
+        // The second conflict in the same second must not overwrite the first.
+        let again = conflict_rel("dir/photo.jpg", "2026-01-01 00-00-00", &root);
+        assert_eq!(again, "dir/photo (conflict 2026-01-01 00-00-00 2).jpg");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn hidden_files_keep_their_whole_name_in_a_conflict() {
+        assert_eq!(
+            conflict_rel(".bashrc", "2026-01-01 00-00-00", Path::new("/nonexistent")),
+            ".bashrc (conflict 2026-01-01 00-00-00)"
+        );
+    }
+
+    #[test]
+    fn staging_directory_is_never_scanned() {
+        assert!(Filter::skip_name(".proton-sync-staging"));
+        assert!(!Filter::skip_name("photos"));
     }
 }

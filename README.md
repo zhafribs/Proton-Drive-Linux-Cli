@@ -59,11 +59,13 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
   real thumbnails** (PNG and JPEG decoded in-process, downscaled and cached),
   with the day label pinned while you scroll. **Sync photos** checks Proton
   Photos on its own; select tiles to **Download missing** or **Delete** (moves
-  to the Proton photos trash and removes the local copy). A tile says whether a
+  to the Proton photos trash and moves the local copy to
+  `<photo folder>/.proton-photos-trash`). A tile says whether a
   photo is missing, still downloading, a different copy, or has a duplicate
   name instead of showing a silent blank. **Two-way sync with `~/ProtonPhotos`**:
   new files upload, new cloud photos download, and deletions travel both ways —
-  a local delete trashes the cloud copy, a cloud trash removes the local file —
+  a local delete trashes the cloud copy, a cloud trash moves the local file to
+  the photo trash —
   but only for photos the engine has already seen in sync, with an
   unmounted-folder guard and a 25-deletions cap per cycle. Nothing is
   overwritten: a name whose size differs on both sides keeps both copies, and a
@@ -89,8 +91,9 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
 **Safety built in:** deletes follow both ways but **only to trash** (never
 permanent); large batches wait for your explicit approval, an empty-side wipe
 guard blocks sick scans, and conflicts keep both versions. Cloud deletions go
-to the desktop trash; local deletions go to
-`~/.local/state/proton-sync/trash`. One app-wide lock protects the CLI's
+to the desktop trash; file deletions go to
+`~/.local/state/proton-sync/trash`, and photo deletions go to
+`<photo folder>/.proton-photos-trash`. One app-wide lock protects the CLI's
 keyring session.
 
 ## Use the CLI directly

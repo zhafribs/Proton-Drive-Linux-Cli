@@ -31,7 +31,7 @@ pub struct FirstSync {
 
 struct Batch {
     parent: String,
-    rels: Vec<String>,
+    rels: Vec<(String, u64)>,
 }
 
 /// Walk the remote tree and download it as it is discovered.
@@ -72,36 +72,20 @@ pub fn download_all(
                     };
                     let Ok(batch) = batch else { return };
                     let n = batch.rels.len() as u64;
-                    let target = local_root.join(&batch.parent);
-                    let target_s = target.to_string_lossy().into_owned();
-                    let rpaths: Vec<String> = batch
-                        .rels
-                        .iter()
-                        .map(|r| cli::remote_path(remote_root, r))
-                        .collect();
-                    let mut args: Vec<&str> = vec!["fs", "download"];
-                    args.extend(rpaths.iter().map(String::as_str));
-                    args.extend(["-f", "remove", "-d", "merge"]);
-                    args.push(&target_s);
-
-                    let mut res = cli.run(&args, false, Some(3600), false);
-                    for attempt in 1..retries {
-                        if res.is_ok() {
-                            break;
-                        }
-                        std::thread::sleep(std::time::Duration::from_secs(2 * attempt as u64));
-                        res = cli.run(&args, false, Some(3600), false);
-                    }
-                    match res {
-                        Ok(_) => {
-                            for rel in &batch.rels {
-                                eprintln!("DOWNLOAD {}", rel);
-                            }
-                            downloaded.lock().unwrap().extend(batch.rels);
-                        }
-                        Err(e) => {
-                            eprintln!("FAILED download batch ({} path(s)): {}", n, e);
-                            failed.lock().unwrap().extend(batch.rels);
+                    let failed_rels = crate::execute::staged_download(
+                        cli,
+                        remote_root,
+                        local_root,
+                        &batch.parent,
+                        &batch.rels,
+                        retries,
+                    );
+                    for (rel, _) in &batch.rels {
+                        if failed_rels.contains(rel) {
+                            failed.lock().unwrap().insert(rel.clone());
+                        } else {
+                            eprintln!("DOWNLOAD {}", rel);
+                            downloaded.lock().unwrap().insert(rel.clone());
                         }
                     }
                     let done = done.fetch_add(n, Ordering::Relaxed) + n;
@@ -141,7 +125,7 @@ pub fn download_all(
                     let mut next: Vec<String> = Vec::new();
                     for (rpath, rel, entries) in listed {
                         let Value::Array(arr) = entries? else { continue };
-                        let mut by_parent: BTreeMap<String, Vec<String>> = BTreeMap::new();
+                        let mut by_parent: BTreeMap<String, Vec<(String, u64)>> = BTreeMap::new();
                         for e in arr {
                             let Some(obj) = e.as_object() else { continue };
                             if !obj.contains_key("type") {
@@ -157,7 +141,7 @@ pub fn download_all(
                                 .and_then(|n| n.get("value"))
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("");
-                            if !ok || name.is_empty() {
+                            if !ok || !crate::filter::valid_remote_name(name) {
                                 continue;
                             }
                             if Filter::skip_name(name) {
@@ -227,7 +211,10 @@ pub fn download_all(
                                 );
                                 // Proton Docs/Sheets cannot be downloaded
                                 if !doc {
-                                    by_parent.entry(rel.clone()).or_default().push(child_rel);
+                                    by_parent
+                                        .entry(rel.clone())
+                                        .or_default()
+                                        .push((child_rel, size));
                                 }
                             }
                         }
