@@ -1,3 +1,19 @@
+## 3.20.20 — 2026-11-06
+
+- **The Photos page is calmer and easier to scan.** The header shows the local
+  folder as `~/ProtonPhotos` (full path on hover), the actions live in one
+  card, and selecting photos swaps that card into a clear “N selected” mode
+  instead of adding more buttons.
+- **Selection is discoverable.** A quiet “Click a photo to select it for
+  download or delete” line appears until the first selection.
+- **Sync photos is honest.** It is visibly disabled while a sync or download is
+  running, with a hover explanation, instead of looking clickable and doing
+  nothing. Delete selected now respects the same busy/sync guard.
+- **Errors get a proper callout** with a **Reload** action.
+- Every previous feature remains: Sync photos, Download missing, Download
+  selected, Delete selected, Clear selection, Open folder, per-tile
+  Download/Re-download, status/attention, and the day-grouped grid.
+
 ## 3.20.19 — 2026-11-06
 
 - **Settings is now six clear tabs instead of one long wall of cards.**

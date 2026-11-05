@@ -54,6 +54,14 @@ pub fn primary_button_hint(ui: &mut egui::Ui, text: &str, hint: &str) -> bool {
     // Flat violet, not the old cyan cap: the overlay dropped white-on-cyan
     // contrast to ~3.8:1. The label is painted by egui before any overlay,
     // so a gradient would also tint the text itself.
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            response.rect,
+            theme::pill(),
+            egui::Stroke::new(1.5, egui::Color32::WHITE),
+            egui::StrokeKind::Inside,
+        );
+    }
     response.clicked()
 }
 

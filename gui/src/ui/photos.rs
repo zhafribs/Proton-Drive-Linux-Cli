@@ -88,6 +88,21 @@ pub fn local_dir(app: &App) -> std::path::PathBuf {
     local_dir_from(&app.conf)
 }
 
+/// `~/ProtonPhotos` instead of the full home path, for the header.
+fn short_path(path: &std::path::Path) -> String {
+    if let Some(home) = dirs::home_dir()
+        && let Ok(rest) = path.strip_prefix(&home)
+    {
+        let rest = rest.display().to_string();
+        return if rest.is_empty() {
+            "~".to_string()
+        } else {
+            format!("~/{rest}")
+        };
+    }
+    path.display().to_string()
+}
+
 /// The page was shown (navigation): list the timeline the first time only.
 pub fn on_shown(app: &mut App) {
     // The folder existing is what turns the engine's photo sync on, so create
@@ -577,14 +592,16 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
         }
     });
     ui.add_space(2.0);
-    ui.label(
-        egui::RichText::new(format!(
-            "Two-way sync with /photos \u{b7} {}",
-            dir.display()
-        ))
-        .weak()
-        .size(12.0),
-    );
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            egui::RichText::new("Two-way sync with /photos")
+                .weak()
+                .size(12.0),
+        );
+        ui.label(egui::RichText::new("\u{b7}").weak().size(12.0));
+        ui.label(egui::RichText::new(short_path(&dir)).weak().size(12.0))
+            .on_hover_text(dir.display().to_string());
+    });
     if !app.photos.last_sync.is_empty() {
         let color = if app.photos.attention > 0 {
             theme::warning_text(ui.visuals())
@@ -599,124 +616,150 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
     }
     ui.add_space(10.0);
 
-    // Photos has its own sync control. The engine runs the photo pass even
-    // when the file pass fails, so this never depends on Home's button.
-    ui.horizontal_wrapped(|ui| {
+    // One calm action card. A selection replaces the normal actions, so the
+    // page never shows two competing toolbars.
+    widgets::card(ui, None, |ui| {
         let photo_sync_on = app.conf.get("PROTON_SYNC_PHOTOS").is_none_or(|v| v != "0");
         let syncing =
             app.health.status == "syncing" || app.health.phase.as_deref() == Some("photos");
-        if app.active && photo_sync_on {
-            if widgets::secondary_button_hint(
-                ui,
-                "  Sync photos",
-                "Check Proton Photos now. Your Drive files sync right after.",
-            ) {
-                request_sync(app, None);
-            }
-        } else if !app.active {
-            ui.label(
-                egui::RichText::new(if app.paused_by_user {
-                    "Paused - resume on Home."
+        let ready = !app.photos.busy && !app.photos.deleting && !syncing;
+        let sel = app.photos.sel.clone();
+
+        ui.horizontal_wrapped(|ui| {
+            if sel.is_empty() {
+                if app.active && photo_sync_on {
+                    if ready {
+                        if widgets::primary_button_hint(
+                            ui,
+                            "  Sync photos",
+                            "Check Proton Photos now. Your Drive files sync right after.",
+                        ) {
+                            request_sync(app, None);
+                        }
+                    } else {
+                        ui.add_enabled(false, egui::Button::new("  Sync photos"))
+                            .on_disabled_hover_text(if syncing {
+                                "A sync is already running."
+                            } else {
+                                "Wait for the current photo action to finish."
+                            });
+                    }
+                } else if !app.active {
+                    ui.label(
+                        egui::RichText::new(if app.paused_by_user {
+                            "Paused - resume on Home."
+                        } else {
+                            "Sync is stopped - start it on Home."
+                        })
+                        .size(12.0)
+                        .weak(),
+                    );
                 } else {
-                    "Sync is stopped - start it on Home."
-                })
-                .size(12.0)
-                .weak(),
-            );
-        } else {
+                    ui.label(
+                        egui::RichText::new("Photo sync is off in Settings.")
+                            .size(12.0)
+                            .weak(),
+                    );
+                }
+                if ui
+                    .add_enabled(
+                        ready && !app.photos.items.is_empty(),
+                        egui::Button::new("Download missing"),
+                    )
+                    .on_hover_text(
+                        "Copy every photo that is not on this computer. Nothing in the cloud changes.",
+                    )
+                    .clicked()
+                {
+                    let missing: Vec<String> = app
+                        .photos
+                        .items
+                        .iter()
+                        .filter(|p| {
+                            !app.photos.shared.contains(&p.name) && !dir.join(&p.name).is_file()
+                        })
+                        .map(|p| p.uid.clone())
+                        .collect();
+                    if missing.is_empty() {
+                        app.photos.status = "Every photo is already on this computer.".to_string();
+                    } else {
+                        download(app, missing);
+                    }
+                }
+            } else {
+                ui.label(egui::RichText::new(format!("{} selected", sel.len())).strong());
+                ui.add_space(4.0);
+                if ui
+                    .add_enabled(
+                        ready,
+                        egui::Button::new(format!("Download {}", sel.len())),
+                    )
+                    .clicked()
+                {
+                    let missing: Vec<String> = app
+                        .photos
+                        .items
+                        .iter()
+                        .filter(|p| {
+                            sel.contains(&p.uid)
+                                && !app.photos.shared.contains(&p.name)
+                                && !dir.join(&p.name).is_file()
+                        })
+                        .map(|p| p.uid.clone())
+                        .collect();
+                    if missing.is_empty() {
+                        app.photos.status =
+                            "The selected photos are already on this computer.".to_string();
+                    } else {
+                        download(app, missing);
+                    }
+                }
+                if ui
+                    .add_enabled(
+                        ready,
+                        egui::Button::new(format!("Delete {}", sel.len())),
+                    )
+                    .on_hover_text("Move to the Proton photos trash and remove the local copy")
+                    .clicked()
+                {
+                    app.dialog = Some(super::Dialog::ConfirmPhotoDelete { uids: sel.clone() });
+                }
+                if ui.button("Clear selection").clicked() {
+                    app.photos.sel.clear();
+                }
+                ui.separator();
+            }
+            if ui.button("Open folder").clicked() {
+                let _ = std::fs::create_dir_all(&dir);
+                App::open_url(&dir.to_string_lossy());
+            }
+        });
+        if sel.is_empty() && !app.photos.items.is_empty() {
+            ui.add_space(4.0);
             ui.label(
-                egui::RichText::new("Photo sync is off in Settings.")
-                    .size(12.0)
+                egui::RichText::new("Click a photo to select it for download or delete.")
+                    .size(11.5)
                     .weak(),
             );
-        }
-        if app.photos.sel.is_empty() {
-            if ui
-                .add_enabled(
-                    !app.photos.busy
-                        && !app.photos.deleting
-                        && !syncing
-                        && !app.photos.items.is_empty(),
-                    egui::Button::new("Download missing"),
-                )
-                .on_hover_text(
-                    "Copy every photo that is not on this computer. Nothing in the cloud changes.",
-                )
-                .clicked()
-            {
-                let missing: Vec<String> = app
-                    .photos
-                    .items
-                    .iter()
-                    .filter(|p| {
-                        !app.photos.shared.contains(&p.name) && !dir.join(&p.name).is_file()
-                    })
-                    .map(|p| p.uid.clone())
-                    .collect();
-                if missing.is_empty() {
-                    app.photos.status = "Every photo is already on this computer.".to_string();
-                } else {
-                    download(app, missing);
-                }
-            }
-        } else {
-            let sel = app.photos.sel.clone();
-            if ui
-                .add_enabled(
-                    !app.photos.busy && !app.photos.deleting && !syncing,
-                    egui::Button::new(format!("Download {} selected", sel.len())),
-                )
-                .clicked()
-            {
-                let missing: Vec<String> = app
-                    .photos
-                    .items
-                    .iter()
-                    .filter(|p| {
-                        sel.contains(&p.uid)
-                            && !app.photos.shared.contains(&p.name)
-                            && !dir.join(&p.name).is_file()
-                    })
-                    .map(|p| p.uid.clone())
-                    .collect();
-                if missing.is_empty() {
-                    app.photos.status =
-                        "The selected photos are already on this computer.".to_string();
-                } else {
-                    download(app, missing);
-                }
-            }
-            if ui
-                .add_enabled(
-                    !app.photos.busy && !app.photos.deleting,
-                    egui::Button::new(format!("Delete {} selected", sel.len())),
-                )
-                .on_hover_text("Move to the Proton photos trash and remove the local copy")
-                .clicked()
-            {
-                app.dialog = Some(super::Dialog::ConfirmPhotoDelete { uids: sel });
-            }
-            if ui.button("Clear selection").clicked() {
-                app.photos.sel.clear();
-            }
-        }
-        if ui.button("Open folder").clicked() {
-            let _ = std::fs::create_dir_all(&dir);
-            App::open_url(&dir.to_string_lossy());
         }
     });
 
     if !app.photos.error.is_empty() {
         ui.add_space(8.0);
         let error = app.photos.error.clone();
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(!app.photos.busy, egui::Button::new("Retry"))
-                .clicked()
-            {
-                refresh(app);
-            }
-            ui.label(egui::RichText::new(&error).color(theme::danger_text(ui.visuals())));
+        widgets::card(ui, None, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(!app.photos.busy, egui::Button::new("Reload"))
+                    .on_hover_text("Reload the photo timeline.")
+                    .clicked()
+                {
+                    refresh(app);
+                }
+                ui.label(
+                    egui::RichText::new(&error).color(theme::danger_text(ui.visuals())),
+                );
+            });
         });
     }
     if !app.photos.status.is_empty() {
