@@ -60,6 +60,8 @@ pub const SECONDARY: egui::Color32 = egui::Color32::from_rgb(0x6D, 0x6A, 0x85);
 pub const BORDER: egui::Color32 = egui::Color32::from_rgb(0xE4, 0xE1, 0xF2);
 /// Soft purple: active nav pill / pressed controls.
 pub const ACCENT_SOFT: egui::Color32 = egui::Color32::from_rgb(0xEC, 0xE8, 0xFF);
+/// Darker violet for accent *text* on the light accent-soft pill (AA).
+pub const ACCENT_TEXT: egui::Color32 = egui::Color32::from_rgb(0x5B, 0x3F, 0xD0);
 /// Purple-tinted hover for buttons and rows.
 pub const ACCENT_HOVER: egui::Color32 = egui::Color32::from_rgb(0xF1, 0xEE, 0xFF);
 
@@ -116,6 +118,16 @@ pub fn accent(visuals: &egui::Visuals) -> egui::Color32 {
         ACCENT_LIGHT
     } else {
         ACCENT
+    }
+}
+
+/// Accent colour for text/icons on `accent_soft`; the bright accent is only
+/// 4.26:1 on the light pill, so light mode uses the darker shade.
+pub fn accent_text(visuals: &egui::Visuals) -> egui::Color32 {
+    if visuals.dark_mode {
+        ACCENT_LIGHT
+    } else {
+        ACCENT_TEXT
     }
 }
 
@@ -389,6 +401,7 @@ mod tests {
             (WARNING_TEXT, SURFACE, 4.5),
             (WARNING_TEXT, PAGE, 4.5),
             (INFO, SURFACE, 4.5),
+            (ACCENT_TEXT, ACCENT_SOFT, 4.5),
             (ERROR, SURFACE, 4.5),
             (ERROR_TEXT, PAGE, 4.5),
             (ERROR, DARK_PAGE, 3.0),

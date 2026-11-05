@@ -70,6 +70,7 @@ impl UiScale {
     }
 }
 
+#[derive(Clone)]
 pub struct Prefs {
     pub file: PathBuf,
     pub values: BTreeMap<String, String>,
@@ -175,7 +176,7 @@ impl Prefs {
         self.set("window_size", format!("{}x{}", self.window_w, self.window_h));
     }
 
-    fn save(&self) {
+    pub fn save(&self) {
         let mut out = String::from("[General]\n");
         for (k, v) in &self.values {
             out.push_str(&format!("{k}={v}\n"));

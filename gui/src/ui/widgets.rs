@@ -597,7 +597,7 @@ pub fn nav_row(ui: &mut egui::Ui, icon: NavIcon, label: &str, selected: bool) ->
         );
     }
     let color = if selected {
-        theme::accent(ui.visuals())
+        theme::accent_text(ui.visuals())
     } else {
         ui.visuals().weak_text_color()
     };

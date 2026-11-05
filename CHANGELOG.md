@@ -1,3 +1,21 @@
+## 3.20.17 — 2026-11-06
+
+- **Settings Discard now restores the saved snapshot.** 3.20.16 re-read the
+  preferences file, but every immediate toggle had already written that file,
+  so Discard could not undo theme, scale, tray or notification changes. The app
+  keeps a prefs baseline from startup/last Save, and Discard restores and
+  persists it before reloading the sync draft.
+- **Toast lifetimes start when a message reaches the screen.** A success
+  queued behind a persistent error now gets its full four seconds after the
+  error is dismissed, instead of expiring unseen. Errors are never evicted by
+  the queue cap.
+- **Toasts are real live regions.** Errors use `Alert` + Assertive; ordinary
+  confirmations use `Status` + Polite, and restart failures are errors rather
+  than expiring info.
+- **The folder tree is keyboard-operable.** Enter opens, Space toggles,
+  Left/Right collapse/expand, and AccessKit gets TreeItem level/expanded state.
+  Active tree/nav text uses the darker accent token (AA on the light pill).
+
 ## 3.20.16 — 2026-11-06
 
 - **Feedback no longer disappears before you can read it.** Messages are

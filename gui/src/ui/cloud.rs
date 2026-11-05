@@ -2096,10 +2096,13 @@ fn my_files_row(app: &mut App, ui: &mut egui::Ui, root_open: bool) {
         egui::Color32::TRANSPARENT
     };
     resp.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::Role::ListItem, ui.is_enabled(), "My files")
+        egui::WidgetInfo::labeled(egui::Role::TreeItem, ui.is_enabled(), "My files")
     });
-    ui.ctx()
-        .accesskit_node_builder(resp.id, |n| n.set_selected(active));
+    ui.ctx().accesskit_node_builder(resp.id, |n| {
+        n.set_level(1);
+        n.set_expanded(root_open);
+        n.set_selected(active);
+    });
     if fill != egui::Color32::TRANSPARENT {
         ui.painter().rect_filled(rect, egui::CornerRadius::same(9), fill);
     }
@@ -2112,7 +2115,7 @@ fn my_files_row(app: &mut App, ui: &mut egui::Ui, root_open: bool) {
         );
     }
     let color = if active {
-        theme::accent(ui.visuals())
+        theme::accent_text(ui.visuals())
     } else {
         ui.visuals().weak_text_color()
     };
@@ -2137,9 +2140,17 @@ fn my_files_row(app: &mut App, ui: &mut egui::Ui, root_open: bool) {
         egui::FontId::proportional(11.0),
         color,
     );
-    let activated = resp.clicked()
-        || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
-    if activated {
+    let at_click = ui.input(|i| {
+        i.has_accesskit_action_request(resp.id, egui::accesskit::Action::Click)
+    });
+    let expand = ui.input(|i| {
+        i.has_accesskit_action_request(resp.id, egui::accesskit::Action::Expand)
+    });
+    let collapse = ui.input(|i| {
+        i.has_accesskit_action_request(resp.id, egui::accesskit::Action::Collapse)
+    });
+    if resp.clicked_by(egui::PointerButton::Primary) || at_click {
+        resp.request_focus();
         if let Some(pos) = resp.interact_pointer_pos() {
             if pos.x >= rect.right() - 26.0 {
                 toggle_tree(app, "");
@@ -2148,6 +2159,20 @@ fn my_files_row(app: &mut App, ui: &mut egui::Ui, root_open: bool) {
             }
         } else {
             go(app, String::new());
+        }
+    }
+    if resp.has_focus() {
+        if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            go(app, String::new());
+        }
+        if ui.input(|i| i.key_pressed(egui::Key::Space)) {
+            toggle_tree(app, "");
+        }
+        if (ui.input(|i| i.key_pressed(egui::Key::ArrowRight)) || expand) && !root_open {
+            toggle_tree(app, "");
+        }
+        if (ui.input(|i| i.key_pressed(egui::Key::ArrowLeft)) || collapse) && root_open {
+            toggle_tree(app, "");
         }
     }
 }
@@ -2183,10 +2208,13 @@ fn tree_rows(app: &mut App, ui: &mut egui::Ui, parent: &str, depth: usize) {
             egui::Color32::TRANSPARENT
         };
         resp.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::Role::ListItem, ui.is_enabled(), e.name.as_str())
+            egui::WidgetInfo::labeled(egui::Role::TreeItem, ui.is_enabled(), e.name.as_str())
         });
-        ui.ctx()
-            .accesskit_node_builder(resp.id, |n| n.set_selected(active));
+        ui.ctx().accesskit_node_builder(resp.id, |n| {
+            n.set_level(depth + 2);
+            n.set_expanded(open);
+            n.set_selected(active);
+        });
         if fill != egui::Color32::TRANSPARENT {
             ui.painter().rect_filled(rect, egui::CornerRadius::same(7), fill);
         }
@@ -2199,7 +2227,7 @@ fn tree_rows(app: &mut App, ui: &mut egui::Ui, parent: &str, depth: usize) {
             );
         }
         let color = if active {
-            theme::accent(ui.visuals())
+            theme::accent_text(ui.visuals())
         } else {
             ui.visuals().weak_text_color()
         };
@@ -2223,9 +2251,17 @@ fn tree_rows(app: &mut App, ui: &mut egui::Ui, parent: &str, depth: usize) {
             egui::FontId::proportional(13.5),
             color,
         );
-        let activated = resp.clicked()
-            || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
-        if activated {
+        let at_click = ui.input(|i| {
+            i.has_accesskit_action_request(resp.id, egui::accesskit::Action::Click)
+        });
+        let expand = ui.input(|i| {
+            i.has_accesskit_action_request(resp.id, egui::accesskit::Action::Expand)
+        });
+        let collapse = ui.input(|i| {
+            i.has_accesskit_action_request(resp.id, egui::accesskit::Action::Collapse)
+        });
+        if resp.clicked_by(egui::PointerButton::Primary) || at_click {
+            resp.request_focus();
             if let Some(pos) = resp.interact_pointer_pos() {
                 if pos.x < rect.left() + indent + 16.0 {
                     toggle_tree(app, &r);
@@ -2234,6 +2270,23 @@ fn tree_rows(app: &mut App, ui: &mut egui::Ui, parent: &str, depth: usize) {
                 }
             } else {
                 go(app, r.clone());
+            }
+        }
+        if resp.gained_focus() {
+            resp.scroll_to_me(Some(egui::Align::Center));
+        }
+        if resp.has_focus() {
+            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                go(app, r.clone());
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Space)) {
+                toggle_tree(app, &r);
+            }
+            if (ui.input(|i| i.key_pressed(egui::Key::ArrowRight)) || expand) && !open {
+                toggle_tree(app, &r);
+            }
+            if (ui.input(|i| i.key_pressed(egui::Key::ArrowLeft)) || collapse) && open {
+                toggle_tree(app, &r);
             }
         }
         if open {

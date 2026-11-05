@@ -276,6 +276,8 @@ pub struct App {
     pub save_hint: String,
     pub sub_override: Option<(String, f64)>,
     pub toasts: std::collections::VecDeque<Toast>,
+    /// Prefs as of the last Save/startup; Discard restores this snapshot.
+    pub prefs_baseline: Option<prefs::Prefs>,
     pub upd: UpdateUi,
 
     pub hidden: bool,
@@ -614,6 +616,9 @@ pub struct Toast {
     pub msg: String,
     pub at: f64,
     pub error: bool,
+    /// Set when this toast first reaches the front; the four-second info
+    /// lifetime starts here, not at enqueue, so queued messages are readable.
+    pub shown_at: Option<f64>,
 }
 
 impl App {
@@ -754,6 +759,7 @@ impl App {
             .filter(|s| !s.is_empty());
         Ok(Box::new(App {
             hide_on_start: prefs.start_in_tray(),
+            prefs_baseline: Some(prefs.clone()),
             prefs,
             paths,
             conf,
@@ -863,12 +869,19 @@ impl App {
 
     fn push_toast(&mut self, msg: String, error: bool) {
         if self.toasts.len() >= 4 {
-            self.toasts.pop_front();
+            // Drop an old info before an unacknowledged error.
+            let idx = self
+                .toasts
+                .iter()
+                .position(|t| !t.error)
+                .unwrap_or(0);
+            self.toasts.remove(idx);
         }
         self.toasts.push_back(Toast {
             msg,
             at: self.now(),
             error,
+            shown_at: None,
         });
     }
 
@@ -1180,11 +1193,15 @@ impl App {
                     }
                 }
                 Back::UnitEnabled(b) => self.draft.autostart = b,
-                Back::ServiceRestarted(ok) => self.toast(if ok {
-                    "Syncing restarted."
-                } else {
-                    "Could not restart syncing - run: systemctl --user restart proton-sync"
-                }),
+                Back::ServiceRestarted(ok) => {
+                    if ok {
+                        self.toast("Syncing restarted.");
+                    } else {
+                        self.toast_error(
+                            "Could not restart syncing - run: systemctl --user restart proton-sync",
+                        );
+                    }
+                }
                 Back::Photos(r) => photos::on_fetched(self, r),
                 Back::PhotosDownloaded(r) => photos::on_downloaded(self, r),
                 Back::PhotosDeleted(r) => photos::on_deleted(self, r),
@@ -1749,9 +1766,14 @@ impl App {
         // Same clock as `toast()`; ctx.time starts at app launch, so mixing
         // the two made most toasts expire on their first frame.
         let t = self.now();
+        if let Some(front) = self.toasts.front_mut()
+            && front.shown_at.is_none()
+        {
+            front.shown_at = Some(t);
+        }
         if let Some(front) = self.toasts.front()
             && !front.error
-            && t - front.at > 4.0
+            && t - front.shown_at.unwrap_or(front.at) > 4.0
         {
             self.toasts.pop_front();
             ctx.request_repaint();
@@ -1760,8 +1782,12 @@ impl App {
         let Some(front) = self.toasts.front() else {
             return;
         };
-        let (msg, at, error) = (front.msg.clone(), front.at, front.error);
-        let age = (t - at) as f32;
+        let (msg, since, error) = (
+            front.msg.clone(),
+            front.shown_at.unwrap_or(front.at),
+            front.error,
+        );
+        let age = (t - since) as f32;
         // Errors stay until dismissed; info slides in and fades out.
         let (fade, slide) = if error {
             (1.0, 0.0)
@@ -1787,9 +1813,19 @@ impl App {
                             resp.widget_info(|| {
                                 egui::WidgetInfo::labeled(egui::Role::Alert, true, &msg)
                             });
+                            ui.ctx().accesskit_node_builder(resp.id, |n| {
+                                n.set_live(egui::accesskit::Live::Assertive);
+                            });
                             if ui.small_button("Dismiss").clicked() {
                                 dismiss = true;
                             }
+                        } else {
+                            resp.widget_info(|| {
+                                egui::WidgetInfo::labeled(egui::Role::Status, true, &msg)
+                            });
+                            ui.ctx().accesskit_node_builder(resp.id, |n| {
+                                n.set_live(egui::accesskit::Live::Polite);
+                            });
                         }
                     });
                 });

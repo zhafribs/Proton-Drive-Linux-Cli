@@ -336,7 +336,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                     }
                 }
                 if ui.button("Discard").clicked() {
-                    reload(app);
+                    discard(app);
                 }
                 ui.label(egui::RichText::new(app.save_hint.clone()).weak());
             });
@@ -373,34 +373,21 @@ fn validate(app: &App) -> Option<(String, String)> {
     None
 }
 
-/// Re-read the conf into the draft (startup + the Discard button).
-pub fn reload(app: &mut App) {
+/// Discard: restore the prefs snapshot from the last Save/startup, persist it,
+/// then reload the conf-backed draft. Prefs setters write immediately, so
+/// re-reading disk would just load the values the user is discarding.
+fn discard(app: &mut App) {
+    if let Some(base) = app.prefs_baseline.clone() {
+        app.prefs = base;
+        app.prefs.save();
+    }
     let values = conf::read(&app.paths.conf_file);
     let extras = conf::read_extras(&app.paths.conf_file);
     app.conf = values.clone();
     app.conf_extras = extras.clone();
-    // Discard must undo the preferences that apply immediately (theme, scale,
-    // tray, notifications), not just the conf-backed draft.
-    app.prefs = crate::prefs::Prefs::load(&app.paths.prefs_file);
     app.style_dirty = true;
     app.draft = Draft::load(&values, &extras, &app.prefs, &app.paths);
     app.save_hint.clear();
-    // Kick a fresh root listing (Qt re-ran _sel_load_root on every load).
-    if app.draft.loading.insert(String::new()) {
-        let remote = app.draft.remote.clone();
-        let tx = app.tx.clone();
-        std::thread::spawn(move || {
-            let folders = cli_fetch(&remote, "");
-            let _ = tx.send(super::Back::SelFolders {
-                parent: String::new(),
-                folders,
-            });
-        });
-    }
-}
-
-fn cli_fetch(remote: &str, rel: &str) -> Vec<(String, String)> {
-    crate::cli::fetch_remote_folders(remote, rel)
 }
 
 /// Write conf + restart flow (worker-side; the hint lands via SaveHint).
@@ -450,6 +437,7 @@ pub fn do_save(app: &mut App) {
         .collect();
 
     conf::write(&app.paths.conf_file, &values, &extras);
+    app.prefs_baseline = Some(app.prefs.clone());
     app.conf = conf::read(&app.paths.conf_file);
     app.conf_extras = conf::read_extras(&app.paths.conf_file);
     app.draft.initial_selection = selection;
