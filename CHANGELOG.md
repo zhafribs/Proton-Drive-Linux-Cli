@@ -1,3 +1,17 @@
+## 3.20.19 — 2026-11-06
+
+- **Settings is now six clear tabs instead of one long wall of cards.**
+  **General**, **Sync**, **Notifications**, **Appearance**, **Advanced** and
+  **App** each open with a one-line description. Every existing control is
+  still there; Advanced is simply out of the way until you need it.
+- **One readable column.** The old 1/2/3-column packing is replaced by a
+  centered column capped at 820 px, so labels and controls no longer compete
+  for attention across the whole window.
+- **Save appears only where it matters.** Sync/performance tabs keep
+  **Save changes** and **Discard**; tabs whose controls apply immediately say
+  so instead of offering a button that does not do what it looks like.
+- Tabs expose their selected state to AccessKit and are keyboard-activatable.
+
 ## 3.20.18 — 2026-11-06
 
 - **Dialogs block the page underneath.** A dimmed, input-absorbing layer sits

@@ -278,6 +278,9 @@ pub struct App {
     pub toasts: std::collections::VecDeque<Toast>,
     /// Prefs as of the last Save/startup; Discard restores this snapshot.
     pub prefs_baseline: Option<prefs::Prefs>,
+    /// Selected Settings tab (General, Sync, Notifications, Appearance,
+    /// Advanced, App). Kept on App so it survives a Save/reload.
+    pub settings_tab: usize,
     pub upd: UpdateUi,
 
     pub hidden: bool,
@@ -760,6 +763,7 @@ impl App {
         Ok(Box::new(App {
             hide_on_start: prefs.start_in_tray(),
             prefs_baseline: Some(prefs.clone()),
+            settings_tab: 0,
             prefs,
             paths,
             conf,

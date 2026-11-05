@@ -239,55 +239,36 @@ impl Draft {
 
 type CardFn = fn(&mut App, &mut egui::Ui);
 
-const COLUMN_A: &[CardFn] = &[
-    folder_card,
-    what_syncs_card,
-    how_often_card,
-    photos_card,
-    performance_card,
-    fine_tuning_card,
+const TAB_LABELS: [&str; 6] = [
+    "General",
+    "Sync",
+    "Notifications",
+    "Appearance",
+    "Advanced",
+    "App & updates",
 ];
-const COLUMN_RIGHT: &[CardFn] = &[
-    notifications_card,
-    background_card,
-    appearance_card,
-    updates_card,
-    install_card,
-    troubleshooting_card,
-    env_card,
+const TAB_DESCRIPTIONS: [&str; 6] = [
+    "Where your files live and how the app behaves when you close it.",
+    "Choose what syncs, when, and how photos are handled.",
+    "Choose which events produce a desktop notification.",
+    "Theme, interface size, and background motion.",
+    "Tuning and recovery tools. The defaults work for most people.",
+    "Updates, the app-menu entry, and installation details.",
 ];
-const COLUMN_ALL: &[CardFn] = &[
-    folder_card,
-    what_syncs_card,
-    how_often_card,
-    photos_card,
-    performance_card,
-    notifications_card,
-    background_card,
-    appearance_card,
-    updates_card,
-    install_card,
-    fine_tuning_card,
-    troubleshooting_card,
-    env_card,
+
+const TAB_CARDS: [&[CardFn]; 6] = [
+    &[folder_card, background_card],
+    &[what_syncs_card, how_often_card, photos_card],
+    &[notifications_card],
+    &[appearance_card],
+    &[
+        performance_card,
+        fine_tuning_card,
+        troubleshooting_card,
+        env_card,
+    ],
+    &[updates_card, install_card],
 ];
-// Three columns are shallower: keep Performance with the folder cards, move
-// How often across, so no single column runs far past the others. The
-// advanced/troubleshooting cards join the same packing, not a separate block.
-const COLUMN_3A: &[CardFn] = &[
-    folder_card,
-    what_syncs_card,
-    photos_card,
-    performance_card,
-    fine_tuning_card,
-];
-const COLUMN_3B: &[CardFn] = &[
-    how_often_card,
-    notifications_card,
-    background_card,
-    troubleshooting_card,
-];
-const COLUMN_3C: &[CardFn] = &[appearance_card, updates_card, install_card, env_card];
 
 fn draw_cards(app: &mut App, ui: &mut egui::Ui, cards: &[CardFn]) {
     for (i, card) in cards.iter().enumerate() {
@@ -298,57 +279,113 @@ fn draw_cards(app: &mut App, ui: &mut egui::Ui, cards: &[CardFn]) {
     }
 }
 
+fn tab_bar(app: &mut App, ui: &mut egui::Ui) {
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        for (i, label) in TAB_LABELS.iter().enumerate() {
+            let selected = app.settings_tab == i;
+            let resp = ui.add(
+                egui::Button::new(egui::RichText::new(*label).size(13.0))
+                    .selected(selected)
+                    .corner_radius(crate::theme::pill()),
+            );
+            // A plain Button is honest: it switches panels, but we are not
+            // claiming the full ARIA tablist/roving-focus contract.
+            resp.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), *label)
+            });
+            ui.ctx()
+                .accesskit_node_builder(resp.id, |n| n.set_selected(selected));
+            if resp.clicked() || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+                app.settings_tab = i;
+            }
+        }
+    });
+}
+
+fn save_bar(app: &mut App, ui: &mut egui::Ui) {
+    ui.horizontal_wrapped(|ui| {
+        if widgets::primary_button(ui, "  Save all changes") {
+            match validate(app) {
+                Some((title, body)) => {
+                    if title == "Folder missing" {
+                        app.settings_tab = 0;
+                    }
+                    app.dialog = Some(Dialog::Info { title, body });
+                }
+                None => app.dialog = Some(Dialog::ConfirmSave),
+            }
+        }
+        if ui.button("Discard all changes").clicked() {
+            discard(app);
+        }
+        ui.label(egui::RichText::new(app.save_hint.clone()).weak());
+    });
+    ui.label(
+        egui::RichText::new(
+            "Save writes every sync and performance field on every tab. Discard restores \
+             all settings, including appearance and notification changes.",
+        )
+        .size(11.5)
+        .weak(),
+    );
+}
+
+fn immediate_note(ui: &mut egui::Ui) {
+    ui.label(
+        egui::RichText::new("These changes apply immediately.")
+            .size(11.5)
+            .weak(),
+    );
+}
+
 pub fn draw(app: &mut App, ui: &mut egui::Ui) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.label(egui::RichText::new("Settings").strong().size(24.0));
-            ui.add_space(12.0);
+            // One readable column instead of the old 1/2/3-column wall. On a
+            // wide window the column stays centered and capped.
+            let full = ui.available_width();
+            let width = full.min(820.0);
+            let pad = ((full - width) * 0.5).max(0.0);
+            ui.horizontal(|ui| {
+                ui.add_space(pad);
+                ui.vertical(|ui| {
+                    ui.set_width(width);
+                    ui.label(egui::RichText::new("Settings").strong().size(24.0));
+                    ui.label(
+                        egui::RichText::new(
+                            "A few clear groups. Advanced tools live in their own tab.",
+                        )
+                        .size(12.5)
+                        .weak(),
+                    );
+                    ui.add_space(12.0);
+                    tab_bar(app, ui);
+                    ui.add_space(10.0);
 
-            // Pack the cards into columns when there is room, the way TMOG's
-            // MetricsPanelBoxLayout reflows its panels instead of leaving a
-            // full-width card mostly empty on a large screen.
-            let width = ui.available_width();
-            if width >= 1200.0 {
-                ui.columns(3, |cols| {
-                    draw_cards(app, &mut cols[0], COLUMN_3A);
-                    draw_cards(app, &mut cols[1], COLUMN_3B);
-                    draw_cards(app, &mut cols[2], COLUMN_3C);
-                });
-            } else if width >= 700.0 {
-                ui.columns(2, |cols| {
-                    draw_cards(app, &mut cols[0], COLUMN_A);
-                    draw_cards(app, &mut cols[1], COLUMN_RIGHT);
-                });
-            } else {
-                draw_cards(app, ui, COLUMN_ALL);
-            }
-            ui.add_space(18.0);
-
-            // --- save bar ---
-            ui.horizontal_wrapped(|ui| {
-                if widgets::primary_button(ui, "  Save changes") {
-                    match validate(app) {
-                        Some((title, body)) => {
-                            app.dialog = Some(Dialog::Info { title, body });
-                        }
-                        None => app.dialog = Some(Dialog::ConfirmSave),
+                    let tab = app.settings_tab.min(TAB_LABELS.len() - 1);
+                    ui.label(
+                        egui::RichText::new(TAB_DESCRIPTIONS[tab])
+                            .size(12.5)
+                            .weak(),
+                    );
+                    if !app.save_hint.is_empty() {
+                        ui.label(egui::RichText::new(app.save_hint.clone()).size(11.5).weak());
                     }
-                }
-                if ui.button("Discard").clicked() {
-                    discard(app);
-                }
-                ui.label(egui::RichText::new(app.save_hint.clone()).weak());
+                    ui.add_space(12.0);
+
+                    draw_cards(app, ui, TAB_CARDS[tab]);
+
+                    ui.add_space(18.0);
+                    if matches!(tab, 0 | 1 | 4) {
+                        save_bar(app, ui);
+                    } else {
+                        immediate_note(ui);
+                    }
+                    ui.add_space(20.0);
+                });
             });
-            ui.label(
-                egui::RichText::new(
-                    "Appearance, tray and notification changes apply immediately. \
-                     Discard reloads them from disk.",
-                )
-                .size(11.5)
-                .weak(),
-            );
-            ui.add_space(20.0);
         });
 }
 
@@ -1192,5 +1229,24 @@ mod tests {
             number_options(RETRIES_RANGE),
             (1..=10).collect::<Vec<i32>>()
         );
+    }
+
+    #[test]
+    fn every_settings_tab_has_a_unique_label_and_description() {
+        assert_eq!(TAB_LABELS.len(), TAB_DESCRIPTIONS.len());
+        assert_eq!(TAB_LABELS.len(), TAB_CARDS.len());
+        assert_eq!(
+            TAB_CARDS.iter().map(|cards| cards.len()).sum::<usize>(),
+            13,
+            "all Settings cards must remain reachable"
+        );
+        let mut seen = HashSet::new();
+        for label in TAB_LABELS {
+            assert!(!label.is_empty());
+            assert!(seen.insert(label), "duplicate tab label: {label}");
+        }
+        for description in TAB_DESCRIPTIONS {
+            assert!(!description.is_empty());
+        }
     }
 }
