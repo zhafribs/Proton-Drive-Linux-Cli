@@ -42,7 +42,10 @@ before executing anything.
   ```
   Keep the old private key until no supported release still trusts it. Users
   who skip the transitional release will reject post-rotation releases; the
-  release notes must call that out. Losing the only private key stops new
+  release notes must call that out. Also regenerate the hardcoded self-test
+  signature in `gui/src/release.rs` with the new key and pass the two rotation
+  environment variables through the workflow (or run the transitional release
+  from a trusted local machine). Losing the only private key stops new
   signatures, but users can still download manually.
 
 ## Release assets
