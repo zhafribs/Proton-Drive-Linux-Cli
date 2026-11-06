@@ -1,3 +1,31 @@
+## 3.20.29 — 2026-11-06
+
+- **Project Clarity, phase 4: one Settings save model.** Every tab now stages
+  changes and applies them only when you press **Save all changes**; **Discard
+  all changes** restores the last saved state. There is no longer a mix of
+  “save” tabs and “apply immediately” tabs.
+- **Save covers everything.** Theme, interface size, motion, notifications,
+  automatic update checks, window behavior, start-at-login, open-at-login,
+  sync, photos, performance and advanced settings are all applied on Save.
+- **Start-at-login is safer.** The background systemd probe no longer
+  overwrites a value you have staged, and Save only changes start-at-login when
+  you actually changed that checkbox. A theme or notification change no longer
+  restarts syncing.
+- **The Save bar is present on every tab**, and the tab hover text no longer
+  claims some tabs apply immediately.
+- Saving now writes all app-owned keys, including Photos and performance
+  settings, instead of silently dropping them.
+- Performance toggles now actually drive the engine: the fast remote snapshot
+  key is the one the scanner reads, and adaptive workers cap the scan/transfer
+  pool by available memory.
+- Enabling automatic update checks arms the next check immediately; disabling
+  it stops the schedule.
+- Discard keeps the current window size and sidebar width; those are layout
+  state, not settings.
+- The folder card now uses the drawn folder icon instead of an emoji.
+- No user data or sync-path changes in this phase; the performance toggles now
+  reach the engine as described above.
+
 ## 3.20.28 — 2026-11-06
 
 - **Project Clarity, phase 3: Photos.** The page header now carries the real

@@ -1165,7 +1165,11 @@ impl App {
                             .unwrap_or_default();
                     }
                 }
-                Back::UnitEnabled(b) => self.draft.autostart = b,
+                Back::UnitEnabled(b) => {
+                    if !self.draft.autostart_touched {
+                        self.draft.autostart = b;
+                    }
+                }
                 Back::ServiceRestarted(ok) => {
                     if ok {
                         self.toast("Syncing restarted.");
@@ -1915,7 +1919,7 @@ impl App {
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                     .open(&mut open)
                     .show(ctx, |ui| {
-                        ui.label("Save your settings and restart syncing now?");
+                        ui.label("Save your settings now?");
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
                             if ui.button("Cancel").clicked() || escape {
@@ -2281,7 +2285,7 @@ impl App {
         }
 
         match act {
-            Some(a) => self.apply_dialog(a),
+            Some(a) => self.apply_dialog(a, ctx),
             None if !open => self.dialog = None,
             None => {}
         }
@@ -2330,7 +2334,7 @@ impl App {
     }
 
     /// Act on a confirmed dialog (after the closure releases &mut self).
-    fn apply_dialog(&mut self, act: DlgAct) {
+    fn apply_dialog(&mut self, act: DlgAct, ctx: &egui::Context) {
         match act {
             DlgAct::Close => {
                 if matches!(self.dialog, Some(Dialog::CloudMove)) {
@@ -2340,7 +2344,7 @@ impl App {
             }
             DlgAct::Save => {
                 self.dialog = None;
-                settings::do_save(self);
+                settings::do_save(self, ctx);
             }
             DlgAct::Logout => {
                 self.dialog = None;

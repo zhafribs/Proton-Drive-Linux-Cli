@@ -7,8 +7,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-/// The nine keys the app owns, in the fixed order they are written.
-pub const CONF_KEYS: [&str; 9] = [
+/// The app-owned keys, in the fixed order they are written.
+pub const CONF_KEYS: [&str; 15] = [
     "PROTON_SYNC_LOCAL",
     "PROTON_SYNC_REMOTE",
     "PROTON_SYNC_INTERVAL",
@@ -18,6 +18,12 @@ pub const CONF_KEYS: [&str; 9] = [
     "PROTON_SYNC_RETRIES",
     "PROTON_SYNC_SUBFOLDERS",
     "PROTON_SYNC_EXCLUDE",
+    "PROTON_SYNC_PHOTOS",
+    "PROTON_SYNC_PHOTOS_LOCAL",
+    "PROTON_SYNC_PHOTOS_DELETES",
+    "PROTON_SYNC_FAST_REMOTE",
+    "PROTON_SYNC_AUTO_WORKERS",
+    "PROTON_SYNC_TRANSFERS",
 ];
 
 /// Friendly "check every ..." choices -> seconds (same order as the combo).
@@ -45,6 +51,12 @@ pub fn defaults() -> BTreeMap<&'static str, String> {
     m.insert("PROTON_SYNC_RETRIES", "3".into());
     m.insert("PROTON_SYNC_SUBFOLDERS", String::new());
     m.insert("PROTON_SYNC_EXCLUDE", String::new());
+    m.insert("PROTON_SYNC_PHOTOS", "1".into());
+    m.insert("PROTON_SYNC_PHOTOS_LOCAL", String::new());
+    m.insert("PROTON_SYNC_PHOTOS_DELETES", "1".into());
+    m.insert("PROTON_SYNC_FAST_REMOTE", "1".into());
+    m.insert("PROTON_SYNC_AUTO_WORKERS", "1".into());
+    m.insert("PROTON_SYNC_TRANSFERS", "4".into());
     m
 }
 
@@ -85,7 +97,7 @@ pub fn read_extras(path: &Path) -> Vec<String> {
     out
 }
 
-/// Rewrite the whole file: header, the nine known keys, then extras.
+/// Rewrite the whole file: header, the app-owned keys, then extras.
 pub fn write(path: &Path, values: &BTreeMap<String, String>, extras: &[String]) {
     let mut out = String::from(
         "# Proton Drive sync settings\n# (edited by the app - changes apply after a restart)\n",
@@ -137,10 +149,33 @@ mod tests {
         assert_eq!(back["PROTON_SYNC_INTERVAL"], "60");
         assert_eq!(back["PROTON_SYNC_REMOTE"], "/my-files");
         assert_eq!(read_extras(&p), vec!["HTTPS_PROXY=http://proxy:3128".to_string()]);
-        // exact header + nine keys, like the PyQt writer
+        // exact header + every app-owned key, like the PyQt writer
         let text = std::fs::read_to_string(&p).unwrap();
         assert!(text.starts_with("# Proton Drive sync settings\n# (edited by the app"));
-        assert_eq!(text.lines().filter(|l| l.starts_with("PROTON_SYNC_")).count(), 9);
+        assert_eq!(
+            text.lines()
+                .filter(|l| l.starts_with("PROTON_SYNC_"))
+                .count(),
+            CONF_KEYS.len()
+        );
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn every_app_key_roundtrips_through_the_file() {
+        let p = tmp("all-keys");
+        let mut v: BTreeMap<String, String> = defaults()
+            .into_iter()
+            .map(|(k, val)| (k.to_string(), val))
+            .collect();
+        for k in CONF_KEYS {
+            v.insert(k.to_string(), format!("value-{k}"));
+        }
+        write(&p, &v, &[]);
+        let back = read(&p);
+        for k in CONF_KEYS {
+            assert_eq!(back[k], format!("value-{k}"), "key {k} was dropped");
+        }
         std::fs::remove_file(&p).ok();
     }
 

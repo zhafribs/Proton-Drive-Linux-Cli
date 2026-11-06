@@ -41,7 +41,10 @@ pub fn download_all(
     local_root: &Path,
     filter: &Filter,
 ) -> Result<FirstSync> {
-    let workers = cli::cfg_int("PROTON_SYNC_WORKERS", 16, 32);
+    let workers = crate::policy::worker_limit(
+        cli::cfg_int("PROTON_SYNC_WORKERS", 16, 32),
+        cli::cfg_flag("PROTON_SYNC_AUTO_WORKERS", true),
+    );
     let transfers = cli::cfg_int("PROTON_SYNC_TRANSFERS", 8, 32);
     let retries = cli::cfg_int("PROTON_SYNC_RETRIES", 3, 10);
     let start_rpath = cli::remote_path(remote_root, "");

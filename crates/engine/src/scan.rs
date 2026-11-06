@@ -375,7 +375,10 @@ pub fn scan_remote(
     force_full: bool,
 ) -> Result<RemoteScan> {
     let start_rpath = cli::remote_path(remote_root, "");
-    let workers = cli::cfg_int("PROTON_SYNC_WORKERS", 12, 32);
+    let workers = crate::policy::worker_limit(
+        cli::cfg_int("PROTON_SYNC_WORKERS", 12, 32),
+        cli::cfg_flag("PROTON_SYNC_AUTO_WORKERS", true),
+    );
     let retries = cli::cfg_int("PROTON_SYNC_RETRIES", 3, 10);
 
     cli::with_cli_lock(|| {

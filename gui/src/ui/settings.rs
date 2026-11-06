@@ -3,7 +3,7 @@
 //! (`do_save`), all with the PyQt app's exact labels and validations.
 
 use super::{App, Dialog, widgets};
-use crate::{conf, desktop, service};
+use crate::{conf, desktop, service, theme};
 use eframe::egui;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -45,8 +45,11 @@ pub struct Draft {
     pub start_tray: bool,
     pub autostart: bool,
     pub appstart: bool,
+    pub autostart_touched: bool,
+    pub appstart_touched: bool,
     pub theme_idx: usize,
     pub ui_scale_idx: usize,
+    pub motion: bool,
     pub updates_auto: bool,
     pub note_errors: bool,
     pub note_conflicts: bool,
@@ -81,7 +84,11 @@ impl Draft {
                 .parse()
                 .unwrap_or(3)
                 .clamp(1, 10),
-            fast_start: get("PROTON_SYNC_FAST_START", "1") == "1",
+            fast_start: values
+                .get("PROTON_SYNC_FAST_REMOTE")
+                .or_else(|| values.get("PROTON_SYNC_FAST_START"))
+                .map(|v| v == "1")
+                .unwrap_or(true),
             auto_workers: get("PROTON_SYNC_AUTO_WORKERS", "1") == "1",
             transfers: parse_transfers(&get("PROTON_SYNC_TRANSFERS", "4")),
             exclude: get("PROTON_SYNC_EXCLUDE", ""),
@@ -100,8 +107,10 @@ impl Draft {
             top: prefs.always_on_top(),
             close_tray: prefs.close_to_tray(),
             start_tray: prefs.start_in_tray(),
-            autostart: false, // filled by the UnitEnabled worker
+            autostart: false, // filled by the off-thread UnitEnabled probe
             appstart: desktop::autostart_installed(paths),
+            autostart_touched: false,
+            appstart_touched: false,
             theme_idx: match prefs.theme() {
                 crate::prefs::Theme::System => 0,
                 crate::prefs::Theme::Light => 1,
@@ -112,6 +121,7 @@ impl Draft {
                 crate::prefs::UiScale::Default => 1,
                 crate::prefs::UiScale::Large => 2,
             },
+            motion: prefs.motion_enabled(),
             updates_auto: prefs.updates_auto(),
             note_errors: prefs.notify_errors(),
             note_conflicts: prefs.notify_conflicts(),
@@ -250,10 +260,10 @@ const TAB_LABELS: [&str; 6] = [
 const TAB_DESCRIPTIONS: [&str; 6] = [
     "Where your files live and how the app behaves when you close it.",
     "Choose what syncs, when, and how photos are handled.",
-    "Choose which events produce a desktop notification. Changes here apply immediately.",
-    "Theme, interface size, and motion. Changes here apply immediately.",
+    "Choose which events produce a desktop notification.",
+    "Theme, interface size, and motion.",
     "Tuning and recovery tools. The defaults work for most people.",
-    "Updates, the app-menu entry, and installation details. Changes here apply immediately.",
+    "Updates, the app-menu entry, and installation details.",
 ];
 
 const TAB_CARDS: [&[CardFn]; 6] = [
@@ -309,7 +319,7 @@ fn save_bar(app: &mut App, ui: &mut egui::Ui) {
         if widgets::primary_button_hint(
             ui,
             "  Save all changes",
-            "Saves your folder, sync, photo, and performance settings.",
+            "Saves every setting on every tab.",
         ) {
             match validate(app) {
                 Some((title, body)) => {
@@ -352,17 +362,12 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                     ui.add_space(10.0);
 
                     let tab = app.settings_tab.min(TAB_LABELS.len() - 1);
-                    if !app.save_hint.is_empty() {
-                        ui.label(egui::RichText::new(app.save_hint.clone()).size(11.5).weak());
-                    }
                     ui.add_space(12.0);
 
                     draw_cards(app, ui, TAB_CARDS[tab]);
 
                     ui.add_space(18.0);
-                    if matches!(tab, 0 | 1 | 4) {
-                        save_bar(app, ui);
-                    }
+                    save_bar(app, ui);
                     ui.add_space(20.0);
                 });
             });
@@ -395,7 +400,12 @@ fn validate(app: &App) -> Option<(String, String)> {
 /// re-reading disk would just load the values the user is discarding.
 fn discard(app: &mut App) {
     if let Some(base) = app.prefs_baseline.clone() {
+        // Window size and sidebar width are layout state, not settings; they
+        // change while the user works and must not snap back on Discard.
+        let (w, h, nav) = (app.prefs.window_w, app.prefs.window_h, app.prefs.nav_width);
         app.prefs = base;
+        app.prefs.set_window_size(w, h);
+        app.prefs.set_nav_width(nav);
         app.prefs.save();
     }
     let values = conf::read(&app.paths.conf_file);
@@ -404,16 +414,32 @@ fn discard(app: &mut App) {
     app.conf_extras = extras.clone();
     app.style_dirty = true;
     app.draft = Draft::load(&values, &extras, &app.prefs, &app.paths);
+    app.draft.autostart = app.enabled;
+    app.draft.appstart = desktop::autostart_installed(&app.paths);
     app.save_hint.clear();
 }
 
 /// Write conf + restart flow (worker-side; the hint lands via SaveHint).
-pub fn do_save(app: &mut App) {
+pub fn do_save(app: &mut App, ctx: &egui::Context) {
     if let Some((title, body)) = validate(app) {
         app.dialog = Some(Dialog::Info { title, body });
         return;
     }
     let d = &app.draft;
+    let top = d.top;
+    let close_tray = d.close_tray;
+    let start_tray = d.start_tray;
+    let autostart = d.autostart;
+    let appstart = d.appstart;
+    let autostart_touched = d.autostart_touched;
+    let appstart_touched = d.appstart_touched;
+    let theme_idx = d.theme_idx;
+    let ui_scale_idx = d.ui_scale_idx;
+    let motion = d.motion;
+    let updates_auto = d.updates_auto;
+    let note_errors = d.note_errors;
+    let note_conflicts = d.note_conflicts;
+    let note_done = d.note_done;
     let selection = if d.selective {
         d.derive_selection()
     } else {
@@ -453,40 +479,98 @@ pub fn do_save(app: &mut App) {
         .map(str::to_string)
         .collect();
 
+    let conf_changed = values.iter().any(|(k, v)| app.conf.get(k) != Some(v))
+        || extras != app.conf_extras;
     conf::write(&app.paths.conf_file, &values, &extras);
+
+    // Apply the staged preferences now. Nothing on the Settings page writes
+    // these directly; Save and Discard are the only exit paths.
+    app.prefs.set_bool("always_on_top", top);
+    app.prefs.set_bool("close_to_tray", close_tray);
+    app.prefs.set_bool("start_in_tray", start_tray);
+    app.prefs.set_bool("notify_errors", note_errors);
+    app.prefs.set_bool("notify_conflicts", note_conflicts);
+    app.prefs.set_bool("notify_complete", note_done);
+    app.prefs.set_bool("motion", motion);
+    app.prefs.set_bool("updates_auto", updates_auto);
+    if updates_auto {
+        if app.upd.next_check.is_none() {
+            app.upd.next_check = Some(
+                std::time::Instant::now() + std::time::Duration::from_secs(5),
+            );
+        }
+    } else {
+        app.upd.next_check = None;
+    }
+    let theme = match theme_idx {
+        1 => crate::prefs::Theme::Light,
+        2 => crate::prefs::Theme::Dark,
+        _ => crate::prefs::Theme::System,
+    };
+    app.prefs.set("theme", theme.as_str());
+    let scale = match ui_scale_idx {
+        0 => crate::prefs::UiScale::Compact,
+        2 => crate::prefs::UiScale::Large,
+        _ => crate::prefs::UiScale::Default,
+    };
+    app.prefs.set("ui_scale", scale.as_str());
+    app.style_dirty = true;
+    ctx.set_zoom_factor(scale.factor());
+    ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(if top {
+        egui::WindowLevel::AlwaysOnTop
+    } else {
+        egui::WindowLevel::Normal
+    }));
+    if appstart_touched {
+        desktop::set_autostart(&app.paths, appstart);
+    }
     app.prefs_baseline = Some(app.prefs.clone());
     app.conf = conf::read(&app.paths.conf_file);
     app.conf_extras = conf::read_extras(&app.paths.conf_file);
     app.draft.initial_selection = selection;
+
+    let restart_needed = conf_changed || autostart_touched;
+    app.draft.autostart_touched = false;
+    app.draft.appstart_touched = false;
+    if !restart_needed {
+        app.save_hint = "Saved.".into();
+        return;
+    }
     app.save_hint = "Saving...".into();
 
     let appimage = app.paths.appimage.clone();
     let tx = app.tx.clone();
     std::thread::spawn(move || {
         let r = service::ensure_service_unit(appimage.as_deref(), false);
-        let hint = match r.as_str() {
-            "failed" => "Saved, but the sync service could not be updated.".to_string(),
-            "" => {
-                if service::unit_exists() && !service::unit_has_environment_file() {
-                    "Saved. Your install is from an older version - run \
-                     scripts/install-sync.sh once to update it."
-                        .to_string()
-                } else if service::restart() {
-                    "Saved. Syncing restarted.".to_string()
-                } else {
-                    "Saved, but syncing could not be restarted.".to_string()
-                }
+        let autostart_ok = if autostart_touched {
+            if autostart {
+                service::enable()
+            } else {
+                service::disable()
             }
-            written_or_ok => {
-                if !service::restart() {
-                    "Saved, but syncing could not be restarted.".to_string()
-                } else if written_or_ok == "written" {
-                    "Saved. Sync service now points at this app copy.".to_string()
-                } else {
-                    "Saved. Syncing restarted.".to_string()
-                }
-            }
+        } else {
+            true
         };
+        let hint = if r == "failed" {
+            "Saved, but the sync service could not be updated.".to_string()
+        } else if !autostart_ok {
+            "Saved, but start-at-login could not be changed.".to_string()
+        } else if service::unit_exists() && !service::unit_has_environment_file() {
+            "Saved. Your install is from an older version - run \
+             scripts/install-sync.sh once to update it."
+                .to_string()
+        } else if service::restart() {
+            if r == "written" {
+                "Saved. Sync service now points at this app copy.".to_string()
+            } else {
+                "Saved. Syncing restarted.".to_string()
+            }
+        } else {
+            "Saved, but syncing could not be restarted.".to_string()
+        };
+        if autostart_touched {
+            let _ = tx.send(super::Back::UnitEnabled(autostart && autostart_ok));
+        }
         let _ = tx.send(super::Back::SaveHint(hint));
     });
 }
@@ -502,7 +586,7 @@ pub fn performance_values(
     transfers: i32,
 ) -> BTreeMap<String, String> {
     let mut values = BTreeMap::new();
-    values.insert("PROTON_SYNC_FAST_START".into(), flag(fast_start));
+    values.insert("PROTON_SYNC_FAST_REMOTE".into(), flag(fast_start));
     values.insert("PROTON_SYNC_AUTO_WORKERS".into(), flag(auto_workers));
     values.insert(
         "PROTON_SYNC_TRANSFERS".into(),
@@ -520,7 +604,14 @@ fn flag(b: bool) -> String {
 fn folder_card(app: &mut App, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Where your files live"), |ui| {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("\u{1f4c2}").size(26.0));
+            let (r, _) =
+                ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::hover());
+            widgets::nav_icon(
+                ui.painter(),
+                egui::Rect::from_center_size(r.center(), egui::vec2(20.0, 20.0)),
+                widgets::NavIcon::Folder,
+                theme::accent(ui.visuals()),
+            );
             ui.add_space(12.0);
             ui.vertical(|ui| {
                 ui.label(app.draft.local.clone());
@@ -772,7 +863,6 @@ fn notifications_card(app: &mut App, ui: &mut egui::Ui) {
             .changed()
         {
             app.draft.note_errors = v;
-            app.prefs.set_bool("notify_errors", v);
         }
         let mut v = app.draft.note_conflicts;
         if ui
@@ -780,7 +870,6 @@ fn notifications_card(app: &mut App, ui: &mut egui::Ui) {
             .changed()
         {
             app.draft.note_conflicts = v;
-            app.prefs.set_bool("notify_conflicts", v);
         }
         let mut v = app.draft.note_done;
         if ui
@@ -788,7 +877,6 @@ fn notifications_card(app: &mut App, ui: &mut egui::Ui) {
             .changed()
         {
             app.draft.note_done = v;
-            app.prefs.set_bool("notify_complete", v);
         }
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
@@ -804,13 +892,6 @@ fn background_card(app: &mut App, ui: &mut egui::Ui) {
         let mut v = app.draft.top;
         if widgets::toggle(ui, "Keep this window above other windows", &mut v, None) {
             app.draft.top = v;
-            app.prefs.set_bool("always_on_top", v);
-            ui.ctx()
-                .send_viewport_cmd(egui::ViewportCommand::WindowLevel(if v {
-                    egui::WindowLevel::AlwaysOnTop
-                } else {
-                    egui::WindowLevel::Normal
-                }));
         }
         if app.tray.is_none() {
             ui.label(
@@ -825,50 +906,25 @@ fn background_card(app: &mut App, ui: &mut egui::Ui) {
         let mut v = app.draft.close_tray;
         if widgets::toggle(ui, "Keep running when I close the window", &mut v, None) {
             app.draft.close_tray = v;
-            app.prefs.set_bool("close_to_tray", v);
         }
         let mut v = app.draft.start_tray;
         if widgets::toggle(ui, "Start quietly in the tray", &mut v, None) {
             app.draft.start_tray = v;
-            app.prefs.set_bool("start_in_tray", v);
         }
 
-        // Start syncing at login: enable/disable the systemd unit (worker).
         let mut v = app.draft.autostart;
         if ui.checkbox(&mut v, "Start syncing when I log in").changed() {
             app.draft.autostart = v;
-            app.save_hint = "Applying...".into();
-            let paths_appimage = app.paths.appimage.clone();
-            let tx = app.tx.clone();
-            std::thread::spawn(move || {
-                if v {
-                    let _ = service::ensure_service_unit(paths_appimage.as_deref(), false);
-                }
-                let ok = if v {
-                    service::enable()
-                } else {
-                    service::disable()
-                };
-                let _ = tx.send(super::Back::SaveHint(
-                    if ok {
-                        "Will start when you log in."
-                    } else {
-                        "Could not change start-up."
-                    }
-                    .to_string(),
-                ));
-                let _ = tx.send(super::Back::UnitEnabled(ok && v));
-            });
+            app.draft.autostart_touched = true;
         }
 
-        // Open the app at login: the autostart desktop entry (sync file, fast).
         let mut v = app.draft.appstart;
         if ui
             .checkbox(&mut v, "Open Proton Drive when I log in")
             .changed()
         {
             app.draft.appstart = v;
-            desktop::set_autostart(&app.paths, v);
+            app.draft.appstart_touched = true;
         }
     });
 }
@@ -881,30 +937,19 @@ fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
                 .selected_text(THEMES[app.draft.theme_idx.min(2)])
                 .show_ui(ui, |ui| {
                     for (i, t) in THEMES.iter().enumerate() {
-                        if ui
-                            .selectable_value(&mut app.draft.theme_idx, i, *t)
-                            .changed()
-                        {
-                            let theme = match i {
-                                1 => crate::prefs::Theme::Light,
-                                2 => crate::prefs::Theme::Dark,
-                                _ => crate::prefs::Theme::System,
-                            };
-                            app.prefs.set("theme", theme.as_str());
-                            app.style_dirty = true;
-                        }
+                        ui.selectable_value(&mut app.draft.theme_idx, i, *t);
                     }
                 });
         });
         ui.add_space(4.0);
-        let mut motion = app.prefs.motion_enabled();
+        let mut motion = app.draft.motion;
         if widgets::toggle(
             ui,
             "Animate status changes",
             &mut motion,
             Some("Turn this off to reduce motion and continuous repaints."),
         ) {
-            app.prefs.set_bool("motion", motion);
+            app.draft.motion = motion;
         }
         ui.add_space(4.0);
         labeled_control(ui, "Interface size", |ui| {
@@ -913,20 +958,7 @@ fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
                 .selected_text(SCALES[app.draft.ui_scale_idx.min(2)])
                 .show_ui(ui, |ui| {
                     for (i, s) in SCALES.iter().enumerate() {
-                        if ui
-                            .selectable_value(&mut app.draft.ui_scale_idx, i, *s)
-                            .changed()
-                        {
-                            let scale = match i {
-                                0 => crate::prefs::UiScale::Compact,
-                                2 => crate::prefs::UiScale::Large,
-                                _ => crate::prefs::UiScale::Default,
-                            };
-                            app.prefs.set("ui_scale", scale.as_str());
-                            // egui applies the new zoom at the start of the
-                            // next pass, so the whole UI resizes in one go.
-                            ui.ctx().set_zoom_factor(scale.factor());
-                        }
+                        let _ = ui.selectable_value(&mut app.draft.ui_scale_idx, i, *s);
                     }
                 });
         });
@@ -938,7 +970,6 @@ fn updates_card(app: &mut App, ui: &mut egui::Ui) {
         let mut v = app.draft.updates_auto;
         if widgets::toggle(ui, "Check for new versions automatically", &mut v, None) {
             app.draft.updates_auto = v;
-            app.prefs.set_bool("updates_auto", v);
         }
         ui.add_space(4.0);
         if !app.upd.label.is_empty() {
@@ -1155,7 +1186,7 @@ mod tests {
     fn performance_values_are_conf_keys() {
         let values = performance_values(true, true, 4);
         assert_eq!(
-            values.get("PROTON_SYNC_FAST_START").map(String::as_str),
+            values.get("PROTON_SYNC_FAST_REMOTE").map(String::as_str),
             Some("1")
         );
         assert_eq!(

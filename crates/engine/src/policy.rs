@@ -15,6 +15,26 @@ pub fn adaptive_worker_limit(configured: u64, available_mb: Option<u64>) -> u64 
     (budget / CLI_PROCESS_MB).clamp(1, limit)
 }
 
+/// Available memory in MiB, from `/proc/meminfo`. `None` on non-Linux or an
+/// unreadable file, in which case the configured worker limit is used.
+pub fn available_memory_mb() -> Option<u64> {
+    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let kb = text.lines().find_map(|line| {
+        let rest = line.strip_prefix("MemAvailable:")?;
+        rest.split_whitespace().next()?.parse::<u64>().ok()
+    })?;
+    Some(kb / 1024)
+}
+
+/// The worker limit after the user's adaptive-memory preference is applied.
+pub fn worker_limit(configured: usize, auto: bool) -> usize {
+    if auto {
+        adaptive_worker_limit(configured as u64, available_memory_mb()) as usize
+    } else {
+        configured.max(1)
+    }
+}
+
 /// Back off on throttling, then creep back up after three clean chunks. The
 /// ceiling is the user's configured worker limit.
 pub fn adjust_worker_limit(current: u64, saw_rate_limit: bool, clean_chunks: u64, ceiling: u64) -> u64 {
@@ -44,6 +64,14 @@ mod tests {
         assert_eq!(adaptive_worker_limit(12, None), 12);
         assert_eq!(adaptive_worker_limit(12, Some(100)), 1);
         assert_eq!(adaptive_worker_limit(0, Some(1024)), 1);
+    }
+
+    #[test]
+    fn adaptive_preference_respects_the_ceiling() {
+        assert_eq!(worker_limit(0, false), 1);
+        assert_eq!(worker_limit(12, false), 12);
+        let auto = worker_limit(12, true);
+        assert!((1..=12).contains(&auto));
     }
 
     #[test]
