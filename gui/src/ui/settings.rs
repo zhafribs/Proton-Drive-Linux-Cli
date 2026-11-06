@@ -413,6 +413,8 @@ fn discard(app: &mut App) {
     app.conf = values.clone();
     app.conf_extras = extras.clone();
     app.style_dirty = true;
+    app.preview_theme = None;
+    app.preview_scale = None;
     app.draft = Draft::load(&values, &extras, &app.prefs, &app.paths);
     app.draft.autostart = app.enabled;
     app.draft.appstart = desktop::autostart_installed(&app.paths);
@@ -516,6 +518,8 @@ pub fn do_save(app: &mut App, ctx: &egui::Context) {
     app.prefs.set("ui_scale", scale.as_str());
     app.style_dirty = true;
     ctx.set_zoom_factor(scale.factor());
+    app.preview_theme = None;
+    app.preview_scale = None;
     ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(if top {
         egui::WindowLevel::AlwaysOnTop
     } else {
@@ -937,10 +941,39 @@ fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
                 .selected_text(THEMES[app.draft.theme_idx.min(2)])
                 .show_ui(ui, |ui| {
                     for (i, t) in THEMES.iter().enumerate() {
-                        ui.selectable_value(&mut app.draft.theme_idx, i, *t);
+                        if ui
+                            .selectable_value(&mut app.draft.theme_idx, i, *t)
+                            .changed()
+                        {
+                            // Theme and scale preview live; Discard restores
+                            // the saved baseline. Everything else stays staged.
+                            let theme = match i {
+                                1 => crate::prefs::Theme::Light,
+                                2 => crate::prefs::Theme::Dark,
+                                _ => crate::prefs::Theme::System,
+                            };
+                            app.preview_theme = Some(theme);
+                            app.style_dirty = true;
+                        }
                     }
                 });
         });
+        if app.draft.theme_idx == 0 {
+            let detected = if app.system_theme == crate::prefs::Theme::Dark {
+                "Dark"
+            } else {
+                "Light"
+            };
+            ui.add_space(2.0);
+            ui.label(
+                egui::RichText::new(format!("System theme: {detected}"))
+                    .size(11.5)
+                    .weak(),
+            )
+            .on_hover_text(
+                "The app uses this with Match my system. A dark wallpaper is not a theme signal; Light is the fallback when the desktop publishes no setting.",
+            );
+        }
         ui.add_space(4.0);
         let mut motion = app.draft.motion;
         if widgets::toggle(
@@ -958,7 +991,18 @@ fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
                 .selected_text(SCALES[app.draft.ui_scale_idx.min(2)])
                 .show_ui(ui, |ui| {
                     for (i, s) in SCALES.iter().enumerate() {
-                        let _ = ui.selectable_value(&mut app.draft.ui_scale_idx, i, *s);
+                        if ui
+                            .selectable_value(&mut app.draft.ui_scale_idx, i, *s)
+                            .changed()
+                        {
+                            let scale = match i {
+                                0 => crate::prefs::UiScale::Compact,
+                                2 => crate::prefs::UiScale::Large,
+                                _ => crate::prefs::UiScale::Default,
+                            };
+                            app.preview_scale = Some(scale);
+                            ui.ctx().set_zoom_factor(scale.factor());
+                        }
                     }
                 });
         });

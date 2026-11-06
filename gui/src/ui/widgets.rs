@@ -356,13 +356,7 @@ pub fn move_row_compact(ui: &mut egui::Ui, row: &ChangeRow, when: &str) {
         egui::pos2(rect.left() + 10.0, rect.center().y),
         egui::vec2(18.0, 18.0),
     );
-    ui.painter().text(
-        icon.center(),
-        egui::Align2::CENTER_CENTER,
-        row.glyph(),
-        egui::FontId::proportional(15.0),
-        color,
-    );
+    move_icon(ui.painter(), icon, row.dir(), color);
 
     let time_w = 64.0;
     let name_rect = egui::Rect::from_min_max(
@@ -392,70 +386,114 @@ pub fn move_row_compact(ui: &mut egui::Ui, row: &ChangeRow, when: &str) {
 /// One activity row: colored glyph, name, parent path, action label, time.
 pub fn move_row(ui: &mut egui::Ui, row: &ChangeRow, parent: &str, when: &str) {
     let color = dir_color(row.dir(), ui.visuals());
-    // Hover cue: a soft rounded track under the row the pointer is on, the
-    // list equivalent of the card hover-lift. Painted first, under the text.
-    let row_top = ui.cursor().min;
-    if ui.rect_contains_pointer(egui::Rect::from_min_size(
-        row_top + egui::vec2(-4.0, -1.0),
-        egui::vec2(ui.available_width() + 8.0, 31.0),
-    )) {
+    let height = 40.0;
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::hover(),
+    );
+    let a11y = format!("{}: {}, {}, {}", row.label(), row.name, parent, when);
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::ListItem, ui.is_enabled(), a11y.as_str())
+    });
+    if resp.hovered() {
         ui.painter().rect_filled(
-            egui::Rect::from_min_size(
-                row_top + egui::vec2(-4.0, -1.0),
-                egui::vec2(ui.available_width() + 8.0, 31.0),
-            ),
+            rect,
             egui::CornerRadius::same(8),
             ui.visuals().widgets.hovered.weak_bg_fill,
         );
     }
-    // Reserve a fixed time column, then give the text the rest of the row.
-    // Both text lines truncate, so a long name or path can never paint over
-    // the timestamp or widen the activity card past the window.
-    let gap = 8.0;
-    let glyph_w = 20.0;
-    let time_w = 64.0;
-    let content_w = (ui.available_width() - glyph_w - time_w - 2.0 * gap).max(40.0);
 
-    ui.scope(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        ui.horizontal(|ui| {
-            let g = ui.label(
-                egui::RichText::new(row.glyph())
-                    .strong()
-                    .size(15.0)
-                    .color(color),
-            );
-            g.on_hover_text(row.rel.clone());
-            ui.add_space(gap);
-            ui.allocate_ui_with_layout(
-                egui::vec2(content_w, 0.0),
-                egui::Layout::top_down(egui::Align::LEFT),
-                |ui| {
-                    ui.set_max_width(content_w);
-                    let name = ui.add(
-                        egui::Label::new(egui::RichText::new(row.name.clone()).strong().size(14.0))
-                            .truncate(),
-                    );
-                    name.on_hover_text(row.rel.clone());
-                    let mut meta = row.label().to_string();
-                    if !parent.is_empty() {
-                        meta.push_str(" \u{b7} ");
-                        meta.push_str(parent);
-                    }
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(meta).size(12.0).weak()).truncate(),
-                    );
-                },
-            );
-            ui.add_space(gap);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Keep the timestamp clear of the activity list's scrollbar.
-                ui.add_space(12.0);
-                ui.label(egui::RichText::new(when).size(12.0).weak());
-            });
-        });
-    });
+    // The icon sits on the title line, not halfway between title and path.
+    let icon = egui::Rect::from_center_size(
+        egui::pos2(rect.left() + 10.0, rect.top() + 10.0),
+        egui::vec2(18.0, 18.0),
+    );
+    move_icon(ui.painter(), icon, row.dir(), color);
+
+    let time_w = 64.0;
+    let text_rect = egui::Rect::from_min_max(
+        egui::pos2(rect.left() + 28.0, rect.top()),
+        egui::pos2(rect.right() - time_w - 8.0, rect.bottom()),
+    );
+    let mut text_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(text_rect)
+            .layout(egui::Layout::top_down(egui::Align::LEFT)),
+    );
+    text_ui.set_max_width(text_rect.width());
+    let name = text_ui.add(
+        egui::Label::new(egui::RichText::new(row.name.clone()).strong().size(14.0)).truncate(),
+    );
+    name.on_hover_text(row.rel.clone());
+    let mut meta = row.label().to_string();
+    if !parent.is_empty() {
+        meta.push_str(" \u{b7} ");
+        meta.push_str(parent);
+    }
+    text_ui.add(egui::Label::new(egui::RichText::new(meta).size(12.0).weak()).truncate());
+
+    ui.painter().text(
+        egui::pos2(rect.right() - 8.0, rect.top() + 10.0),
+        egui::Align2::RIGHT_CENTER,
+        when,
+        egui::FontId::proportional(12.0),
+        ui.visuals().weak_text_color(),
+    );
+    resp.on_hover_text(row.rel.clone());
     ui.add_space(2.0);
+}
+
+/// Draw the direction mark as geometry so it has no font baseline offset.
+fn move_icon(painter: &egui::Painter, r: egui::Rect, dir: Dir, color: egui::Color32) {
+    let stroke = egui::Stroke::new(1.8, color);
+    let c = r.center();
+    match dir {
+        Dir::Up => {
+            painter.add(egui::Shape::line(
+                vec![c + egui::vec2(0.0, 5.0), c + egui::vec2(0.0, -5.0)],
+                stroke,
+            ));
+            painter.add(egui::Shape::line(
+                vec![
+                    c + egui::vec2(-4.5, 0.5),
+                    c + egui::vec2(0.0, -5.0),
+                    c + egui::vec2(4.5, 0.5),
+                ],
+                stroke,
+            ));
+        }
+        Dir::Down => {
+            painter.add(egui::Shape::line(
+                vec![c + egui::vec2(0.0, -5.0), c + egui::vec2(0.0, 5.0)],
+                stroke,
+            ));
+            painter.add(egui::Shape::line(
+                vec![
+                    c + egui::vec2(-4.5, -0.5),
+                    c + egui::vec2(0.0, 5.0),
+                    c + egui::vec2(4.5, -0.5),
+                ],
+                stroke,
+            ));
+        }
+        Dir::Other => {
+            painter.add(egui::Shape::line(
+                vec![c + egui::vec2(-5.0, -5.0), c + egui::vec2(5.0, 5.0)],
+                stroke,
+            ));
+            painter.add(egui::Shape::line(
+                vec![c + egui::vec2(-5.0, 5.0), c + egui::vec2(5.0, -5.0)],
+                stroke,
+            ));
+        }
+        Dir::Warn => {
+            painter.add(egui::Shape::line(
+                vec![c + egui::vec2(0.0, -5.0), c + egui::vec2(0.0, 2.0)],
+                stroke,
+            ));
+            painter.circle_filled(c + egui::vec2(0.0, 5.0), 1.4, color);
+        }
+    }
 }
 
 /// Line/solid glyphs painted for the sidebar nav (Proton-style icons).

@@ -1,3 +1,32 @@
+## 3.20.31 — 2026-11-06
+
+- **Activity icons are drawn geometry now.** The up/down arrows, the removed
+  × and the conflict mark are painted in a fixed 18 px box on the title line,
+  so they no longer inherit a font baseline. The compact Home rows and the
+  full Activity rows use the same alignment.
+- **Home’s Recent activity stays summary-only.** Each row is icon + file name
+  + time; the action and full path remain on the Activity page and in the
+  hover text.
+- **“Match my system” follows the desktop, not the wallpaper.** Detection now
+  reads the XDG portal first, then desktop settings: gsettings/dconf for
+  GNOME, Cinnamon and MATE (the active desktop's schema is asked first),
+  `kdeglobals` for KDE/Plasma, and XFCE's XSettings. `GTK_THEME` and GTK's
+  `settings.ini` follow as fallbacks. The Appearance tab shows
+  **System theme: Dark/Light** while System is selected, with a hover note
+  that a dark wallpaper is not a dark theme.
+- **Theme and interface size preview live.** Selecting a theme or scale applies
+  it immediately; **Save** persists it with the rest of the page, and
+  **Discard** restores the saved baseline.
+- **Sign-in terminal detection is broader.** `$TERMINAL` is honoured first;
+  ptyxis, GNOME Console (`kgx`), foot, WezTerm, Terminator, urxvt and st are
+  also detected. XFCE's terminal now receives `-x` so the sign-in command
+  actually runs.
+- AppImage portability is documented in `docs/COMPATIBILITY.md`: the release is
+  glibc-2.28 pinned, x86_64, uses the standard type-2 runtime, and supports
+  FUSE2/FUSE3. `APPIMAGE_EXTRACT_AND_RUN=1` runs the GUI without FUSE, but not
+  the systemd-managed background sync. Systemd remains required for background
+  sync; non-systemd init systems are the largest remaining gap.
+
 ## 3.20.30 — 2026-11-06
 
 - **Home’s Recent activity is a summary again.** Each row shows the direction

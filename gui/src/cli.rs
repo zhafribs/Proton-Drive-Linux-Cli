@@ -517,21 +517,63 @@ pub fn fetch_trash_entries() -> Result<Vec<RemoteEntry>, String> {
 
 use serde_json::Value;
 
+/// Known terminals -> the flag that makes the rest of argv the command.
+const TERMINALS: &[(&str, &[&str])] = &[
+    ("konsole", &["-e"]),
+    ("kitty", &[]),
+    ("alacritty", &["-e"]),
+    // `-x` executes the rest of the argv; `-e` takes one command string.
+    ("xfce4-terminal", &["-x"]),
+    ("gnome-terminal", &["--"]),
+    ("ptyxis", &["--"]),
+    ("kgx", &["--"]),
+    ("foot", &[]),
+    ("wezterm", &["start", "--"]),
+    ("terminator", &["-x"]),
+    ("urxvt", &["-e"]),
+    ("st", &["-e"]),
+    ("xterm", &["-e"]),
+];
+
 /// Terminal emulators, in the PyQt app's order -> (exe, extra args).
 pub fn find_terminal() -> Option<(String, Vec<String>)> {
-    for (name, args) in [
-        ("konsole", vec!["-e"]),
-        ("kitty", vec![]),
-        ("alacritty", vec!["-e"]),
-        ("xfce4-terminal", vec!["-e"]),
-        ("gnome-terminal", vec!["--"]),
-        ("xterm", vec!["-e"]),
-    ] {
+    // The user's explicit choice wins; fall through when it is not installed.
+    if let Some(found) = env_terminal() {
+        return Some(found);
+    }
+    for &(name, args) in TERMINALS {
         if let Some(exe) = which(name) {
-            return Some((exe, args.into_iter().map(str::to_string).collect()));
+            return Some((exe, args.iter().map(|a| a.to_string()).collect()));
         }
     }
     None
+}
+
+/// `$TERMINAL` may carry an option, e.g. "kitty --single-instance". A known
+/// terminal also gets its executor flag when the user did not supply one.
+fn env_terminal() -> Option<(String, Vec<String>)> {
+    let terminal = std::env::var("TERMINAL").ok()?;
+    let mut parts = terminal.split_whitespace();
+    let name = parts.next()?;
+    let exe = if name.contains('/') {
+        Path::new(name).is_file().then(|| name.to_string())?
+    } else {
+        which(name)?
+    };
+    let mut args: Vec<String> = parts.map(str::to_string).collect();
+    let has_executor = args
+        .iter()
+        .any(|a| matches!(a.as_str(), "-e" | "-x" | "--" | "start"));
+    if !has_executor {
+        let base = Path::new(name)
+            .file_name()
+            .map(|b| b.to_string_lossy())
+            .unwrap_or_default();
+        if let Some((_, known)) = TERMINALS.iter().find(|(n, _)| *n == base.as_ref()) {
+            args.extend(known.iter().map(|a| a.to_string()));
+        }
+    }
+    Some((exe, args))
 }
 
 /// The command string PyQt ran inside the terminal, unchanged:

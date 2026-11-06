@@ -91,16 +91,6 @@ impl ChangeRow {
             ChangeKind::Conflict => Dir::Warn,
         }
     }
-    /// Short icon-ish glyph (the PyQt UI used colored arrows/marks).
-    pub fn glyph(&self) -> &'static str {
-        match self.kind {
-            ChangeKind::Uploaded => "\u{2191}",   // up
-            ChangeKind::Downloaded => "\u{2193}", // down
-            ChangeKind::FolderCreated => "\u{2191}",
-            ChangeKind::Removed => "\u{d7}",      // x
-            ChangeKind::Conflict => "!",          // bang
-        }
-    }
 }
 
 /// Parse journal lines into change rows (chronological, like the PyQt app's

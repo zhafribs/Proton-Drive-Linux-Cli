@@ -291,6 +291,10 @@ pub struct App {
     /// The desktop's colour scheme as last detected. Only used when the pref
     /// is `System`, which egui cannot resolve on Linux.
     pub system_theme: prefs::Theme,
+    /// Live Appearance previews. They change the current frame but are only
+    /// written to prefs by Save; closing the app discards them.
+    pub preview_theme: Option<prefs::Theme>,
+    pub preview_scale: Option<prefs::UiScale>,
     /// New colour schemes from `system_theme::watch` (OS flips).
     theme_rx: mpsc::Receiver<prefs::Theme>,
     pub icon_tex: Option<egui::TextureHandle>,
@@ -779,6 +783,8 @@ impl App {
             quitting: false,
             style_dirty: false,
             system_theme: detected_theme,
+            preview_theme: None,
+            preview_scale: None,
             theme_rx,
             icon_tex,
             tray,
@@ -789,9 +795,14 @@ impl App {
 
     // ------------------------------------------------------------- status
 
-    /// The theme to paint with: `System` uses the desktop's last answer.
+    /// The theme to paint with: the live Appearance preview, else `System`
+    /// using the desktop's last answer.
     fn resolved_theme(&self) -> prefs::Theme {
-        system_theme::resolve(&self.prefs.theme(), &self.system_theme)
+        let pref = self
+            .preview_theme
+            .clone()
+            .unwrap_or_else(|| self.prefs.theme());
+        system_theme::resolve(&pref, &self.system_theme)
     }
 
     /// The rich status the Home orb and the sidebar share: engine liveness,
@@ -2515,17 +2526,23 @@ impl eframe::App for App {
             // Re-read now: the user just picked a theme, and "Match my
             // system" must reflect the desktop this second, not the value
             // the watcher last saw.
-            if matches!(self.prefs.theme(), prefs::Theme::System) {
+            let pref = self
+                .preview_theme
+                .clone()
+                .unwrap_or_else(|| self.prefs.theme());
+            if pref == prefs::Theme::System {
                 self.system_theme = system_theme::detect();
             }
-            theme::apply(ctx, &self.prefs.theme());
+            theme::apply(ctx, &pref);
             theme::force(ctx, &self.resolved_theme());
             self.style_dirty = false;
         }
 
-        // Keep the interface scale in sync with the pref (Settings applies
-        // it immediately too; this catches an edited config file).
-        let want_zoom = self.prefs.ui_scale().factor();
+        // Keep the interface scale in sync with the live preview or the pref.
+        let want_zoom = self
+            .preview_scale
+            .unwrap_or_else(|| self.prefs.ui_scale())
+            .factor();
         if (ctx.zoom_factor() - want_zoom).abs() > 0.001 {
             ctx.set_zoom_factor(want_zoom);
         }

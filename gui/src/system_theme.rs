@@ -10,10 +10,17 @@
 //!
 //! 1. XDG portal `org.freedesktop.appearance color-scheme` - what GNOME, KDE
 //!    and the wlroots portals publish; toolkit- and backend-neutral.
-//! 2. `gsettings org.gnome.desktop.interface color-scheme` (then `gtk-theme`)
-//!    - GNOME, and the Hyprland setups that mirror it.
-//! 3. GTK's `settings.ini` (`gtk-application-prefer-dark-theme`, theme name).
-//! 4. Light - a conservative default when none of the above answers.
+//! 2. Desktop-specific settings: gsettings/dconf (GNOME, Cinnamon, MATE),
+//!    `kdeglobals` (KDE/Plasma), `xfconf-query` (XFCE). The active desktop's
+//!    own schema is asked first, so Cinnamon/MATE never inherit GNOME's
+//!    default theme name.
+//! 3. `GTK_THEME` when the user set one explicitly. This is a GTK-wide
+//!    override, not the desktop's preference, so native settings win above.
+//! 4. GTK's `settings.ini` (`gtk-application-prefer-dark-theme`, theme name).
+//! 5. Light - a conservative default when none of the above answers.
+//!
+//! A wallpaper is never a theme signal: a dark picture does not mean the
+//! desktop is in dark mode. We only follow the desktop's own setting.
 //!
 //! [`watch`] keeps the answer current: the portal's `SettingChanged` signal
 //! reports a flip as it happens, and a slow re-read covers portals that do
@@ -49,10 +56,57 @@ pub fn resolve(pref: &Theme, detected: &Theme) -> Theme {
 /// two short subprocesses when the portal is absent), so it runs at startup
 /// and on a theme change, not on every frame.
 pub fn detect() -> Theme {
-    portal()
-        .or_else(gsettings)
-        .or_else(gtk_settings)
-        .unwrap_or(Theme::Light)
+    let desktop = desktop_env();
+    let kde_first = desktop.contains("kde") || desktop.contains("plasma");
+    let xfce_first = desktop.contains("xfce");
+    let mut candidates: Vec<fn() -> Option<Theme>> = vec![portal];
+    if kde_first {
+        candidates.push(kde);
+    }
+    if xfce_first {
+        candidates.push(xfce);
+    }
+    candidates.extend([
+        gsettings,
+        dconf,
+        env_gtk_theme,
+        kde,
+        xfce,
+        gtk_settings,
+    ]);
+    candidates.into_iter().find_map(|read| read()).unwrap_or(Theme::Light)
+}
+
+fn desktop_env() -> String {
+    std::env::var("XDG_CURRENT_DESKTOP")
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+}
+
+/// gsettings schema order: the active desktop's own schema first, the
+/// relatives after. Cinnamon and MATE depend on the GNOME schemas, so their
+/// installed `org.gnome.desktop.interface` default must not answer for them.
+fn schema_order(desktop: &str) -> Vec<&'static str> {
+    let mut order = Vec::new();
+    if desktop.contains("cinnamon") {
+        order.push("org.cinnamon.desktop.interface");
+    }
+    if desktop.contains("mate") {
+        order.push("org.mate.interface");
+    }
+    if !desktop.contains("cinnamon") && !desktop.contains("mate") {
+        order.push("org.gnome.desktop.interface");
+    }
+    for schema in [
+        "org.gnome.desktop.interface",
+        "org.cinnamon.desktop.interface",
+        "org.mate.interface",
+    ] {
+        if !order.contains(&schema) {
+            order.push(schema);
+        }
+    }
+    order
 }
 
 /// Report the desktop's colour scheme whenever it changes. The app reads it
@@ -141,16 +195,114 @@ fn session() -> Option<Connection> {
 }
 
 fn gsettings() -> Option<Theme> {
-    let color_scheme = gsettings_get("color-scheme")?;
-    parse_color_scheme(&color_scheme).or_else(|| {
-        let theme = gsettings_get("gtk-theme")?;
-        parse_gtk_theme(&theme)
-    })
+    // Per schema: an explicit color-scheme wins, then that desktop's theme
+    // name. The active desktop's schema comes first, so a default `Adwaita`
+    // in GNOME's schema cannot answer for Cinnamon or MATE.
+    for schema in schema_order(&desktop_env()) {
+        if let Some(theme) =
+            gsettings_get(schema, "color-scheme").and_then(|text| parse_color_scheme(&text))
+        {
+            return Some(theme);
+        }
+        if let Some(theme) =
+            gsettings_get(schema, "gtk-theme").and_then(|text| parse_gtk_theme(&text))
+        {
+            return Some(theme);
+        }
+    }
+    None
 }
 
-fn gsettings_get(key: &str) -> Option<String> {
+fn env_gtk_theme() -> Option<Theme> {
+    std::env::var("GTK_THEME")
+        .ok()
+        .and_then(|name| parse_gtk_theme(&name))
+}
+
+/// GNOME's dconf value, for systems where the gsettings wrapper is absent.
+fn dconf() -> Option<Theme> {
+    let out = Command::new("dconf")
+        .args(["read", "/org/gnome/desktop/interface/color-scheme"])
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| parse_color_scheme(&String::from_utf8_lossy(&out.stdout)))
+        .flatten()
+}
+
+/// XFCE's XSettings theme name.
+fn xfce() -> Option<Theme> {
+    let out = Command::new("xfconf-query")
+        .args(["-c", "xsettings", "-p", "/Net/ThemeName"])
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| parse_gtk_theme(&String::from_utf8_lossy(&out.stdout)))
+        .flatten()
+}
+
+/// KDE/Plasma stores the colour scheme and window background in kdeglobals.
+fn kde() -> Option<Theme> {
+    let path = config_home()?.join("kdeglobals");
+    parse_kde_globals(&std::fs::read_to_string(path).ok()?)
+}
+
+fn config_home() -> Option<PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+}
+
+fn parse_kde_globals(text: &str) -> Option<Theme> {
+    let mut section = "";
+    let mut scheme = None;
+    let mut background = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            section = &line[1..line.len() - 1];
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        let value = value.trim();
+        if section == "General" && key == "ColorScheme" {
+            scheme = Some(value.to_string());
+        } else if section == "Colors:Window" && key == "BackgroundNormal" {
+            background = Some(value.to_string());
+        }
+    }
+    if let Some(rgb) = background.as_deref().and_then(parse_rgb) {
+        return Some(if rgb_is_dark(rgb) {
+            Theme::Dark
+        } else {
+            Theme::Light
+        });
+    }
+    scheme.as_deref().and_then(parse_gtk_theme)
+}
+
+fn parse_rgb(text: &str) -> Option<(u8, u8, u8)> {
+    let mut parts = text.split(',').map(|p| p.trim().parse::<u8>());
+    let r = parts.next()?.ok()?;
+    let g = parts.next()?.ok()?;
+    let b = parts.next()?.ok()?;
+    Some((r, g, b))
+}
+
+fn rgb_is_dark((r, g, b): (u8, u8, u8)) -> bool {
+    (u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114) / 1000 < 128
+}
+
+fn gsettings_get(schema: &str, key: &str) -> Option<String> {
     let out = Command::new("gsettings")
-        .args(["get", "org.gnome.desktop.interface", key])
+        .args(["get", schema, key])
         .stderr(Stdio::null())
         .output()
         .ok()?;
@@ -184,11 +336,7 @@ fn parse_gtk_theme(text: &str) -> Option<Theme> {
 }
 
 fn gtk_settings() -> Option<Theme> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config"))
-        })?;
+    let base = config_home()?;
     ["gtk-4.0", "gtk-3.0"]
         .iter()
         .find_map(|v| parse_gtk_settings_file(&base.join(v).join("settings.ini")))
@@ -252,6 +400,48 @@ mod tests {
         assert_eq!(parse_gtk_theme("'adw-gtk3-dark'\n"), Some(Theme::Dark));
         assert_eq!(parse_gtk_theme("'Adwaita'\n"), Some(Theme::Light));
         assert_eq!(parse_gtk_theme("''\n"), None);
+    }
+
+    #[test]
+    fn kde_background_and_scheme() {
+        assert_eq!(
+            parse_kde_globals(
+                "[General]\nColorScheme=BreezeDark\n[Colors:Window]\nBackgroundNormal=49,54,59\n"
+            ),
+            Some(Theme::Dark)
+        );
+        assert_eq!(
+            parse_kde_globals(
+                "[General]\nColorScheme=BreezeLight\n[Colors:Window]\nBackgroundNormal=252,252,252\n"
+            ),
+            Some(Theme::Light)
+        );
+        // A custom scheme without a dark marker still follows the actual
+        // window background.
+        assert_eq!(
+            parse_kde_globals("[General]\nColorScheme=MyScheme\n[Colors:Window]\nBackgroundNormal=20,20,20\n"),
+            Some(Theme::Dark)
+        );
+    }
+
+    #[test]
+    fn explicit_gtk_theme_names() {
+        assert_eq!(parse_gtk_theme("Adwaita:dark"), Some(Theme::Dark));
+        assert_eq!(parse_gtk_theme("Adwaita"), Some(Theme::Light));
+    }
+
+    #[test]
+    fn active_desktop_schema_comes_first() {
+        assert_eq!(
+            schema_order("x-cinnamon")[0],
+            "org.cinnamon.desktop.interface"
+        );
+        assert_eq!(schema_order("mate")[0], "org.mate.interface");
+        assert_eq!(schema_order("gnome")[0], "org.gnome.desktop.interface");
+        // Unknown/absent desktops still get a complete, deduplicated order.
+        let order = schema_order("");
+        assert_eq!(order.len(), 3);
+        assert_eq!(order[0], "org.gnome.desktop.interface");
     }
 
     #[test]
