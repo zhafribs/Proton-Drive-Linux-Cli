@@ -27,6 +27,7 @@ pub enum Page {
     Home,
     Cloud,
     Photos,
+    Activity,
     Settings,
     About,
 }
@@ -578,38 +579,6 @@ fn account_action(ui: &mut egui::Ui, label: &str, danger: bool) -> bool {
         color,
     );
     response.clicked() || (response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-}
-
-/// Sidebar stat chip: glass mini-card with an accent number and a muted
-/// label ("1,037 / files", "1.1 GB / on disk").
-fn stat_chip(ui: &mut egui::Ui, value: &str, label: &str, w: f32) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 50.0), egui::Sense::hover());
-    ui.painter().rect(
-        rect,
-        egui::CornerRadius::same(12),
-        theme::glass_fill(ui.visuals()),
-        theme::glass_stroke(ui.visuals()),
-        egui::StrokeKind::Inside,
-    );
-    // Painted rather than laid out: a fixed height keeps the footer's
-    // measured height honest, and width-aware elision stops a long count
-    // overflowing the card.
-    let pad = 8.0;
-    let room = (w - 2.0 * pad).max(10.0);
-    ui.painter().text(
-        rect.left_top() + egui::vec2(pad, pad),
-        egui::Align2::LEFT_TOP,
-        widgets::elide(value, (room / 7.2) as usize),
-        egui::FontId::proportional(if w < 84.0 { 13.0 } else { 15.0 }),
-        theme::accent(ui.visuals()),
-    );
-    ui.painter().text(
-        rect.left_bottom() + egui::vec2(pad, -pad),
-        egui::Align2::LEFT_BOTTOM,
-        widgets::elide(label, (room / 5.2) as usize),
-        egui::FontId::proportional(if w < 84.0 { 10.0 } else { 10.5 }),
-        ui.visuals().weak_text_color(),
-    );
 }
 
 /// One queued message. Errors stay until dismissed; info expires after four
@@ -1510,33 +1479,38 @@ impl App {
     // ------------------------------------------------------------- shell
 
     fn sidebar(&mut self, ui: &mut egui::Ui) {
-        // Two-tone wordmark like Proton Drive's own logo: dark name + accent
-        // product tag.
+        // Wordmark: app icon + product name, with the platform line beneath.
+        // The compact mark is used when the pane is too narrow for the text.
         ui.horizontal(|ui| {
-            // Full wordmark needs ~160px of content; below that the pane
-            // would refuse to shrink, so switch to a compact mark that fits.
             let compact = ui.available_width() < 162.0;
-            let logo = if compact { 24.0 } else { 30.0 };
-            let size = if compact { 14.0 } else { 16.5 };
+            let logo = if compact { 26.0 } else { 30.0 };
             if let Some(tex) = &self.icon_tex {
                 ui.add(egui::Image::new((tex.id(), egui::vec2(logo, logo))));
             }
-            // Truncating labels let the pane shrink instead of the wordmark
-            // forcing it back to its natural width.
-            ui.add(
-                egui::Label::new(egui::RichText::new("Proton Drive").strong().size(size))
-                    .truncate(),
-            );
-            if !compact {
+            if compact {
                 ui.add(
                     egui::Label::new(
-                        egui::RichText::new("CLI")
-                            .strong()
-                            .size(size)
-                            .color(theme::accent(ui.visuals())),
+                        egui::RichText::new("Proton Drive").strong().size(14.0),
                     )
                     .truncate(),
                 );
+            } else {
+                ui.vertical(|ui| {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new("Proton Drive").strong().size(14.5),
+                        )
+                        .truncate(),
+                    );
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new("Linux · Community edition")
+                                .size(10.5)
+                                .weak(),
+                        )
+                        .truncate(),
+                    );
+                });
             }
         });
         ui.add_space(14.0);
@@ -1551,21 +1525,11 @@ impl App {
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
                 ui.add_space(6.0);
-                if let Some((files, bytes)) = self.stats {
-                    let w = ((ui.available_width() - 8.0) / 2.0).max(40.0);
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 0.0;
-                        stat_chip(ui, &util::thousands(files), "files", w);
-                        ui.add_space(8.0);
-                        stat_chip(ui, &service::human_size(bytes), "on disk", w);
-                    });
-                    ui.add_space(12.0);
-                }
                 // Status card, like the Proton sidebar's footer block.
-                egui::Frame::new()
+                let status_card = egui::Frame::new()
                     .fill(theme::glass_fill(ui.visuals()))
                     .stroke(theme::glass_stroke(ui.visuals()))
-                    .corner_radius(egui::CornerRadius::same(12))
+                    .corner_radius(egui::CornerRadius::same(10))
                     .inner_margin(egui::Margin::symmetric(12, 9))
                     .show(ui, |ui| {
                         ui.set_min_width(ui.available_width());
@@ -1579,22 +1543,59 @@ impl App {
                                 theme::status_color(key),
                             );
                             ui.add(
-                                egui::Label::new(egui::RichText::new(self.side_label()).size(13.0))
-                                    .truncate(),
+                                egui::Label::new(
+                                    egui::RichText::new(health::short_label(self.status_key()))
+                                        .size(13.0),
+                                )
+                                .truncate(),
                             );
                         });
                         ui.add_space(2.0);
-                        // Wrap rather than truncate: the footer measures its
-                        // own height, so a second line costs nothing.
+                        let when = self
+                            .health
+                            .ts_dt()
+                            .map(|dt| {
+                                format!("Updated {}", util::rel_time(Some(dt)))
+                            })
+                            .unwrap_or_else(|| "Community edition".to_string());
                         ui.add(
-                            egui::Label::new(
-                                egui::RichText::new("Independent community edition")
-                                    .size(11.5)
-                                    .weak(),
-                            )
-                            .wrap(),
+                            egui::Label::new(egui::RichText::new(when).size(11.5).weak())
+                                .truncate(),
                         );
                     });
+                let status_resp = ui
+                    .interact(
+                        status_card.response.rect,
+                        ui.scope_id().with("sidebar-status"),
+                        egui::Sense::click(),
+                    )
+                    .on_hover_text("View sync activity");
+                status_resp.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::Role::Button,
+                        ui.is_enabled(),
+                        "Sync status",
+                    )
+                });
+                if status_resp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if status_resp.has_focus() {
+                    ui.painter().rect_stroke(
+                        status_card.response.rect,
+                        egui::CornerRadius::same(10),
+                        egui::Stroke::new(1.5, theme::accent(ui.visuals())),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+                let activate = status_resp.clicked()
+                    || (status_resp.has_focus()
+                        && ui.input(|i| {
+                            i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space)
+                        }));
+                if activate {
+                    self.page = Page::Activity;
+                }
                 ui.add_space(8.0);
                 self.account_row(ui);
                 ui.add_space(4.0);
@@ -1620,9 +1621,9 @@ impl App {
         let label = if let Some(email) = email.as_deref() {
             email
         } else if self.identity.is_some() {
-            "You're not signed in yet"
+            "Signed out"
         } else {
-            "Checking your account..."
+            "Checking\u{2026}"
         };
         let signed_in = !matches!(
             self.ui_status(),
@@ -1756,16 +1757,22 @@ impl App {
     }
 
     fn central(&mut self, ui: &mut egui::Ui) {
+        let page = if ui.visuals().dark_mode {
+            theme::DARK_PAGE
+        } else {
+            theme::PAGE
+        };
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::central_panel(ui.style())
-                    .fill(egui::Color32::TRANSPARENT)
+                    .fill(page)
                     .inner_margin(egui::Margin::symmetric(30, 20)),
             )
             .show(ui, |ui| match self.page {
                 Page::Home => home::draw(self, ui),
                 Page::Cloud => cloud::draw(self, ui),
                 Page::Photos => photos::draw(self, ui),
+                Page::Activity => activity::draw(self, ui, "Activity"),
                 Page::Settings => settings::draw(self, ui),
                 Page::About => about::draw(self, ui),
             });
@@ -2431,7 +2438,7 @@ impl eframe::App for App {
     /// the window is closed to the background.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.journal_open
-            .store(self.page == Page::Home && !self.hidden, Ordering::Relaxed);
+            .store(matches!(self.page, Page::Home | Page::Activity) && !self.hidden, Ordering::Relaxed);
         self.drain(ctx);
         self.drain_theme(ctx);
 
@@ -2537,15 +2544,10 @@ impl eframe::App for App {
                 cloud::on_picked(self, Some(Picked::UploadFiles(dropped)));
             }
         }
-        // Aurora backdrop: painted under both panels so the glass picks up
-        // the glow. One request_repaint per frame keeps the drift smooth;
-        // `PROTON_UI_MOTION=0` or a hidden window freezes it.
-        theme::paint_aurora(ui, ui.max_rect());
-        if theme::motion_enabled() && self.prefs.motion_enabled() && !self.hidden {
-            ui.ctx().request_repaint();
-        }
-        // White sidebar against the lavender content page - the Proton Drive
-        // web layout. The pane's right edge is draggable (176-400 px); 216.0
+        // Solid page backdrop: hierarchy comes from surfaces and borders,
+        // not from a decorative animated background.
+        // White sidebar against the neutral content page.
+        // The pane's right edge is draggable (176-400 px); 216.0
         // is the width this pane has always had, so a fresh install looks
         // exactly like before, and egui remembers a dragged width across
         // restarts.
@@ -2888,56 +2890,5 @@ mod poll_cadence {
         assert!(!stats_due(true, false, false, s(29)));
         // The fallback catches edits made while sync is stopped.
         assert!(stats_due(true, false, false, s(300)));
-    }
-}
-
-#[cfg(test)]
-mod layout_tests {
-    use super::*;
-
-    /// Regression: a chip row wider than the pane made the sidebar grow a
-    /// few pixels every frame until it hit its maximum width.
-    #[test]
-    fn sidebar_chips_do_not_ratchet_the_pane() {
-        let ctx = egui::Context::default();
-        let mut widths = Vec::new();
-        for _ in 0..4 {
-            let input = egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::pos2(0.0, 0.0),
-                    egui::vec2(945.0, 900.0),
-                )),
-                ..Default::default()
-            };
-            ctx.run_ui(input, |root| {
-                egui::CentralPanel::default().show(root, |ui| {
-                    let panel = egui::Panel::left("nav")
-                        .resizable(false)
-                        .default_size(200.0)
-                        .max_size(400.0)
-                        .frame(
-                            egui::Frame::side_top_panel(ui.style())
-                                .inner_margin(egui::Margin::symmetric(16, 18)),
-                        )
-                        .show(ui, |ui| {
-                            let w = ((ui.available_width() - 8.0) / 2.0).max(40.0);
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 0.0;
-                                stat_chip(ui, "1,037", "files", w);
-                                ui.add_space(8.0);
-                                stat_chip(ui, "1.1 GB", "on disk", w);
-                            });
-                        });
-                    widths.push(panel.response.rect.width());
-                });
-            })
-            .drop_without_applying_deltas();
-        }
-        let first = widths[0];
-        let last = *widths.last().unwrap();
-        assert!(
-            (last - first).abs() < 0.5,
-            "pane ratcheted from {first} to {last}: {widths:?}"
-        );
     }
 }

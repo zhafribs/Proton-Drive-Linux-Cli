@@ -115,6 +115,23 @@ pub fn derive_status(
     }
 }
 
+/// A short status label for pills and the sidebar footer.
+pub fn short_label(key: &str) -> &'static str {
+    match key {
+        "synced" => "Synced",
+        "syncing" => "Syncing",
+        "paused" => "Paused",
+        "needs_login" => "Session expired",
+        "signed_out" => "Not signed in",
+        "signing_in" => "Signing in",
+        "engine_stopped" => "Engine stopped",
+        "deletes_held" => "Deletions held",
+        "starting" => "Starting",
+        "error" => "Sync error",
+        _ => "Checking",
+    }
+}
+
 /// (title, subtitle-template) per status - verbatim PyQt strings where they
 /// exist, plain product wording for the states the Python app never had.
 pub fn status_text(status: UiStatus) -> (&'static str, &'static str) {

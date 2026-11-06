@@ -15,10 +15,46 @@ pub struct ActivityState {
 
 const KINDS: [&str; 4] = ["Everything", "Uploaded", "Downloaded", "Other"];
 
+/// Compact Home preview: newest rows plus a link to the full Activity page.
+pub fn draw_preview(app: &mut App, ui: &mut egui::Ui, title: &str, max: usize) {
+    widgets::card(ui, Some(title), |ui| {
+        let mut shown = 0usize;
+        for row in app.changes.iter().rev() {
+            if shown >= max {
+                break;
+            }
+            let full = row.rel.trim_end_matches('/');
+            let name = full.rsplit('/').next().unwrap_or(full);
+            let parent = {
+                let p = &full[..full.len() - name.len()];
+                p.trim_end_matches('/')
+            };
+            let when = crate::util::rel_time(row.ts);
+            widgets::move_row(
+                ui,
+                row,
+                if parent.is_empty() { "/" } else { parent },
+                &when,
+            );
+            shown += 1;
+        }
+        if shown == 0 {
+            ui.label(
+                egui::RichText::new("No activity yet — changes appear here as they sync.")
+                    .size(12.0)
+                    .weak(),
+            );
+        }
+        ui.add_space(6.0);
+        if ui.link("View all activity").clicked() {
+            app.page = super::Page::Activity;
+        }
+    });
+}
+
 pub fn draw(app: &mut App, ui: &mut egui::Ui, title: &str) {
-    // Header row: title + segment switch (Qt's rounded segmented control).
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(title).strong().size(18.0));
+        ui.label(egui::RichText::new(title).strong().size(24.0));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // Pill track with a solid purple active segment (Proton's
             // segmented control).

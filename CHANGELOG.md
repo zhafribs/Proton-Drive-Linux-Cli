@@ -1,3 +1,25 @@
+## 3.20.26 — 2026-11-06
+
+- **Project Clarity, phase 1: the new app shell.** Neutral solid surfaces
+  replace the translucent aurora/glass look. Proton violet is now the accent,
+  not a background wash; cards have a crisp border and a quiet shadow.
+- **The sidebar is simpler.** The wordmark gains a Linux/community subtitle,
+  the two stat chips move to Home, and the footer shows the short sync status
+  plus when it was last updated. The selected row is a clean pill.
+- **Home is rebuilt.** A page header with the primary actions, a calm status
+  hero, three honest metrics (files, on-disk size, last check), a compact
+  recent-activity card, and a Sync details card. Recent activity has a
+  **View all activity** link.
+- **Activity is a real destination** in the sidebar, with the full moved-files
+  list and technical log. Home shows a four-row preview.
+- **Motion is now honest.** The decorative background animation is gone; the
+  Appearance setting is renamed **Animate status changes** and controls the
+  status disc instead of an invisible backdrop.
+- Files, Photos, and Settings keep every control. Their pages inherit the new
+  surface, border, and typography tokens; their deeper layout rebuilds are the
+  next phases.
+- The design constitution and prototype live in `docs/design/`.
+
 ## 3.20.25 — 2026-11-06
 
 - **Removed the always-visible explainer paragraphs from Settings and Photos.**

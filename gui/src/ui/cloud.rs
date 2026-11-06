@@ -2063,6 +2063,15 @@ pub fn nav_ui(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(8.0);
     if widgets::nav_row(
         ui,
+        widgets::NavIcon::Activity,
+        "Activity",
+        app.page == super::Page::Activity,
+    ) {
+        app.page = super::Page::Activity;
+    }
+    ui.add_space(8.0);
+    if widgets::nav_row(
+        ui,
         widgets::NavIcon::Settings,
         "Settings",
         app.page == super::Page::Settings,

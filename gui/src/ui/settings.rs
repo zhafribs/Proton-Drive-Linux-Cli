@@ -251,7 +251,7 @@ const TAB_DESCRIPTIONS: [&str; 6] = [
     "Where your files live and how the app behaves when you close it.",
     "Choose what syncs, when, and how photos are handled.",
     "Choose which events produce a desktop notification. Changes here apply immediately.",
-    "Theme, interface size, and background motion. Changes here apply immediately.",
+    "Theme, interface size, and motion. Changes here apply immediately.",
     "Tuning and recovery tools. The defaults work for most people.",
     "Updates, the app-menu entry, and installation details. Changes here apply immediately.",
 ];
@@ -900,9 +900,9 @@ fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
         let mut motion = app.prefs.motion_enabled();
         if widgets::toggle(
             ui,
-            "Animate the background",
+            "Animate status changes",
             &mut motion,
-            Some("Turn this off to stop the aurora drift and continuous repaints."),
+            Some("Turn this off to reduce motion and continuous repaints."),
         ) {
             app.prefs.set_bool("motion", motion);
         }

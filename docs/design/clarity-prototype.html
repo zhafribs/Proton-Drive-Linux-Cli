@@ -1,0 +1,842 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Proton Drive Linux — Clarity prototype</title>
+<style>
+  :root {
+    --page: #f6f6fa;
+    --surface: #ffffff;
+    --surface-2: #f1f0f7;
+    --raised: #ffffff;
+    --text: #1c1a2e;
+    --muted: #6e6b84;
+    --faint: #9a97ab;
+    --border: #e4e2ee;
+    --border-strong: #d6d3e4;
+    --accent: #6d4aff;
+    --accent-hover: #5b3fe0;
+    --accent-soft: #eee9ff;
+    --accent-text: #5b3fd0;
+    --success: #16803c;
+    --success-soft: #e8f6ed;
+    --warning: #b25e00;
+    --warning-soft: #fff4e5;
+    --danger: #c62828;
+    --danger-soft: #fdecec;
+    --info: #2563eb;
+    --shadow: 0 1px 2px rgba(24, 20, 50, .04), 0 8px 24px rgba(24, 20, 50, .04);
+    --shadow-raised: 0 2px 6px rgba(24, 20, 50, .06), 0 18px 48px rgba(24, 20, 50, .10);
+    --radius: 12px;
+    --radius-sm: 8px;
+    --sidebar: 248px;
+    --header: 64px;
+    --content: 1120px;
+    --ease: cubic-bezier(.2, .7, .2, 1);
+  }
+
+  [data-theme="dark"] {
+    --page: #0e0e16;
+    --surface: #171722;
+    --surface-2: #1f1f2e;
+    --raised: #1f1f2e;
+    --text: #f2f1fa;
+    --muted: #a6a3bc;
+    --faint: #7c7992;
+    --border: #2c2c3f;
+    --border-strong: #3b3b52;
+    --accent: #a78bff;
+    --accent-hover: #b9a3ff;
+    --accent-soft: #2a2350;
+    --accent-text: #c4b5ff;
+    --success: #4ade80;
+    --success-soft: #12291b;
+    --warning: #fbbf24;
+    --warning-soft: #2a2110;
+    --danger: #f87171;
+    --danger-soft: #2c1414;
+    --info: #60a5fa;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .2), 0 8px 24px rgba(0, 0, 0, .16);
+    --shadow-raised: 0 2px 6px rgba(0, 0, 0, .3), 0 18px 48px rgba(0, 0, 0, .35);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text);
+    font-family: Inter, "Segoe UI", system-ui, -apple-system, "Noto Sans", sans-serif;
+    font-size: 13.5px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  button, input { font: inherit; }
+  button { cursor: pointer; }
+  svg { display: block; width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+  .muted { color: var(--muted); }
+  .faint { color: var(--faint); }
+  .small { font-size: 12px; }
+  .strong { font-weight: 600; }
+  .mono { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace; }
+  ::selection { background: var(--accent-soft); color: var(--accent-text); }
+
+  .app { display: grid; grid-template-columns: var(--sidebar) minmax(0, 1fr); min-height: 100vh; }
+
+  /* ---------- sidebar ---------- */
+  .sidebar {
+    position: sticky; top: 0; height: 100vh;
+    display: flex; flex-direction: column;
+    padding: 18px 14px 14px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 22px; }
+  .brand-mark {
+    width: 30px; height: 30px; border-radius: 9px;
+    background: linear-gradient(145deg, var(--accent), #8b6cff);
+    display: grid; place-items: center; color: #fff;
+    box-shadow: 0 6px 14px rgba(109, 74, 255, .28);
+  }
+  .brand-mark svg { width: 17px; height: 17px; stroke-width: 2; }
+  .brand-name { font-size: 14px; font-weight: 650; letter-spacing: -.01em; }
+  .brand-sub { font-size: 10.5px; color: var(--muted); margin-top: 1px; letter-spacing: .02em; }
+  .nav { display: flex; flex-direction: column; gap: 2px; }
+  .nav-label { font-size: 10.5px; font-weight: 600; letter-spacing: .07em; color: var(--faint); padding: 10px 10px 6px; text-transform: uppercase; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    height: 36px; padding: 0 10px; border: 0; border-radius: 8px;
+    background: transparent; color: var(--muted); text-align: left;
+    font-size: 13.5px; font-weight: 500; width: 100%;
+    transition: background 160ms var(--ease), color 160ms var(--ease);
+  }
+  .nav-item:hover { background: var(--surface-2); color: var(--text); }
+  .nav-item.active { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+  .nav-item .badge { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--muted); background: var(--surface-2); border-radius: 99px; padding: 1px 7px; }
+  .nav-item.active .badge { background: rgba(109, 74, 255, .12); color: var(--accent-text); }
+  .sidebar-spacer { flex: 1; }
+  .sync-card {
+    margin: 10px 2px 8px; padding: 11px 12px;
+    border: 1px solid var(--border); border-radius: 10px;
+    background: var(--surface); display: flex; align-items: center; gap: 10px;
+    color: var(--text);
+    text-align: left; width: calc(100% - 4px);
+    transition: border-color 160ms var(--ease), background 160ms var(--ease);
+  }
+  .sync-card:hover { border-color: var(--border-strong); background: var(--surface-2); }
+  .sync-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); flex: none; }
+  .sync-text { min-width: 0; }
+  .sync-title { font-size: 12.5px; font-weight: 600; }
+  .sync-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .account {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px; border-radius: 10px; border: 0; background: transparent;
+    text-align: left; width: 100%; color: var(--text);
+  }
+  .account:hover { background: var(--surface-2); }
+  .avatar { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent-text); font-weight: 650; font-size: 12px; flex: none; }
+  .account-name { min-width: 0; }
+  .account-name div:first-child { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .account-name div:last-child { font-size: 10.5px; color: var(--muted); }
+
+  /* ---------- main / header ---------- */
+  .main { min-width: 0; display: flex; flex-direction: column; }
+  .header {
+    height: var(--header); flex: none;
+    display: flex; align-items: center; gap: 16px;
+    padding: 0 28px;
+    background: color-mix(in srgb, var(--page) 86%, transparent);
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 20;
+    backdrop-filter: blur(14px);
+  }
+  .header-title { min-width: 0; display: flex; align-items: baseline; gap: 10px; }
+  .header-title h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -.01em; }
+  .header-title span { font-size: 12px; color: var(--muted); }
+  .header-spacer { flex: 1; }
+  .search {
+    position: relative; width: 260px; max-width: 32vw;
+  }
+  .search svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); width: 15px; height: 15px; color: var(--muted); }
+  .search input {
+    width: 100%; height: 34px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); padding: 0 34px 0 32px; outline: none;
+    transition: border-color 160ms var(--ease), box-shadow 160ms var(--ease);
+  }
+  .search input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .search kbd {
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    font-size: 10px; color: var(--faint); background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px;
+    font-family: inherit;
+  }
+  .icon-btn {
+    width: 34px; height: 34px; display: grid; place-items: center;
+    border: 1px solid transparent; border-radius: 8px;
+    background: transparent; color: var(--muted);
+    transition: background 160ms var(--ease), color 160ms var(--ease), border-color 160ms var(--ease);
+  }
+  .icon-btn:hover { background: var(--surface-2); color: var(--text); border-color: var(--border); }
+  .btn {
+    height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    padding: 0 13px; border-radius: 8px; border: 1px solid transparent;
+    font-size: 13px; font-weight: 600; white-space: nowrap;
+    transition: background 160ms var(--ease), border-color 160ms var(--ease), color 160ms var(--ease), transform 160ms var(--ease);
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn svg { width: 16px; height: 16px; }
+  .btn-primary { background: var(--accent); color: #fff; box-shadow: 0 4px 10px rgba(109, 74, 255, .18); }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-secondary { background: var(--surface); border-color: var(--border); color: var(--text); }
+  .btn-secondary:hover { background: var(--surface-2); border-color: var(--border-strong); }
+  .btn-ghost { background: transparent; color: var(--muted); }
+  .btn-ghost:hover { background: var(--surface-2); color: var(--text); }
+  .btn-sm { height: 30px; padding: 0 10px; font-size: 12px; }
+  .content { width: 100%; max-width: var(--content); margin: 0 auto; padding: 28px 32px 56px; }
+  .page { display: none; }
+  .page.active { display: block; }
+
+  /* ---------- common ---------- */
+  .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 20px; }
+  .page-head h2 { margin: 0; font-size: 26px; line-height: 1.2; letter-spacing: -.025em; font-weight: 650; }
+  .page-head p { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
+  .head-actions { display: flex; gap: 8px; align-items: center; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
+  .card-pad { padding: 20px; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .between { justify-content: space-between; }
+  .stack { display: flex; flex-direction: column; gap: 12px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: 99px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .pill-success { color: var(--success); background: var(--success-soft); }
+  .pill-warning { color: var(--warning); background: var(--warning-soft); }
+  .pill-danger { color: var(--danger); background: var(--danger-soft); }
+  .pill-muted { color: var(--muted); background: var(--surface-2); }
+  .pill-accent { color: var(--accent-text); background: var(--accent-soft); }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .divider { height: 1px; background: var(--border); border: 0; margin: 0; }
+  .section-title { font-size: 13px; font-weight: 650; margin: 0 0 10px; letter-spacing: -.005em; }
+  .icon-tile { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; background: var(--surface-2); color: var(--muted); flex: none; }
+  .icon-tile.accent { background: var(--accent-soft); color: var(--accent-text); }
+  .icon-tile.success { background: var(--success-soft); color: var(--success); }
+  .link { border: 0; background: transparent; color: var(--accent-text); font-size: 12.5px; font-weight: 600; padding: 0; }
+  .link:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+  /* ---------- home ---------- */
+  .hero { display: flex; align-items: center; justify-content: space-between; gap: 28px; padding: 24px; margin-bottom: 14px; overflow: hidden; position: relative; }
+  .hero::after {
+    content: ""; position: absolute; right: -60px; top: -90px; width: 240px; height: 240px; border-radius: 50%;
+    background: radial-gradient(circle, var(--accent-soft), transparent 68%); pointer-events: none;
+  }
+  .hero-left { display: flex; align-items: center; gap: 16px; min-width: 0; position: relative; z-index: 1; }
+  .orb { width: 54px; height: 54px; border-radius: 50%; display: grid; place-items: center; background: var(--success-soft); color: var(--success); flex: none; }
+  .orb svg { width: 24px; height: 24px; stroke-width: 2.2; }
+  .hero h3 { margin: 0; font-size: 18px; letter-spacing: -.015em; }
+  .hero p { margin: 4px 0 0; color: var(--muted); font-size: 12.5px; }
+  .hero-right { display: flex; align-items: center; gap: 8px; position: relative; z-index: 1; }
+  .metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+  .metric { padding: 16px 18px; }
+  .metric-label { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; font-weight: 500; }
+  .metric-value { margin-top: 6px; font-size: 24px; font-weight: 650; letter-spacing: -.03em; }
+  .metric-sub { color: var(--muted); font-size: 11.5px; margin-top: 1px; }
+  .home-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(260px, .9fr); gap: 14px; align-items: start; }
+  .activity-row { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--border); }
+  .activity-row:last-child { border-bottom: 0; padding-bottom: 0; }
+  .activity-row:first-child { padding-top: 0; }
+  .activity-main { min-width: 0; flex: 1; }
+  .activity-title { font-size: 12.5px; font-weight: 500; }
+  .activity-sub { font-size: 11.5px; color: var(--muted); margin-top: 1px; }
+  .activity-time { font-size: 11px; color: var(--faint); white-space: nowrap; }
+  .quick { display: flex; flex-direction: column; gap: 2px; }
+  .quick-item { display: flex; align-items: center; gap: 11px; padding: 9px 8px; border-radius: 8px; border: 0; background: transparent; text-align: left; color: var(--text); }
+  .quick-item:hover { background: var(--surface-2); }
+  .quick-item span { font-size: 12.5px; font-weight: 500; }
+  .storage-bar { height: 8px; border-radius: 99px; background: var(--surface-2); overflow: hidden; display: flex; margin: 12px 0 8px; }
+  .storage-bar i { height: 100%; display: block; }
+  .storage-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--muted); }
+  .legend-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+
+  /* ---------- files ---------- */
+  .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .toolbar .search { width: 280px; }
+  .toolbar .grow { flex: 1; }
+  .breadcrumb { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .breadcrumb b { color: var(--text); font-weight: 600; }
+  .table-card { overflow: hidden; }
+  .table { width: 100%; border-collapse: collapse; }
+  .table th { text-align: left; font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: .02em; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .table td { padding: 10px 16px; border-bottom: 1px solid var(--border); font-size: 12.5px; vertical-align: middle; }
+  .table tr:last-child td { border-bottom: 0; }
+  .table tbody tr { transition: background 140ms var(--ease); }
+  .table tbody tr:hover { background: var(--surface-2); }
+  .table tbody tr.selected { background: var(--accent-soft); }
+  .cell-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .cell-name .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+  .file-icon { width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; flex: none; }
+  .file-icon.folder { background: var(--accent-soft); color: var(--accent-text); }
+  .file-icon.image { background: var(--success-soft); color: var(--success); }
+  .file-icon.doc { background: var(--warning-soft); color: var(--warning); }
+  .check { width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid var(--border-strong); display: inline-grid; place-items: center; color: transparent; background: var(--surface); }
+  tr.selected .check { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .check svg { width: 11px; height: 11px; stroke-width: 3; }
+  .table-foot { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; color: var(--muted); font-size: 11.5px; background: var(--surface); }
+
+  /* ---------- photos ---------- */
+  .import-banner { display: flex; align-items: center; gap: 14px; padding: 14px 16px; margin-bottom: 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
+  .import-banner .progress { flex: 1; height: 6px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
+  .import-banner .progress i { display: block; height: 100%; width: 68%; background: var(--accent); border-radius: 99px; }
+  .date-head { position: sticky; top: calc(var(--header) + 1px); z-index: 3; display: flex; align-items: baseline; gap: 8px; padding: 13px 0 9px; background: var(--page); }
+  .date-head h3 { margin: 0; font-size: 13px; font-weight: 650; }
+  .date-head span { font-size: 11px; color: var(--muted); }
+  .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 8px; }
+  .photo { position: relative; aspect-ratio: 1 / 1; border-radius: 9px; overflow: hidden; background: var(--surface-2); border: 1px solid transparent; cursor: pointer; }
+  .photo::before { content: ""; position: absolute; inset: 0; background: var(--bg); }
+  .photo::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,0) 55%, rgba(0,0,0,.18)); opacity: 0; transition: opacity 160ms var(--ease); }
+  .photo:hover::after, .photo.selected::after { opacity: 1; }
+  .photo.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .photo .photo-check { position: absolute; top: 8px; left: 8px; z-index: 2; opacity: 0; transform: scale(.92); transition: opacity 160ms var(--ease), transform 160ms var(--ease); }
+  .photo:hover .photo-check, .photo.selected .photo-check { opacity: 1; transform: scale(1); }
+  .photo .photo-check .check { background: rgba(255,255,255,.92); border-color: rgba(255,255,255,.9); box-shadow: 0 2px 8px rgba(0,0,0,.18); }
+  .photo.selected .photo-check .check { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .photo .photo-label { position: absolute; left: 9px; right: 9px; bottom: 8px; z-index: 2; color: #fff; font-size: 10.5px; font-weight: 500; text-shadow: 0 1px 4px rgba(0,0,0,.4); opacity: 0; transition: opacity 160ms var(--ease); }
+  .photo:hover .photo-label { opacity: 1; }
+  .notice { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; margin-top: 14px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface); box-shadow: var(--shadow); }
+  .notice .icon-tile { margin-top: 1px; }
+  .notice-body { flex: 1; min-width: 0; }
+  .notice-title { font-size: 12.5px; font-weight: 650; }
+  .notice-text { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+  /* ---------- settings ---------- */
+  .settings-layout { display: grid; grid-template-columns: 204px minmax(0, 1fr); gap: 26px; align-items: start; }
+  .settings-nav { display: flex; flex-direction: column; gap: 2px; position: sticky; top: calc(var(--header) + 20px); }
+  .settings-nav button { display: flex; align-items: center; height: 34px; padding: 0 10px; border-radius: 7px; border: 0; background: transparent; color: var(--muted); text-align: left; font-size: 12.5px; font-weight: 500; }
+  .settings-nav button:hover { background: var(--surface-2); color: var(--text); }
+  .settings-nav button.active { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+  .settings-panel { min-width: 0; }
+  .settings-card { padding: 0; overflow: hidden; }
+  .settings-card-head { padding: 18px 20px 14px; border-bottom: 1px solid var(--border); }
+  .settings-card-head h3 { margin: 0; font-size: 15px; font-weight: 650; }
+  .settings-card-head p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+  .settings-body { padding: 4px 20px 8px; }
+  .setting-row { display: flex; align-items: center; gap: 20px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+  .setting-row:last-child { border-bottom: 0; }
+  .setting-copy { flex: 1; min-width: 0; }
+  .setting-copy label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 550; }
+  .setting-copy .hint { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+  .info { width: 15px; height: 15px; border-radius: 50%; border: 1px solid var(--border-strong); display: inline-grid; place-items: center; color: var(--muted); font-size: 10px; font-weight: 650; cursor: help; }
+  .input, .select { height: 34px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); padding: 0 10px; min-width: 180px; outline: none; }
+  .input:focus, .select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .select { appearance: none; padding-right: 28px; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 14px) 14px, calc(100% - 9px) 14px; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; }
+  .switch { width: 36px; height: 20px; border-radius: 99px; background: var(--border-strong); position: relative; border: 0; padding: 0; flex: none; transition: background 160ms var(--ease); }
+  .switch::after { content: ""; position: absolute; width: 16px; height: 16px; border-radius: 50%; background: #fff; top: 2px; left: 2px; box-shadow: 0 1px 3px rgba(0,0,0,.18); transition: transform 160ms var(--ease); }
+  .switch.on { background: var(--accent); }
+  .switch.on::after { transform: translateX(16px); }
+  .settings-save { display: flex; align-items: center; gap: 8px; padding: 16px 20px; border-top: 1px solid var(--border); background: var(--surface); }
+  .settings-save .saved { color: var(--muted); font-size: 11.5px; margin-right: auto; display: flex; align-items: center; gap: 6px; }
+  .settings-save .saved svg { width: 14px; height: 14px; color: var(--success); }
+
+  /* ---------- responsive ---------- */
+  @media (max-width: 1060px) {
+    .home-grid { grid-template-columns: minmax(0, 1fr); }
+    .settings-layout { grid-template-columns: 170px minmax(0, 1fr); gap: 18px; }
+    .header { padding: 0 20px; }
+    .content { padding: 24px 22px 44px; }
+  }
+  @media (max-width: 840px) {
+    .app { grid-template-columns: 64px minmax(0, 1fr); }
+    .sidebar { padding: 14px 8px; }
+    .brand { justify-content: center; padding: 2px 0 18px; }
+    .brand-text, .nav-label, .nav-item span, .nav-item .badge, .sync-text, .account-name { display: none; }
+    .nav-item { justify-content: center; padding: 0; }
+    .sync-card { justify-content: center; padding: 10px; }
+    .account { justify-content: center; padding: 6px; }
+    .search { width: 190px; }
+    .search kbd { display: none; }
+    .settings-layout { grid-template-columns: minmax(0, 1fr); }
+    .settings-nav { position: static; flex-direction: row; overflow-x: auto; padding-bottom: 4px; }
+    .settings-nav button { white-space: nowrap; }
+    .metrics { grid-template-columns: 1fr; }
+    .hero { flex-direction: column; align-items: flex-start; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="1.6"/><path d="m21 15-4.5-4.5L7 20"/></symbol>
+  <symbol id="i-activity" viewBox="0 0 24 24"><path d="M3 12h4l2.5-6 4 12 2.5-6h5"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4m0 0L7 9m5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v12m0 0 5-5m-5 5-5-5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4.5 4.5L19 7"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r=".8"/><circle cx="4" cy="12" r=".8"/><circle cx="4" cy="18" r=".8"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5z"/></symbol>
+  <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18a4 4 0 0 1-.7-7.9A6 6 0 0 1 18 9.5a4.5 4.5 0 0 1-.5 8.5z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13M10 11v6M14 11v6"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 6.7M20 5v6h-6"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
+  <symbol id="i-folder-open" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v1"/><path d="M3 9h18l-2.5 10h-15z"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 4.3 2.7 18a2 2 0 0 0 1.7 3h15.2a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></symbol>
+</svg>
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark"><svg><use href="#i-cloud"/></svg></div>
+      <div class="brand-text">
+        <div class="brand-name">Proton Drive</div>
+        <div class="brand-sub">Linux · Community edition</div>
+      </div>
+    </div>
+
+    <nav class="nav" aria-label="Primary">
+      <div class="nav-label">Workspace</div>
+      <button class="nav-item active" data-nav="home"><svg><use href="#i-home"/></svg><span>Home</span></button>
+      <button class="nav-item" data-nav="files"><svg><use href="#i-folder"/></svg><span>Files</span><span class="badge">1,270</span></button>
+      <button class="nav-item" data-nav="photos"><svg><use href="#i-image"/></svg><span>Photos</span><span class="badge">318</span></button>
+      <button class="nav-item" data-nav="activity"><svg><use href="#i-activity"/></svg><span>Activity</span></button>
+      <div class="nav-label" style="margin-top:10px">Preferences</div>
+      <button class="nav-item" data-nav="settings"><svg><use href="#i-settings"/></svg><span>Settings</span></button>
+    </nav>
+
+    <div class="sidebar-spacer"></div>
+
+    <button class="sync-card" title="Sync status">
+      <span class="sync-dot"></span>
+      <span class="sync-text">
+        <span class="sync-title">Synced</span>
+        <span class="sync-sub">2 minutes ago</span>
+      </span>
+    </button>
+
+    <button class="account">
+      <span class="avatar">Z</span>
+      <span class="account-name">
+        <div>zhafrisbs@proton.me</div>
+        <div>Proton Drive</div>
+      </span>
+      <svg style="margin-left:auto; width:14px; height:14px; color:var(--muted)"><use href="#i-chevron"/></svg>
+    </button>
+  </aside>
+
+  <div class="main">
+    <header class="header">
+      <div class="header-title">
+        <h1 id="header-title">Home</h1>
+        <span id="header-sub">All systems normal</span>
+      </div>
+      <div class="header-spacer"></div>
+      <label class="search" aria-label="Search">
+        <svg><use href="#i-search"/></svg>
+        <input placeholder="Search files, photos, settings" />
+        <kbd>Ctrl K</kbd>
+      </label>
+      <button class="icon-btn" id="theme-toggle" title="Toggle theme" aria-label="Toggle theme">
+        <svg><use href="#i-moon"/></svg>
+      </button>
+    </header>
+
+    <main class="content">
+      <!-- HOME -->
+      <section class="page active" data-page="home">
+        <div class="page-head">
+          <div>
+            <h2>Home</h2>
+          </div>
+          <div class="head-actions">
+            <button class="btn btn-secondary"><svg><use href="#i-folder-open"/></svg>Open folder</button>
+            <button class="btn btn-primary"><svg><use href="#i-refresh"/></svg>Sync now</button>
+          </div>
+        </div>
+
+        <section class="hero card">
+          <div class="hero-left">
+            <div class="orb"><svg><use href="#i-check"/></svg></div>
+            <div>
+              <h3>Everything is up to date</h3>
+              <p>Last sync 2 minutes ago · next check in 58 minutes</p>
+            </div>
+          </div>
+          <div class="hero-right">
+            <span class="pill pill-success"><span class="status-dot"></span>Synced</span>
+            <button class="btn btn-ghost btn-sm">Details</button>
+          </div>
+        </section>
+
+        <div class="metrics">
+          <div class="metric card">
+            <div class="metric-label"><svg style="width:15px;height:15px"><use href="#i-folder"/></svg>Files</div>
+            <div class="metric-value">1,270</div>
+            <div class="metric-sub">12.4 GB in Proton Drive</div>
+          </div>
+          <div class="metric card">
+            <div class="metric-label"><svg style="width:15px;height:15px"><use href="#i-image"/></svg>Photos</div>
+            <div class="metric-value">318</div>
+            <div class="metric-sub">All photos backed up</div>
+          </div>
+          <div class="metric card">
+            <div class="metric-label"><svg style="width:15px;height:15px"><use href="#i-cloud"/></svg>Storage</div>
+            <div class="metric-value">12.4 <span style="font-size:13px;font-weight:500;color:var(--muted)">/ 500 GB</span></div>
+            <div class="metric-sub">2.5% of your plan</div>
+          </div>
+        </div>
+
+        <div class="home-grid">
+          <section class="card card-pad">
+            <div class="row between" style="margin-bottom:10px">
+              <h3 class="section-title" style="margin:0">Recent activity</h3>
+              <button class="link" data-goto="activity">View all</button>
+            </div>
+            <div class="activity-row">
+              <div class="icon-tile success"><svg><use href="#i-upload"/></svg></div>
+              <div class="activity-main">
+                <div class="activity-title">Uploaded 8 photos</div>
+                <div class="activity-sub">My Photos · 318 photos total</div>
+              </div>
+              <div class="activity-time">12 min ago</div>
+            </div>
+            <div class="activity-row">
+              <div class="icon-tile"><svg><use href="#i-check"/></svg></div>
+              <div class="activity-main">
+                <div class="activity-title">Synced 1,270 files</div>
+                <div class="activity-sub">No conflicts · 3.0 s</div>
+              </div>
+              <div class="activity-time">18 min ago</div>
+            </div>
+            <div class="activity-row">
+              <div class="icon-tile"><svg><use href="#i-download"/></svg></div>
+              <div class="activity-main">
+                <div class="activity-title">Downloaded 4 files</div>
+                <div class="activity-sub">Projects / Design</div>
+              </div>
+              <div class="activity-time">1 hr ago</div>
+            </div>
+            <div class="activity-row">
+              <div class="icon-tile"><svg><use href="#i-refresh"/></svg></div>
+              <div class="activity-main">
+                <div class="activity-title">Background sync completed</div>
+                <div class="activity-sub">1,270 files checked</div>
+              </div>
+              <div class="activity-time">2 hr ago</div>
+            </div>
+          </section>
+
+          <div class="stack">
+            <section class="card card-pad">
+              <h3 class="section-title">Sync details</h3>
+              <div style="display:flex;flex-direction:column;gap:11px">
+                <div class="row between"><span class="muted small">Next check</span><span class="small strong">In 58 min</span></div>
+                <div class="row between"><span class="muted small">App build</span><span class="small strong">3.20.26</span></div>
+                <div class="row between"><span class="muted small">Remote folder</span><span class="small strong">/my-files</span></div>
+                <div class="row between"><span class="muted small">Check interval</span><span class="small strong">Every 1 h</span></div>
+              </div>
+            </section>
+            <section class="card card-pad">
+              <h3 class="section-title">Storage</h3>
+              <div class="storage-bar"><i style="width:62%;background:var(--accent)"></i><i style="width:26%;background:var(--info)"></i><i style="width:12%;background:var(--warning)"></i></div>
+              <div class="storage-legend">
+                <span><span class="legend-dot" style="background:var(--accent)"></span>Files 7.7 GB</span>
+                <span><span class="legend-dot" style="background:var(--info)"></span>Photos 3.2 GB</span>
+                <span><span class="legend-dot" style="background:var(--warning)"></span>Other 1.5 GB</span>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <!-- FILES -->
+      <section class="page" data-page="files">
+        <div class="page-head">
+          <div>
+            <h2>Files</h2>
+            <div class="breadcrumb"><span>My files</span><svg style="width:12px;height:12px"><use href="#i-chevron"/></svg><b>Projects</b></div>
+          </div>
+          <div class="head-actions">
+            <button class="btn btn-secondary"><svg><use href="#i-plus"/></svg>New folder</button>
+            <button class="btn btn-primary"><svg><use href="#i-upload"/></svg>Upload</button>
+          </div>
+        </div>
+
+        <div class="toolbar">
+          <label class="search"><svg><use href="#i-search"/></svg><input placeholder="Search this folder" /></label>
+          <button class="btn btn-secondary btn-sm">Name <svg style="width:13px;height:13px"><use href="#i-chevron"/></svg></button>
+          <button class="btn btn-secondary btn-sm">All types <svg style="width:13px;height:13px"><use href="#i-chevron"/></svg></button>
+          <span class="grow"></span>
+          <button class="icon-btn" title="List view" aria-label="List view"><svg><use href="#i-list"/></svg></button>
+          <button class="icon-btn" title="Grid view" aria-label="Grid view"><svg><use href="#i-grid"/></svg></button>
+        </div>
+
+        <div class="card table-card">
+          <table class="table">
+            <thead><tr><th style="width:44px"></th><th>Name</th><th>Size</th><th>Modified</th><th>Status</th><th style="width:44px"></th></tr></thead>
+            <tbody>
+              <tr class="selected">
+                <td><span class="check"><svg><use href="#i-check"/></svg></span></td>
+                <td><div class="cell-name"><span class="file-icon folder"><svg><use href="#i-folder"/></svg></span><span class="name">Design</span></div></td>
+                <td class="muted">—</td><td class="muted">Today, 14:08</td>
+                <td><span class="pill pill-success"><span class="status-dot"></span>Synced</span></td>
+                <td><button class="icon-btn"><svg><use href="#i-more"/></svg></button></td>
+              </tr>
+              <tr>
+                <td><span class="check"><svg><use href="#i-check"/></svg></span></td>
+                <td><div class="cell-name"><span class="file-icon image"><svg><use href="#i-image"/></svg></span><span class="name">cover-final.png</span></div></td>
+                <td class="muted">4.2 MB</td><td class="muted">Today, 13:42</td>
+                <td><span class="pill pill-accent"><span class="status-dot"></span>Uploading</span></td>
+                <td><button class="icon-btn"><svg><use href="#i-more"/></svg></button></td>
+              </tr>
+              <tr>
+                <td><span class="check"><svg><use href="#i-check"/></svg></span></td>
+                <td><div class="cell-name"><span class="file-icon doc"><svg><use href="#i-folder"/></svg></span><span class="name">Project brief.pdf</span></div></td>
+                <td class="muted">1.8 MB</td><td class="muted">Yesterday, 18:20</td>
+                <td><span class="pill pill-success"><span class="status-dot"></span>Synced</span></td>
+                <td><button class="icon-btn"><svg><use href="#i-more"/></svg></button></td>
+              </tr>
+              <tr>
+                <td><span class="check"><svg><use href="#i-check"/></svg></span></td>
+                <td><div class="cell-name"><span class="file-icon image"><svg><use href="#i-image"/></svg></span><span class="name">hero-01.jpg</span></div></td>
+                <td class="muted">6.1 MB</td><td class="muted">Yesterday, 16:05</td>
+                <td><span class="pill pill-success"><span class="status-dot"></span>Synced</span></td>
+                <td><button class="icon-btn"><svg><use href="#i-more"/></svg></button></td>
+              </tr>
+              <tr>
+                <td><span class="check"><svg><use href="#i-check"/></svg></span></td>
+                <td><div class="cell-name"><span class="file-icon doc"><svg><use href="#i-folder"/></svg></span><span class="name">Notes.md</span></div></td>
+                <td class="muted">12 KB</td><td class="muted">2 Nov, 09:14</td>
+                <td><span class="pill pill-muted">On this computer</span></td>
+                <td><button class="icon-btn"><svg><use href="#i-more"/></svg></button></td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="table-foot"><span>1,270 items · 12.4 GB used</span><span>Selected: 1 item</span></div>
+        </div>
+      </section>
+
+      <!-- PHOTOS -->
+      <section class="page" data-page="photos">
+        <div class="page-head">
+          <div>
+            <h2>Photos</h2>
+            <p>318 photos · 3.2 GB · two-way sync with /photos</p>
+          </div>
+          <div class="head-actions">
+            <button class="btn btn-secondary"><svg><use href="#i-download"/></svg>Download missing</button>
+            <button class="btn btn-primary"><svg><use href="#i-refresh"/></svg>Sync photos</button>
+          </div>
+        </div>
+
+        <div class="import-banner">
+          <div class="icon-tile accent"><svg><use href="#i-upload"/></svg></div>
+          <div style="min-width:150px">
+            <div class="strong" style="font-size:12.5px">Importing photos</div>
+            <div class="muted small">8 remaining · 318 total</div>
+          </div>
+          <div class="progress"><i></i></div>
+          <span class="muted small">68%</span>
+          <button class="btn btn-ghost btn-sm">Details</button>
+        </div>
+
+        <div class="date-head"><h3>Today</h3><span>8 photos</span></div>
+        <div class="photo-grid">
+          <div class="photo selected" style="--bg:linear-gradient(145deg,#4f6b8a,#c7a78a)"><span class="photo-check"><span class="check"><svg><use href="#i-check"/></svg></span></span><span class="photo-label">IMG_2481.jpg</span></div>
+          <div class="photo" style="--bg:linear-gradient(145deg,#8a9a7b,#d7c8a4)"><span class="photo-check"><span class="check"><svg><use href="#i-check"/></svg></span></span><span class="photo-label">IMG_2482.jpg</span></div>
+          <div class="photo" style="--bg:linear-gradient(145deg,#7b6c8f,#d3b9a8)"><span class="photo-check"><span class="check"><svg><use href="#i-check"/></svg></span></span><span class="photo-label">IMG_2483.jpg</span></div>
+          <div class="photo" style="--bg:linear-gradient(145deg,#3f5d73,#b9d0d6)"><span class="photo-check"><span class="check"><svg><use href="#i-check"/></svg></span></span><span class="photo-label">IMG_2484.jpg</span></div>
+          <div class="photo" style="--bg:linear-gradient(145deg,#8c6b5a,#d8c2a4)"><span class="photo-check"><span class="check"><svg><use href="#i-check"/></svg></span></span><span class="photo-label">IMG_2485.jpg</span></div>
+          <div class="photo" style="--bg:linear-gradient(145deg,#5c6b52,#c7d0b4)"><span class="photo-check"><span class="check"><svg><use href="#i-check"/></svg></span></span><span class="photo-label">IMG_2486.jpg</span></div>
+          <div class="photo" style="--bg:linear-gradient(145deg,#6c5a7a,#c9b6d8)"><span class="photo-check"><span class="check"><svg><use href="#i-check"/></svg></span></span><span class="photo-label">IMG_2487.jpg</span></div>
+          <div class="photo" style="--bg:linear-gradient(145deg,#7a6b4f,#d8c8a8)"><span class="photo-check"><span class="check"><svg><use href="#i-check"/></svg></span></span><span class="photo-label">IMG_2488.jpg</span></div>
+        </div>
+
+        <div class="date-head"><h3>Yesterday</h3><span>12 photos</span></div>
+        <div class="photo-grid">
+          <div class="photo" style="--bg:linear-gradient(145deg,#4a5c6a,#bccbd2)"><span class="photo-check"><span class="check"><svg><use href="#i-check"/></svg></span></span><span class="photo-label">IMG_2470.jpg</span></div>
+          <div class="photo" style="--bg:linear-gradient(145deg,#6d5b4b,#d0bda7)"><span class="photo-check"><span class="check"><svg><use href="#i-check"/></svg></span></span><span class="photo-label">IMG_2471.jpg</span></div>
+          <div class="photo" style="--bg:linear-gradient(145deg,#4f6b5f,#b9d2c2)"><span class="photo-check"><span class="check"><svg><use href="#i-check"/></svg></span></span><span class="photo-label">IMG_2472.jpg</span></div>
+          <div class="photo" style="--bg:linear-gradient(145deg,#6b5a7d,#d0c0df)"><span class="photo-check"><span class="check"><svg><use href="#i-check"/></svg></span></span><span class="photo-label">IMG_2473.jpg</span></div>
+          <div class="photo" style="--bg:linear-gradient(145deg,#7a6552,#d9c3a8)"><span class="photo-check"><span class="check"><svg><use href="#i-check"/></svg></span></span><span class="photo-label">IMG_2474.jpg</span></div>
+          <div class="photo" style="--bg:linear-gradient(145deg,#526a76,#c2d4dc)"><span class="photo-check"><span class="check"><svg><use href="#i-check"/></svg></span></span><span class="photo-label">IMG_2475.jpg</span></div>
+        </div>
+
+        <div class="notice">
+          <div class="icon-tile" style="background:var(--surface-2);color:var(--muted)"><svg><use href="#i-info"/></svg></div>
+          <div class="notice-body">
+            <div class="notice-title">1 file skipped</div>
+            <div class="notice-text"><b>saved-page.jpg</b> isn’t a photo. It stays in your folder and wasn’t uploaded.</div>
+          </div>
+          <button class="btn btn-secondary btn-sm">Open folder</button>
+        </div>
+      </section>
+
+      <!-- ACTIVITY -->
+      <section class="page" data-page="activity">
+        <div class="page-head">
+          <div><h2>Activity</h2></div>
+          <div class="head-actions"><button class="btn btn-secondary"><svg><use href="#i-refresh"/></svg>Refresh</button></div>
+        </div>
+        <div class="toolbar">
+          <button class="btn btn-secondary btn-sm" style="background:var(--accent-soft);color:var(--accent-text);border-color:transparent">All</button>
+          <button class="btn btn-secondary btn-sm">Transfers</button>
+          <button class="btn btn-secondary btn-sm">Conflicts</button>
+          <button class="btn btn-secondary btn-sm">Errors</button>
+        </div>
+        <div class="card card-pad">
+          <div class="activity-row">
+            <div class="icon-tile success"><svg><use href="#i-upload"/></svg></div>
+            <div class="activity-main"><div class="activity-title">Uploaded 8 photos</div><div class="activity-sub">My Photos · 318 photos total</div></div>
+            <div class="activity-time">12 min ago</div>
+          </div>
+          <div class="activity-row">
+            <div class="icon-tile"><svg><use href="#i-check"/></svg></div>
+            <div class="activity-main"><div class="activity-title">Synced 1,270 files</div><div class="activity-sub">No conflicts · completed in 3.0 s</div></div>
+            <div class="activity-time">18 min ago</div>
+          </div>
+          <div class="activity-row">
+            <div class="icon-tile"><svg><use href="#i-download"/></svg></div>
+            <div class="activity-main"><div class="activity-title">Downloaded 4 files</div><div class="activity-sub">Projects / Design · 18.4 MB</div></div>
+            <div class="activity-time">1 hr ago</div>
+          </div>
+          <div class="activity-row">
+            <div class="icon-tile"><svg><use href="#i-refresh"/></svg></div>
+            <div class="activity-main"><div class="activity-title">Background sync completed</div><div class="activity-sub">1,270 files checked · 3.0 s</div></div>
+            <div class="activity-time">2 hr ago</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section class="page" data-page="settings">
+        <div class="page-head">
+          <div><h2>Settings</h2></div>
+        </div>
+
+        <div class="settings-layout">
+          <nav class="settings-nav" aria-label="Settings sections">
+            <button class="active">General</button>
+            <button>Sync</button>
+            <button>Photos</button>
+            <button>Notifications</button>
+            <button>Appearance</button>
+            <button>Advanced</button>
+            <button>App &amp; updates</button>
+          </nav>
+
+          <div class="settings-panel">
+            <section class="card settings-card">
+              <div class="settings-card-head">
+                <h3>General</h3>
+              </div>
+              <div class="settings-body">
+                <div class="setting-row">
+                  <div class="setting-copy">
+                    <label>Sync folder</label>
+                    <div class="hint mono">/home/zhafrisbs/ProtonDrive</div>
+                  </div>
+                  <button class="btn btn-secondary btn-sm">Choose folder…</button>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-copy">
+                    <label>Start syncing when I log in</label>
+                  </div>
+                  <button class="switch on" aria-label="Start syncing when I log in"></button>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-copy">
+                    <label>Keep running when I close the window</label>
+                  </div>
+                  <button class="switch on" aria-label="Keep running when I close the window"></button>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-copy">
+                    <label>Start quietly in the tray</label>
+                  </div>
+                  <button class="switch" aria-label="Start quietly in the tray"></button>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-copy">
+                    <label>Keep this window above other windows</label>
+                  </div>
+                  <button class="switch" aria-label="Keep this window above other windows"></button>
+                </div>
+              </div>
+              <div class="settings-save">
+                <span class="saved"><svg><use href="#i-check"/></svg>All changes saved</span>
+                <button class="btn btn-secondary btn-sm">Discard</button>
+                <button class="btn btn-primary btn-sm">Save changes</button>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script>
+  const titles = {
+    home: ["Home", "All systems normal"],
+    files: ["Files", "My files / Projects"],
+    photos: ["Photos", "318 photos · 3.2 GB"],
+    activity: ["Activity", "Updated just now"],
+    settings: ["Settings", "Version 3.20.26"]
+  };
+
+  function setPage(page) {
+    const meta = titles[page] || titles.home;
+    document.getElementById("header-title").textContent = meta[0];
+    document.getElementById("header-sub").textContent = meta[1];
+    document.querySelectorAll(".page").forEach((el) => {
+      el.classList.toggle("active", el.dataset.page === page);
+    });
+    document.querySelectorAll("[data-nav]").forEach((el) => {
+      el.classList.toggle("active", el.dataset.nav === page);
+    });
+    window.scrollTo({ top: 0, behavior: "instant" });
+  }
+
+  document.querySelectorAll("[data-nav]").forEach((el) => {
+    el.addEventListener("click", () => setPage(el.dataset.nav));
+  });
+  document.querySelectorAll("[data-goto]").forEach((el) => {
+    el.addEventListener("click", () => setPage(el.dataset.goto));
+  });
+
+  const params = new URLSearchParams(location.search);
+  const initial = params.get("p");
+  if (initial && titles[initial]) setPage(initial);
+
+  const themeToggle = document.getElementById("theme-toggle");
+  const savedTheme = params.get("theme") || sessionStorage.getItem("clarity-theme");
+  if (savedTheme === "dark") {
+    document.documentElement.dataset.theme = "dark";
+    themeToggle.innerHTML = '<svg><use href="#i-sun"/></svg>';
+  }
+  themeToggle.addEventListener("click", () => {
+    const dark = document.documentElement.dataset.theme === "dark";
+    document.documentElement.dataset.theme = dark ? "light" : "dark";
+    themeToggle.innerHTML = dark
+      ? '<svg><use href="#i-moon"/></svg>'
+      : '<svg><use href="#i-sun"/></svg>';
+    sessionStorage.setItem("clarity-theme", dark ? "light" : "dark");
+  });
+
+  document.querySelectorAll(".switch").forEach((el) => {
+    el.addEventListener("click", () => el.classList.toggle("on"));
+  });
+  document.querySelectorAll(".photo").forEach((el) => {
+    el.addEventListener("click", () => el.classList.toggle("selected"));
+  });
+</script>
+</body>
+</html>

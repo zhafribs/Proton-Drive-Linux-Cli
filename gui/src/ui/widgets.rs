@@ -10,7 +10,7 @@ use eframe::egui;
 /// lavender page.
 pub fn card(ui: &mut egui::Ui, title: Option<&str>, add: impl FnOnce(&mut egui::Ui)) {
     let frame = theme::card_frame(ui);
-    let response = frame.show(ui, |ui| {
+    frame.show(ui, |ui| {
         // Proton's cards always span the content column.
         ui.set_min_width(ui.available_width());
         if let Some(t) = title {
@@ -19,16 +19,6 @@ pub fn card(ui: &mut egui::Ui, title: Option<&str>, add: impl FnOnce(&mut egui::
         }
         add(ui);
     });
-    // Hover-lift cue: an accent ring on the card under the pointer (egui
-    // paints frames before content, so a shadow change is not possible).
-    if ui.rect_contains_pointer(response.response.rect) {
-        ui.painter().rect_stroke(
-            response.response.rect,
-            egui::CornerRadius::same(16),
-            egui::Stroke::new(1.0, theme::accent(ui.visuals()).gamma_multiply(0.45)),
-            egui::StrokeKind::Inside,
-        );
-    }
 }
 
 /// Uppercase muted section label ("NEVER SYNC FILES MATCHING").
@@ -118,11 +108,6 @@ pub fn primary_button_full(ui: &mut egui::Ui, text: &str) -> bool {
 pub fn avatar(ui: &egui::Ui, center: egui::Pos2, radius: f32, initial: &str) {
     let painter = ui.painter();
     painter.circle_filled(center, radius, theme::ACCENT);
-    painter.circle_filled(
-        center + egui::vec2(0.0, -radius * 0.4),
-        radius * 0.63,
-        theme::CYAN.gamma_multiply(0.45),
-    );
     painter.text(
         center,
         egui::Align2::CENTER_CENTER,
@@ -158,57 +143,43 @@ pub fn toggle(ui: &mut egui::Ui, label: &str, value: &mut bool, hint: Option<&st
     response.changed()
 }
 
-/// Status orb: a modern status ring - a soft ambient halo, a Proton-navy
-/// glass core, the status color as the ring (a comet sweep + pulsing dots
-/// while syncing) and a state glyph in the middle.
-pub fn status_orb(ui: &mut egui::Ui, status: &str) {
-    let size = 104.0;
+/// Status disc: a soft tone of the state colour, one ring, and a glyph.
+pub fn status_orb(ui: &mut egui::Ui, status: &str, animate: bool) {
+    let size = 72.0;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     let c = rect.center();
     let color = theme::status_color(status);
+    let ink = theme::status_text_color(status, ui.visuals());
     let painter = ui.painter();
-    let r = size / 2.0 - 8.0;
+    let r = size / 2.0 - 5.0;
 
-    // Ambient halo: two ultra-soft discs so the ring glows instead of
-    // sitting flat on the page. The glow fades in whenever the status key
-    // changes, a soft state transition rather than a hard colour swap.
-    let glow = ui
-        .ctx()
-        .animate_value_with_time(ui.scope_id().with(("orb-glow", status)), 1.0, 0.4);
-    painter.circle_filled(c, r + 9.0, color.gamma_multiply(0.06 * glow));
-    painter.circle_filled(c, r + 4.5, color.gamma_multiply(0.10 * glow));
-
-    // Glass core: transparent in the dark theme so the aurora reads through,
-    // navy in daylight. A lighter cap would sit off-centre and read as a
-    // misplaced circle in both idle and syncing states.
-    let core = if ui.visuals().dark_mode {
-        egui::Color32::from_white_alpha(8)
+    // Flat status disc: a soft tone of the state colour with a single ring.
+    // No glow or glass; the glyph carries the meaning.
+    painter.circle_filled(c, r, color.gamma_multiply(if ui.visuals().dark_mode {
+        0.18
     } else {
-        theme::NAVY
-    };
-    painter.circle_filled(c, r - 7.0, core);
-
-    // Glass highlight: a faint white crescent on the upper-left, the one
-    // cue that makes the core read as glass rather than a flat disc.
-    painter.circle_filled(
-        c + egui::vec2(-(r - 7.0) * 0.38, -(r - 7.0) * 0.42),
-        (r - 7.0) * 0.26,
-        egui::Color32::WHITE.gamma_multiply(0.08),
+        0.10
+    }));
+    painter.circle_stroke(
+        c,
+        r,
+        egui::Stroke::new(1.0, color.gamma_multiply(0.35)),
     );
 
-    // The ring itself: a calm track in the status color.
-    painter.circle_stroke(c, r, egui::Stroke::new(6.0, color.gamma_multiply(0.22)));
-
+    let t = if animate {
+        ui.ctx().input(|i| i.time) as f32
+    } else {
+        0.0
+    };
     if status == "syncing" {
-        // Smooth motion: ~25 fps while the orb is on screen and animating.
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(40));
-        let t = ui.ctx().input(|i| i.time) as f32;
-        // Comet sweep riding the ring.
+        if animate {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(40));
+        }
+        // Restrained sweep: a single arc on the ring, no pulsing dots.
         let a0 = (t * 140.0f32)
             .to_radians()
             .rem_euclid(std::f32::consts::TAU);
-        let a1 = a0 + std::f32::consts::FRAC_PI_2;
         let steps = 24;
         let pts: Vec<egui::Pos2> = (0..=steps)
             .map(|i| {
@@ -216,52 +187,36 @@ pub fn status_orb(ui: &mut egui::Ui, status: &str) {
                 c + egui::vec2(a.cos(), a.sin()) * r
             })
             .collect();
-        painter.add(egui::Shape::line(pts, egui::Stroke::new(6.0, color)));
-        painter.circle_filled(
-            c + egui::vec2(a1.cos(), a1.sin()) * r,
-            3.2,
-            color.gamma_multiply(1.6),
-        );
-        // Three pulsing dots in the core.
-        for k in 0..3 {
-            let ph = (t * 3.0 + k as f32 * std::f32::consts::TAU / 3.0)
-                .rem_euclid(std::f32::consts::TAU);
-            let a = 0.35 + 0.65 * ((ph.sin() + 1.0) / 2.0);
-            let dx = (k as f32 - 1.0) * 11.0;
-            painter.circle_filled(
-                c + egui::vec2(dx, 0.0),
-                3.4,
-                egui::Color32::WHITE.gamma_multiply(a),
-            );
-        }
+        painter.add(egui::Shape::line(pts, egui::Stroke::new(3.5, ink)));
         return;
     }
 
     if status == "signing_in" {
-        // A pulsing key: the sign-in terminal is open.
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(60));
-        let t = ui.ctx().input(|i| i.time) as f32;
-        let pulse = 0.5 + 0.5 * ((t * 3.0).sin() + 1.0) / 2.0;
-        let w = egui::Stroke::new(3.0, egui::Color32::WHITE.gamma_multiply(pulse));
-        painter.circle_stroke(c + egui::vec2(-5.5, 0.0), 5.0, w);
+        if animate {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(60));
+        }
+        // A small key: the sign-in terminal is open.
+        let pulse = if animate {
+            0.55 + 0.45 * ((t * 3.0).sin() + 1.0) / 2.0
+        } else {
+            1.0
+        };
+        let w = egui::Stroke::new(2.6, ink.gamma_multiply(pulse));
+        painter.circle_stroke(c + egui::vec2(-4.0, 0.0), 4.0, w);
         painter.add(egui::Shape::line(
-            vec![c + egui::vec2(-0.5, 0.0), c + egui::vec2(10.0, 0.0)],
+            vec![c + egui::vec2(0.0, 0.0), c + egui::vec2(8.0, 0.0)],
             w,
         ));
         painter.add(egui::Shape::line(
-            vec![c + egui::vec2(6.0, 0.0), c + egui::vec2(6.0, 4.0)],
-            w,
-        ));
-        painter.add(egui::Shape::line(
-            vec![c + egui::vec2(9.5, 0.0), c + egui::vec2(9.5, 3.0)],
+            vec![c + egui::vec2(5.0, 0.0), c + egui::vec2(5.0, 3.0)],
             w,
         ));
         return;
     }
 
-    // Static glyph per state, painted white on the glass core.
-    let white = egui::Color32::WHITE;
+    // Static glyph per state, painted in the contrasting status ink.
+    let white = ink;
     match status {
         "synced" => {
             let w = egui::Stroke::new(3.8, white);
@@ -326,7 +281,7 @@ pub fn status_orb(ui: &mut egui::Ui, status: &str) {
             let body =
                 egui::Rect::from_center_size(c + egui::vec2(0.0, 5.0), egui::vec2(18.0, 13.0));
             painter.rect_filled(body, egui::CornerRadius::same(3), white);
-            painter.circle_filled(c + egui::vec2(0.0, 4.0), 2.4, theme::NAVY);
+            painter.circle_filled(c + egui::vec2(0.0, 4.0), 2.4, theme::glass_fill(ui.visuals()));
         }
         "engine_stopped" => {
             // Power symbol: the engine is not running.
@@ -359,7 +314,7 @@ pub fn status_orb(ui: &mut egui::Ui, status: &str) {
             ));
         }
         _ => {
-            // Unknown: a quiet white ring.
+            // Unknown: a quiet ring.
             painter.circle_stroke(c, 8.0, egui::Stroke::new(2.6, white));
         }
     }
@@ -449,6 +404,7 @@ pub enum NavIcon {
     Home,
     Folder,
     Photos,
+    Activity,
     Settings,
     Trash,
     About,
@@ -527,6 +483,20 @@ pub fn nav_icon(painter: &egui::Painter, r: egui::Rect, kind: NavIcon, c: egui::
             }
             painter.circle_stroke(ctr, 0.26 * r.width(), stroke);
             painter.circle_stroke(ctr, 0.09 * r.width(), stroke);
+        }
+        NavIcon::Activity => {
+            // Heartbeat / timeline pulse.
+            painter.add(egui::Shape::line(
+                vec![
+                    p(0.08, 0.52),
+                    p(0.30, 0.52),
+                    p(0.40, 0.28),
+                    p(0.56, 0.76),
+                    p(0.66, 0.52),
+                    p(0.92, 0.52),
+                ],
+                stroke,
+            ));
         }
         NavIcon::Trash => {
             // Lid + handle, then the tapered bin with two ribs.
