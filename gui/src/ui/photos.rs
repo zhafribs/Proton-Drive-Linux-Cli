@@ -26,6 +26,14 @@ pub fn lru_victim(entries: impl Iterator<Item = (String, u64)>) -> Option<String
     entries.min_by_key(|(_, used)| *used).map(|(name, _)| name)
 }
 
+/// One file the engine could not upload, with a short explanation.
+#[derive(Clone, serde::Deserialize, Default)]
+pub struct FileIssue {
+    pub name: String,
+    #[serde(default)]
+    pub reason: String,
+}
+
 #[derive(Default)]
 pub struct PhotoState {
     pub items: Vec<cli::PhotoEntry>,
@@ -48,6 +56,10 @@ pub struct PhotoState {
     pub failed: std::collections::HashMap<String, (f64, bool)>,
     /// "Last photo sync ..." line from the engine's last cycle.
     pub last_sync: String,
+    /// Files with an image name but non-image content (left in place).
+    pub upload_skipped: Vec<FileIssue>,
+    /// Files the CLI rejected; they are retried by Sync photos.
+    pub upload_failed: Vec<FileIssue>,
     /// Photos the engine says need attention (incomplete, differs, duplicate).
     pub attention: usize,
     /// Timeline grouped into day cards, rebuilt when the list changes.
@@ -103,6 +115,104 @@ fn short_path(path: &std::path::Path) -> String {
     path.display().to_string()
 }
 
+/// Show upload exceptions at the top of the scroll area, so a long list can
+/// never push the grid (or this card's own actions) off the panel.
+fn draw_upload_issues(
+    app: &mut App,
+    ui: &mut egui::Ui,
+    failed: &[FileIssue],
+    skipped: &[FileIssue],
+    ready: bool,
+) {
+    if !failed.is_empty() {
+        ui.add_space(8.0);
+        let title = if failed.len() == 1 {
+            "1 photo couldn't upload".to_string()
+        } else {
+            format!("{} photos couldn't upload", failed.len())
+        };
+        widgets::card(ui, Some(&title), |ui| {
+            for issue in failed.iter().take(5) {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} \u{2014} {}",
+                        issue.name,
+                        shorten(&issue.reason, 180)
+                    ))
+                    .size(12.0)
+                    .color(theme::warning_text(ui.visuals())),
+                );
+            }
+            if failed.len() > 5 {
+                ui.label(
+                    egui::RichText::new(format!("and {} more", failed.len() - 5))
+                        .size(12.0)
+                        .weak(),
+                );
+            }
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new("The other photos were not affected.")
+                        .size(12.0)
+                        .weak(),
+                );
+                if ui
+                    .add_enabled(ready, egui::Button::new("Retry uploads"))
+                    .on_disabled_hover_text("Wait for the current photo action to finish.")
+                    .clicked()
+                {
+                    request_sync(app, None);
+                }
+            });
+        });
+    }
+
+    if !skipped.is_empty() {
+        ui.add_space(8.0);
+        let title = if skipped.len() == 1 {
+            "1 file skipped".to_string()
+        } else {
+            format!("{} files skipped", skipped.len())
+        };
+        widgets::card(ui, Some(&title), |ui| {
+            for issue in skipped.iter().take(5) {
+                ui.label(
+                    egui::RichText::new(format!("{} {}", issue.name, issue.reason))
+                        .size(12.0),
+                );
+            }
+            if skipped.len() > 5 {
+                ui.label(
+                    egui::RichText::new(format!("and {} more", skipped.len() - 5))
+                        .size(12.0)
+                        .weak(),
+                );
+            }
+            ui.add_space(2.0);
+            ui.label(
+                egui::RichText::new(if skipped.len() == 1 {
+                    "It stays in your folder and wasn't uploaded."
+                } else {
+                    "They stay in your folder and weren't uploaded."
+                })
+                .size(12.0)
+                .weak(),
+            );
+        });
+    }
+}
+
+/// One-line error text that never splits a UTF-8 character.
+fn shorten(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
+    out.push('\u{2026}');
+    out
+}
+
 /// The page was shown (navigation): list the timeline the first time only.
 pub fn on_shown(app: &mut App) {
     // The folder existing is what turns the engine's photo sync on, so create
@@ -131,11 +241,17 @@ struct SyncSummary {
     conflicts: u64,
     #[serde(default)]
     attention: u64,
+    #[serde(default)]
+    skipped: Vec<FileIssue>,
+    #[serde(default)]
+    failed: Vec<FileIssue>,
     error: String,
 }
 
 fn render_summary(app: &mut App, s: &SyncSummary) -> String {
     app.photos.attention = s.attention as usize;
+    app.photos.upload_skipped = s.skipped.clone();
+    app.photos.upload_failed = s.failed.clone();
     if !s.error.is_empty() {
         app.photos.attention = app.photos.attention.max(1);
         if crate::health::is_login_error(&s.error) {
@@ -172,6 +288,26 @@ fn render_summary(app: &mut App, s: &SyncSummary) -> String {
             s.conflicts
         ));
     }
+    if !s.skipped.is_empty() {
+        line.push_str(&format!(
+            " \u{b7} {}",
+            if s.skipped.len() == 1 {
+                "1 file skipped".to_string()
+            } else {
+                format!("{} files skipped", s.skipped.len())
+            }
+        ));
+    }
+    if !s.failed.is_empty() {
+        line.push_str(&format!(
+            " \u{b7} {}",
+            if s.failed.len() == 1 {
+                "1 couldn't upload".to_string()
+            } else {
+                format!("{} couldn't upload", s.failed.len())
+            }
+        ));
+    }
     if !when.is_empty() {
         line.push_str(&format!(" \u{b7} {when}"));
     }
@@ -182,9 +318,13 @@ fn read_summary(app: &mut App) -> String {
     let path = app.paths.state_dir.join("photos-sync.json");
     let Ok(text) = std::fs::read_to_string(&path) else {
         app.photos.attention = 0;
+        app.photos.upload_skipped.clear();
+        app.photos.upload_failed.clear();
         return "Not synced yet - the engine syncs this folder with /photos.".to_string();
     };
     let Ok(s) = serde_json::from_str::<SyncSummary>(&text) else {
+        app.photos.upload_skipped.clear();
+        app.photos.upload_failed.clear();
         return String::new();
     };
     render_summary(app, &s)
@@ -400,19 +540,25 @@ pub fn tick(app: &mut App) {
     let summary = std::fs::read_to_string(app.paths.state_dir.join("photos-sync.json"))
         .ok()
         .and_then(|t| serde_json::from_str::<SyncSummary>(&t).ok());
-    if let Some(s) = summary
-        && s.ts != app.photos.summary_ts
-    {
-        let error = !s.error.is_empty();
-        let moved = s.uploaded + s.downloaded + s.trashed + s.removed > 0;
-        let cloud_changed = s.remote as usize != app.photos.items.len();
-        app.photos.summary_ts = s.ts.clone();
-        app.photos.last_sync = render_summary(app, &s);
-        if app.photos.checking_at.take().is_some() {
-            app.photos.status.clear();
+    match summary {
+        Some(s) if s.ts != app.photos.summary_ts => {
+            let error = !s.error.is_empty();
+            let moved = s.uploaded + s.downloaded + s.trashed + s.removed > 0;
+            let cloud_changed = s.remote as usize != app.photos.items.len();
+            app.photos.summary_ts = s.ts.clone();
+            app.photos.last_sync = render_summary(app, &s);
+            if app.photos.checking_at.take().is_some() {
+                app.photos.status.clear();
+            }
+            if !error && (moved || cloud_changed) {
+                changed = true;
+            }
         }
-        if !error && (moved || cloud_changed) {
-            changed = true;
+        Some(_) => {}
+        None => {
+            // A removed/reset summary must not leave old failure cards on screen.
+            app.photos.upload_skipped.clear();
+            app.photos.upload_failed.clear();
         }
     }
     if let Some(t) = app.photos.checking_at {
@@ -762,16 +908,24 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
             });
         });
     }
+
     if !app.photos.status.is_empty() {
         ui.add_space(8.0);
         ui.label(egui::RichText::new(&app.photos.status).weak());
     }
+
+    let syncing =
+        app.health.status == "syncing" || app.health.phase.as_deref() == Some("photos");
+    let ready = !app.photos.busy && !app.photos.deleting && !syncing;
+    let failed_issues = app.photos.upload_failed.clone();
+    let skipped_issues = app.photos.upload_skipped.clone();
 
     // --- only the grid scrolls, with the day header pinned to its top ---
     egui::ScrollArea::vertical()
         .id_salt("photos-scroll")
         .auto_shrink([false, false])
         .show_viewport(ui, |ui, viewport| {
+            draw_upload_issues(app, ui, &failed_issues, &skipped_issues, ready);
             if app.photos.items.is_empty() {
                 if !app.photos.loading && app.photos.error.is_empty() {
                     ui.add_space(18.0);

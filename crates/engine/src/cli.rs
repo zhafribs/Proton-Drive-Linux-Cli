@@ -104,7 +104,16 @@ impl Cli {
         Ok(Self { bin })
     }
 
-    pub fn run(&self, args: &[&str], json: bool, _timeout: Option<u64>, locked: bool) -> Result<String> {
+    /// Run the CLI and return the raw process output even when it exits
+    /// non-zero. `photo upload --json` reports per-file failures on stdout and
+    /// exits 1, so discarding stdout on failure loses the file names.
+    pub fn run_output(
+        &self,
+        args: &[&str],
+        json: bool,
+        _timeout: Option<u64>,
+        locked: bool,
+    ) -> Result<std::process::Output> {
         let mut cmd_args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
         if json {
             cmd_args.push("--json".to_string());
@@ -132,7 +141,11 @@ impl Cli {
             let out = cmd.output().with_context(|| "running proton-drive")?;
             Ok(out)
         };
-        let out = if locked { with_cli_lock(do_run) } else { do_run() }?;
+        if locked { with_cli_lock(do_run) } else { do_run() }
+    }
+
+    pub fn run(&self, args: &[&str], json: bool, timeout: Option<u64>, locked: bool) -> Result<String> {
+        let out = self.run_output(args, json, timeout, locked)?;
         if !out.status.success() {
             let raw_err = String::from_utf8_lossy(&out.stderr);
             let raw_out = String::from_utf8_lossy(&out.stdout);

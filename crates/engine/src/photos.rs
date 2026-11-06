@@ -11,6 +11,7 @@ use crate::cli::Cli;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// Extensions the timeline accepts; anything else in the folder is ignored.
@@ -38,6 +39,13 @@ pub struct RemotePhoto {
 pub struct LocalPhoto {
     pub name: String,
     pub size: u64,
+    /// Local inode change time. A file restored from the trash, edited or
+    /// replaced gets a new ctime, which distinguishes it from an untouched
+    /// file whose cloud copy was deliberately deleted.
+    pub ctime: u64,
+    /// Nanosecond part of the same timestamp, so a same-second restore is not
+    /// mistaken for an untouched file.
+    pub ctime_nsec: u64,
 }
 
 /// What one cycle moves.
@@ -62,6 +70,13 @@ pub struct PhotoPlan {
 pub struct Synced {
     pub uid: String,
     pub size: u64,
+    /// The local file's ctime when it was last confirmed in sync. Older state
+    /// files have no ctime (0); they are treated as unverified and never used
+    /// to delete a local file.
+    #[serde(default)]
+    pub ctime: u64,
+    #[serde(default)]
+    pub ctime_nsec: u64,
 }
 
 /// A repair that failed: the cloud size it was meant to restore, how many
@@ -176,8 +191,20 @@ pub fn plan(
                 continue;
             }
             match state.synced.get(&l.name) {
-                Some(_) => p.remove_local.push(l.name.clone()),
-                None => p.upload.push(l.name.clone()),
+                // Only an untouched local file may follow a cloud deletion.
+                // A restored/edited file has a different ctime and is treated
+                // as local-only, so it is re-uploaded instead of being moved
+                // back to the trash. Legacy state entries (ctime 0) are never
+                // trusted to delete.
+                Some(s)
+                    if s.ctime != 0
+                        && s.ctime == l.ctime
+                        && s.ctime_nsec == l.ctime_nsec
+                        && s.size == l.size =>
+                {
+                    p.remove_local.push(l.name.clone())
+                }
+                _ => p.upload.push(l.name.clone()),
             }
             continue;
         };
@@ -269,6 +296,13 @@ fn now_secs() -> u64 {
 }
 
 /// Result of one cycle, mirrored into `photos-sync.json` for the GUI.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct FileIssue {
+    pub name: String,
+    #[serde(default)]
+    pub reason: String,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Summary {
     pub ts: String,
@@ -281,6 +315,13 @@ pub struct Summary {
     pub trashed: usize,
     #[serde(default)]
     pub removed: usize,
+    /// Files with an image name but non-image content. They are left in place
+    /// and reported, never uploaded.
+    #[serde(default)]
+    pub skipped: Vec<FileIssue>,
+    /// Files the CLI rejected for a reason other than non-image content.
+    #[serde(default)]
+    pub failed: Vec<FileIssue>,
     /// Photos that are not fully in sync for a reason the user can act on:
     /// incomplete download, size difference, duplicate name, or a failed
     /// repair that is waiting to retry.
@@ -295,6 +336,85 @@ fn is_image(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Is the first block a known image signature? Extension-only detection lets
+/// an HTML page named `.jpg` reach the CLI and poison an upload batch.
+fn has_image_magic(bytes: &[u8]) -> bool {
+    let b = bytes;
+    b.starts_with(&[0xFF, 0xD8, 0xFF])
+        || b.starts_with(b"\x89PNG\r\n\x1a\n")
+        || b.starts_with(b"GIF87a")
+        || b.starts_with(b"GIF89a")
+        || (b.len() >= 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP")
+        || (b.len() >= 12
+            && &b[4..8] == b"ftyp"
+            && matches!(
+                &b[8..12],
+                b"heic" | b"heix" | b"hevc" | b"hevx" | b"heim" | b"heis" | b"hevm" | b"hevs"
+                    | b"mif1" | b"msf1" | b"avif"
+            ))
+        || b.starts_with(b"II*\0")
+        || b.starts_with(b"MM\0*")
+        || b.starts_with(b"II+\0")
+        || b.starts_with(b"MM\0+")
+}
+
+fn looks_like_html(bytes: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(&bytes[..bytes.len().min(128)])
+        .trim_start_matches('\u{feff}')
+        .trim_start()
+        .to_ascii_lowercase();
+    text.starts_with("<!doctype")
+        || text.starts_with("<html")
+        || text.starts_with("<?xml")
+        || text.starts_with("<head")
+}
+
+/// Why a file with an image extension cannot be uploaded, if anything.
+/// Only the header is read: cheap enough to check every new import.
+fn image_problem(path: &Path) -> Option<String> {
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) => return Some(format!("could not be read ({e})")),
+    };
+    let mut header = [0u8; 32];
+    let n = match file.read(&mut header) {
+        Ok(n) => n,
+        Err(e) => return Some(format!("could not be read ({e})")),
+    };
+    if n == 0 {
+        return Some("is empty".to_string());
+    }
+    if has_image_magic(&header[..n]) {
+        return None;
+    }
+    if looks_like_html(&header[..n]) {
+        Some("isn't a photo - it looks like a saved web page with an image name".to_string())
+    } else {
+        Some("isn't a valid image".to_string())
+    }
+}
+
+/// Split planned uploads into real images and files that only have an image
+/// name. The non-images stay untouched on disk and are reported, never sent to
+/// the CLI where one of them would fail the whole batch.
+fn split_uploadable(dir: &Path, names: &[String]) -> (Vec<String>, Vec<FileIssue>) {
+    let mut uploadable = Vec::new();
+    let mut skipped = Vec::new();
+    for name in names {
+        match image_problem(&dir.join(name)) {
+            None => uploadable.push(name.clone()),
+            Some(reason) => {
+                eprintln!("photos: skipping {name}: {reason}");
+                skipped.push(FileIssue {
+                    name: name.clone(),
+                    reason,
+                });
+            }
+        }
+    }
+    (uploadable, skipped)
+}
+
 /// Every image file directly inside `dir` (the timeline is flat).
 pub fn scan_local(dir: &Path) -> Vec<LocalPhoto> {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -303,17 +423,52 @@ pub fn scan_local(dir: &Path) -> Vec<LocalPhoto> {
     let mut out = Vec::new();
     for e in entries.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
-        let Ok(meta) = e.metadata() else { continue };
+        let Ok(meta) = e.metadata() else {
+            // A stat failure is not proof that the user deleted the photo.
+            // Keep the name in the scan as a 0-byte placeholder so the plan
+            // repairs or ignores it, but never trashes the cloud copy.
+            if is_image(&name) {
+                out.push(LocalPhoto {
+                    name,
+                    size: 0,
+                    ctime: 0,
+                    ctime_nsec: 0,
+                });
+            }
+            continue;
+        };
         if !meta.is_file() || !is_image(&name) {
             continue;
         }
+        let (ctime, ctime_nsec) = file_ctime(&meta);
         out.push(LocalPhoto {
             name,
             size: meta.len(),
+            ctime,
+            ctime_nsec,
         });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
+}
+
+/// The file's change time as (seconds, nanoseconds), or (0, 0) where it is
+/// unavailable. Linux is the shipped target; 0 deliberately disables delete
+/// propagation.
+fn file_ctime(meta: &std::fs::Metadata) -> (u64, u64) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        (
+            meta.ctime().max(0) as u64,
+            meta.ctime_nsec().max(0) as u64,
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        (0, 0)
+    }
 }
 
 /// The cloud timeline (`photo timeline -d --json`).
@@ -397,25 +552,127 @@ fn write_json<T: Serialize>(path: &Path, v: &T) {
     }
 }
 
-/// Upload the given file names (batched), from `dir`.
-fn upload(cli: &Cli, dir: &Path, names: &[String]) -> Result<usize> {
-    let mut done = 0;
-    for chunk in names.chunks(BATCH) {
-        let mut args: Vec<String> = ["photo", "upload", "-c", "rename"]
+/// The result of one upload pass. A per-file failure is data, not a fatal
+/// cycle error: the rest of the photos must still upload.
+#[derive(Default)]
+struct UploadOutcome {
+    uploaded: usize,
+    failed: Vec<FileIssue>,
+    fatal: Option<anyhow::Error>,
+}
+
+/// The per-file failure report the official CLI writes to stdout (even when
+/// it exits 1). `--json` is the only reliable way to know which file failed.
+#[derive(Deserialize, Default)]
+struct UploadReport {
+    #[serde(default)]
+    failures: Vec<UploadFailure>,
+}
+
+#[derive(Deserialize, Default)]
+struct UploadFailure {
+    name: String,
+    #[serde(default)]
+    error: String,
+}
+
+/// Run one `photo upload` call. `-c skip` makes retries idempotent: a file
+/// that a previous partial batch already uploaded is skipped instead of
+/// becoming a renamed duplicate.
+fn upload_command(
+    cli: &Cli,
+    dir: &Path,
+    names: &[String],
+) -> Result<std::process::Output> {
+    let mut args: Vec<String> = ["photo", "upload", "-c", "skip"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    args.extend(
+        names
             .iter()
-            .map(|s| s.to_string())
-            .collect();
-        args.extend(
-            chunk
-                .iter()
-                .map(|n| dir.join(n).to_string_lossy().into_owned()),
-        );
-        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        cli.run(&refs, false, None, true)
-            .with_context(|| format!("uploading {} photo(s)", chunk.len()))?;
-        done += chunk.len();
+            .map(|n| dir.join(n).to_string_lossy().into_owned()),
+    );
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    cli.run_output(&refs, true, None, true)
+        .with_context(|| format!("uploading {} photo(s)", names.len()))
+}
+
+fn short_text(text: &str) -> String {
+    text.trim().chars().take(300).collect()
+}
+
+fn short_error(e: &anyhow::Error) -> String {
+    short_text(&format!("{e:#}"))
+}
+
+/// Upload the given file names (batched). The CLI reports the exact rejected
+/// names in its JSON summary, so one bad file is isolated without retrying the
+/// rest one-by-one. Later batches always run, and `-c skip` keeps a retry from
+/// creating duplicates.
+fn upload(cli: &Cli, dir: &Path, names: &[String]) -> UploadOutcome {
+    let mut out = UploadOutcome::default();
+    for chunk in names.chunks(BATCH) {
+        let output = match upload_command(cli, dir, chunk) {
+            Ok(output) => output,
+            Err(e) => {
+                out.fatal = Some(e);
+                break;
+            }
+        };
+        if output.status.success() {
+            out.uploaded += chunk.len();
+            continue;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if proton_core::health::is_login_error(&format!("{stdout}\n{stderr}")) {
+            out.fatal = Some(anyhow::anyhow!("photo upload: authentication required"));
+            break;
+        }
+        let report: Option<UploadReport> = serde_json::from_str(stdout.trim()).ok();
+        let failures = report.map(|r| r.failures).unwrap_or_default();
+        if failures.is_empty() {
+            // No structured attribution (network/session/argument error):
+            // mark the chunk failed and let the next cycle retry it rather
+            // than making one CLI call per file.
+            let reason = if stderr.trim().is_empty() {
+                short_text(&stdout)
+            } else {
+                short_text(&stderr)
+            };
+            for name in chunk {
+                out.failed.push(FileIssue {
+                    name: name.clone(),
+                    reason: reason.clone(),
+                });
+            }
+            continue;
+        }
+
+        let mut failed_here = 0usize;
+        for failure in failures {
+            if !chunk.iter().any(|n| n == &failure.name) {
+                continue;
+            }
+            if proton_core::health::is_login_error(&failure.error) {
+                out.fatal = Some(anyhow::anyhow!("photo upload: authentication required"));
+                break;
+            }
+            failed_here += 1;
+            out.failed.push(FileIssue {
+                name: failure.name,
+                reason: short_text(&failure.error),
+            });
+        }
+        if out.fatal.is_some() {
+            break;
+        }
+        // Every name not named in `failures` was transferred or skipped.
+        out.uploaded += chunk.len().saturating_sub(failed_here);
     }
-    Ok(done)
+    out
 }
 
 /// Upload new local photos while the normal plan is held. Only names the
@@ -444,14 +701,52 @@ fn upload_new_locals(
     if names.is_empty() {
         return (0, None);
     }
-    match upload(cli, dir, &names) {
-        Ok(n) => {
-            state.pending_uploads.extend(names);
-            let _ = write_state(state_dir, state);
-            (n, None)
-        }
-        Err(e) => (0, Some(format!("{e:#}"))),
+    let (uploadable, skipped) = split_uploadable(dir, &names);
+    let outcome = upload(cli, dir, &uploadable);
+    if let Some(e) = outcome.fatal {
+        return (outcome.uploaded, Some(format!("Upload failed: {}", short_error(&e))));
     }
+    let failed: BTreeSet<&str> = outcome
+        .failed
+        .iter()
+        .map(|f| f.name.as_str())
+        .collect();
+    let mut notes = Vec::new();
+    for name in &uploadable {
+        if !failed.contains(name.as_str()) {
+            state.pending_uploads.insert(name.clone());
+        }
+    }
+    if !skipped.is_empty() {
+        notes.push(format!(
+            "Skipped {} file(s) that aren't images: {}.",
+            skipped.len(),
+            skipped
+                .iter()
+                .map(|f| f.name.as_str())
+                .take(5)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !outcome.failed.is_empty() {
+        notes.push(format!(
+            "{} photo(s) could not upload: {}.",
+            outcome.failed.len(),
+            outcome
+                .failed
+                .iter()
+                .map(|f| f.name.as_str())
+                .take(5)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    let _ = write_state(state_dir, state);
+    (
+        outcome.uploaded,
+        (!notes.is_empty()).then(|| notes.join(" ")),
+    )
 }
 
 /// Download the given uids (batched) into `dir`.
@@ -676,7 +971,7 @@ pub fn sync(
             let (uploaded, upload_error) =
                 upload_new_locals(cli, dir, &local, &remote, &mut state, state_dir, false);
             let extra = if let Some(e) = upload_error {
-                format!(" Upload failed: {e}")
+                format!(" {e}")
             } else if uploaded > 0 {
                 format!(" Uploaded {uploaded} new photo(s).")
             } else {
@@ -722,7 +1017,7 @@ pub fn sync(
             remote.is_empty(),
         );
         let extra = if let Some(e) = upload_error {
-            format!(" Upload failed: {e}")
+            format!(" {e}")
         } else if uploaded > 0 {
             format!(" Uploaded {uploaded} new photo(s); the cloud timeline will be rechecked next cycle.")
         } else {
@@ -823,12 +1118,13 @@ pub fn sync(
 
     // Transfers. A failed batch is remembered, not fatal: the same cycle still
     // tries to repair any 0-byte result it left behind.
-    let mut hard: Option<anyhow::Error> = None;
-    if let Err(e) = upload(cli, dir, &p.upload) {
-        hard = Some(e);
-    } else {
-        summary.uploaded = p.upload.len();
-    }
+    let (uploadable, skipped) = split_uploadable(dir, &p.upload);
+    p.upload = uploadable;
+    summary.skipped = skipped;
+    let upload_outcome = upload(cli, dir, &p.upload);
+    summary.uploaded = upload_outcome.uploaded;
+    summary.failed = upload_outcome.failed;
+    let mut hard: Option<anyhow::Error> = upload_outcome.fatal;
     if hard.is_none() {
         match download(cli, dir, &p.download) {
             Ok(n) => summary.downloaded = n,
@@ -899,7 +1195,14 @@ pub fn sync(
         }
         for name in &p.remove_local {
             match trash_local_photo(dir, name) {
-                Ok(()) => summary.removed += 1,
+                Ok(()) => {
+                    summary.removed += 1;
+                    // Persist immediately: if a later step fails, a restart
+                    // must not treat the missing local file as a download
+                    // candidate or a stale deletion.
+                    state.synced.remove(name);
+                    let _ = write_state(state_dir, &state);
+                }
                 Err(e) => eprintln!("photos: could not trash {}: {e:#}", dir.join(name).display()),
             }
         }
@@ -972,6 +1275,12 @@ pub fn sync(
                     Synced {
                         uid: r.uid.clone(),
                         size: r.size,
+                        ctime: local_by_name(&final_local, &r.name)
+                            .map(|l| l.ctime)
+                            .unwrap_or(0),
+                        ctime_nsec: local_by_name(&final_local, &r.name)
+                            .map(|l| l.ctime_nsec)
+                            .unwrap_or(0),
                     },
                 );
             }
@@ -1009,6 +1318,14 @@ pub fn sync(
     summary.conflicts = mismatch_names(&final_local, &final_remote, &shared).len();
     summary.attention = attention_count(&final_local, &final_remote, &state);
     let _ = write_state(state_dir, &state);
+    if !summary.skipped.is_empty() || !summary.failed.is_empty() {
+        eprintln!(
+            "photos: {} uploaded, {} skipped, {} failed",
+            summary.uploaded,
+            summary.skipped.len(),
+            summary.failed.len()
+        );
+    }
     if let Some(e) = hard {
         summary.error = format!("{e:#}");
         write_json(&summary_path(state_dir), &summary);
@@ -1068,6 +1385,8 @@ mod tests {
         LocalPhoto {
             name: name.to_string(),
             size,
+            ctime: 1,
+            ctime_nsec: 1,
         }
     }
 
@@ -1085,8 +1404,390 @@ mod tests {
             Synced {
                 uid: uid.to_string(),
                 size,
+                ctime: 1,
+                ctime_nsec: 1,
             },
         )
+    }
+
+    #[test]
+    fn html_named_as_an_image_is_never_uploaded() {
+        let root = test_root("html-name");
+        let photos = root.join("photos");
+        std::fs::write(photos.join("real.jpg"), b"\xFF\xD8\xFF\xE0\x00\x10JFIF").unwrap();
+        std::fs::write(
+            photos.join("saved.jpg"),
+            b"<!DOCTYPE html><html><head><title>Just a moment...</title></head></html>",
+        )
+        .unwrap();
+        std::fs::write(photos.join("real.png"), b"\x89PNG\r\n\x1a\n\x00\x00").unwrap();
+
+        assert!(image_problem(&photos.join("real.jpg")).is_none());
+        assert!(image_problem(&photos.join("real.png")).is_none());
+        let why = image_problem(&photos.join("saved.jpg")).unwrap();
+        assert!(why.contains("web page"), "{why}");
+
+        let names = vec!["real.jpg".to_string(), "saved.jpg".to_string(), "real.png".to_string()];
+        let (uploadable, skipped) = split_uploadable(&photos, &names);
+        assert_eq!(uploadable, vec!["real.jpg", "real.png"]);
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].name, "saved.jpg");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_restored_or_changed_file_is_uploaded_not_deleted() {
+        let mut restored = local("restored.jpg", 10);
+        restored.ctime = 200;
+        restored.ctime_nsec = 200;
+        let mut state = PhotoState::default();
+        state.synced.insert(
+            "restored.jpg".into(),
+            Synced {
+                uid: "old".into(),
+                size: 10,
+                ctime: 100,
+                ctime_nsec: 100,
+            },
+        );
+        let p = plan(&[restored], &[], &state, true, true);
+        assert_eq!(p.upload, vec!["restored.jpg"]);
+        assert!(p.remove_local.is_empty());
+
+        // Legacy state (no ctime) must never authorize deleting a local file.
+        let mut legacy = local("legacy.jpg", 10);
+        legacy.ctime = 300;
+        legacy.ctime_nsec = 300;
+        let mut state = PhotoState::default();
+        state.synced.insert(
+            "legacy.jpg".into(),
+            Synced {
+                uid: "old".into(),
+                size: 10,
+                ctime: 0,
+                ctime_nsec: 0,
+            },
+        );
+        let p = plan(&[legacy], &[], &state, true, true);
+        assert_eq!(p.upload, vec!["legacy.jpg"]);
+        assert!(p.remove_local.is_empty());
+
+        // Same second, different nanosecond: still a changed file.
+        let mut same_second = local("same-second.jpg", 10);
+        same_second.ctime = 100;
+        same_second.ctime_nsec = 200;
+        let mut state = PhotoState::default();
+        state.synced.insert(
+            "same-second.jpg".into(),
+            Synced {
+                uid: "old".into(),
+                size: 10,
+                ctime: 100,
+                ctime_nsec: 100,
+            },
+        );
+        let p = plan(&[same_second], &[], &state, true, true);
+        assert_eq!(p.upload, vec!["same-second.jpg"]);
+        assert!(p.remove_local.is_empty());
+    }
+
+    #[test]
+    fn an_untouched_file_still_follows_a_cloud_delete() {
+        let l = vec![local("gone.jpg", 10)]; // ctime 1
+        let r = vec![remote("u2", "other.jpg", 10)]; // keeps the timeline credible
+        let state = PhotoState {
+            synced: [synced("gone.jpg", "u1", 10)].into(), // ctime 1
+            ..Default::default()
+        };
+        let p = plan(&l, &r, &state, true, true);
+        assert_eq!(p.remove_local, vec!["gone.jpg"]);
+        assert!(p.upload.is_empty());
+    }
+
+    #[test]
+    fn partial_batch_reports_exact_failures_and_keeps_going() {
+        let root = test_root("partial-upload");
+        let fake = root.join("fake-proton-drive");
+        let names: Vec<String> = (0..26).map(|i| format!("p{i:02}.jpg")).collect();
+        let mut remote_rows = Vec::new();
+        for (i, name) in names.iter().enumerate() {
+            if i == 10 {
+                continue; // the file the CLI rejects
+            }
+            remote_rows.push(format!(
+                "{{\"uid\":\"u{i}\",\"name\":{{\"ok\":true,\"value\":\"{name}\"}},\"activeRevision\":{{\"claimedSize\":5}}}}"
+            ));
+        }
+        std::fs::write(
+            root.join("timeline.json"),
+            format!("[{}]", remote_rows.join(",")),
+        )
+        .unwrap();
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\ndir=$(dirname \"$0\")\n\
+             if [ \"$1\" = photo ] && [ \"$2\" = timeline ]; then cat \"$dir/timeline.json\"; exit 0; fi\n\
+             if [ \"$1\" = photo ] && [ \"$2\" = upload ]; then\n\
+               echo \"$@\" >> \"$dir/upload.log\"\n\
+               case \"$*\" in *p10.jpg*) echo '{\"failures\":[{\"name\":\"p10.jpg\",\"error\":\"bad image\"}]}'; exit 1;; esac\n\
+               exit 0\n\
+             fi\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&fake).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake, perms).unwrap();
+        let cli = Cli::for_test(fake);
+
+        let outcome = upload(&cli, &root.join("photos"), &names);
+        assert!(outcome.fatal.is_none());
+        assert_eq!(outcome.uploaded, 25);
+        assert_eq!(outcome.failed.len(), 1);
+        assert_eq!(outcome.failed[0].name, "p10.jpg");
+
+        let log = std::fs::read_to_string(root.join("upload.log")).unwrap();
+        let lines: Vec<&str> = log.lines().collect();
+        assert_eq!(lines.len(), 2, "{log}");
+        assert!(lines[0].contains("-c skip"));
+        assert!(lines[0].contains("p00.jpg") && lines[0].contains("p24.jpg"));
+        assert!(lines[1].contains("p25.jpg"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_global_upload_outage_does_not_retry_every_file() {
+        let root = test_root("global-upload");
+        let fake = root.join("fake-proton-drive");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\ndir=$(dirname \"$0\")\n\
+             if [ \"$1\" = photo ] && [ \"$2\" = timeline ]; then echo '[]'; exit 0; fi\n\
+             if [ \"$1\" = photo ] && [ \"$2\" = upload ]; then echo \"$@\" >> \"$dir/upload.log\"; exit 1; fi\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&fake).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake, perms).unwrap();
+        let cli = Cli::for_test(fake);
+        let names: Vec<String> = (0..8).map(|i| format!("p{i}.jpg")).collect();
+        let outcome = upload(&cli, &root.join("photos"), &names);
+        assert!(outcome.fatal.is_none());
+        assert_eq!(outcome.uploaded, 0);
+        assert_eq!(outcome.failed.len(), 8);
+        let log = std::fs::read_to_string(root.join("upload.log")).unwrap();
+        assert_eq!(log.lines().count(), 1, "{log}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn state_rebuilds_after_a_per_file_upload_failure() {
+        let root = test_root("partial-state");
+        let photos = root.join("photos");
+        let state_dir = root.join("state");
+        let jpeg = b"\xFF\xD8\xFF\x00\x00";
+        for name in ["a.jpg", "b.jpg", "bad.jpg"] {
+            std::fs::write(photos.join(name), jpeg).unwrap();
+        }
+        let (actime, acnsec) =
+            file_ctime(&std::fs::metadata(photos.join("a.jpg")).unwrap());
+        let mut state = PhotoState::default();
+        state.synced.insert(
+            "a.jpg".into(),
+            Synced {
+                uid: "u1".into(),
+                size: 5,
+                ctime: actime,
+                ctime_nsec: acnsec,
+            },
+        );
+        assert!(write_state(&state_dir, &state));
+
+        let base = "[{\"uid\":\"u1\",\"name\":{\"ok\":true,\"value\":\"a.jpg\"},\"activeRevision\":{\"claimedSize\":5}}]";
+        let full = "[{\"uid\":\"u1\",\"name\":{\"ok\":true,\"value\":\"a.jpg\"},\"activeRevision\":{\"claimedSize\":5}},{\"uid\":\"u2\",\"name\":{\"ok\":true,\"value\":\"b.jpg\"},\"activeRevision\":{\"claimedSize\":5}}]";
+        std::fs::write(root.join("t1.json"), base).unwrap();
+        std::fs::write(root.join("t2.json"), full).unwrap();
+        let fake = root.join("fake-proton-drive");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\ndir=$(dirname \"$0\")\n\
+             if [ \"$1\" = photo ] && [ \"$2\" = timeline ]; then\n\
+               n=$(cat \"$dir/count\" 2>/dev/null || echo 0)\n\
+               if [ \"$n\" = 0 ]; then cat \"$dir/t1.json\"; echo 1 > \"$dir/count\"; else cat \"$dir/t2.json\"; fi\n\
+               exit 0\n\
+             fi\n\
+             if [ \"$1\" = photo ] && [ \"$2\" = upload ]; then\n\
+               for a in \"$@\"; do case \"$a\" in *bad.jpg) echo '{\"failures\":[{\"name\":\"bad.jpg\",\"error\":\"bad image\"}]}'; exit 1;; esac; done\n\
+               exit 0\n\
+             fi\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&fake).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake, perms).unwrap();
+        let cli = Cli::for_test(fake);
+
+        let summary = sync(&cli, &photos, &state_dir, true, &[]).unwrap();
+        assert!(summary.error.is_empty(), "{}", summary.error);
+        assert_eq!(summary.uploaded, 1);
+        assert_eq!(summary.failed.len(), 1);
+        assert_eq!(summary.failed[0].name, "bad.jpg");
+        assert_eq!(read_state(&state_dir).synced.len(), 2);
+        assert!(photos.join("bad.jpg").is_file());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn three_bad_files_do_not_starve_the_good_files() {
+        let root = test_root("bad-then-good");
+        let fake = root.join("fake-proton-drive");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\ndir=$(dirname \"$0\")\n\
+             if [ \"$1\" = photo ] && [ \"$2\" = upload ]; then\n\
+               echo \"$@\" >> \"$dir/upload.log\"\n\
+               case \"$*\" in *p00.jpg*|*p01.jpg*|*p02.jpg*) echo '{\"failures\":[{\"name\":\"p00.jpg\",\"error\":\"bad\"},{\"name\":\"p01.jpg\",\"error\":\"bad\"},{\"name\":\"p02.jpg\",\"error\":\"bad\"}]}'; exit 1;; esac\n\
+               exit 0\n\
+             fi\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&fake).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake, perms).unwrap();
+        let cli = Cli::for_test(fake);
+        let names: Vec<String> = (0..8).map(|i| format!("p{i:02}.jpg")).collect();
+        let outcome = upload(&cli, &root.join("photos"), &names);
+        assert!(outcome.fatal.is_none());
+        assert_eq!(outcome.uploaded, 5);
+        assert_eq!(outcome.failed.len(), 3);
+        let log = std::fs::read_to_string(root.join("upload.log")).unwrap();
+        assert_eq!(log.lines().count(), 1, "{log}");
+        assert!(log.contains("p03.jpg") && log.contains("p07.jpg"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn four_bad_files_are_isolated_from_the_good_ones() {
+        let root = test_root("four-bad");
+        let fake = root.join("fake-proton-drive");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\ndir=$(dirname \"$0\")\n\
+             if [ \"$1\" = photo ] && [ \"$2\" = upload ]; then\n\
+               echo \"$@\" >> \"$dir/upload.log\"\n\
+               case \"$*\" in *p00.jpg*|*p01.jpg*|*p02.jpg*|*p03.jpg*) echo '{\"failures\":[{\"name\":\"p00.jpg\",\"error\":\"bad\"},{\"name\":\"p01.jpg\",\"error\":\"bad\"},{\"name\":\"p02.jpg\",\"error\":\"bad\"},{\"name\":\"p03.jpg\",\"error\":\"bad\"}]}'; exit 1;; esac\n\
+               exit 0\n\
+             fi\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&fake).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake, perms).unwrap();
+        let cli = Cli::for_test(fake);
+        let names: Vec<String> = (0..8).map(|i| format!("p{i:02}.jpg")).collect();
+        let outcome = upload(&cli, &root.join("photos"), &names);
+        assert!(outcome.fatal.is_none());
+        assert_eq!(outcome.uploaded, 4);
+        assert_eq!(outcome.failed.len(), 4);
+        assert_eq!(
+            std::fs::read_to_string(root.join("upload.log"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_stale_baseline_and_a_non_image_do_not_lose_photos() {
+        let root = test_root("stale-baseline");
+        let photos = root.join("photos");
+        let state_dir = root.join("state");
+        let jpeg = b"\xFF\xD8\xFF\x00\x00";
+        std::fs::write(photos.join("keep1.jpg"), jpeg).unwrap();
+        std::fs::write(photos.join("keep2.jpg"), jpeg).unwrap();
+        std::fs::write(photos.join("restored.jpg"), jpeg).unwrap();
+        std::fs::write(
+            photos.join("saved.jpg"),
+            b"<!DOCTYPE html><html>not a photo</html>",
+        )
+        .unwrap();
+        let (c1, cn1) = file_ctime(&std::fs::metadata(photos.join("keep1.jpg")).unwrap());
+        let (c2, cn2) = file_ctime(&std::fs::metadata(photos.join("keep2.jpg")).unwrap());
+        let mut state = PhotoState::default();
+        state.synced.insert(
+            "keep1.jpg".into(),
+            Synced {
+                uid: "u1".into(),
+                size: 5,
+                ctime: c1,
+                ctime_nsec: cn1,
+            },
+        );
+        state.synced.insert(
+            "keep2.jpg".into(),
+            Synced {
+                uid: "u2".into(),
+                size: 5,
+                ctime: c2,
+                ctime_nsec: cn2,
+            },
+        );
+        state.synced.insert(
+            "restored.jpg".into(),
+            Synced {
+                uid: "old-restored".into(),
+                size: 5,
+                ctime: 0, // legacy tombstone: must not delete the restored file
+                ctime_nsec: 0,
+            },
+        );
+        assert!(write_state(&state_dir, &state));
+
+        let base = "[{\"uid\":\"u1\",\"name\":{\"ok\":true,\"value\":\"keep1.jpg\"},\"activeRevision\":{\"claimedSize\":5}},{\"uid\":\"u2\",\"name\":{\"ok\":true,\"value\":\"keep2.jpg\"},\"activeRevision\":{\"claimedSize\":5}}]";
+        let full = "[{\"uid\":\"u1\",\"name\":{\"ok\":true,\"value\":\"keep1.jpg\"},\"activeRevision\":{\"claimedSize\":5}},{\"uid\":\"u2\",\"name\":{\"ok\":true,\"value\":\"keep2.jpg\"},\"activeRevision\":{\"claimedSize\":5}},{\"uid\":\"u3\",\"name\":{\"ok\":true,\"value\":\"restored.jpg\"},\"activeRevision\":{\"claimedSize\":5}}]";
+        std::fs::write(root.join("t1.json"), base).unwrap();
+        std::fs::write(root.join("t2.json"), full).unwrap();
+        let fake = root.join("fake-proton-drive");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\ndir=$(dirname \"$0\")\n\
+             if [ \"$1\" = photo ] && [ \"$2\" = timeline ]; then\n\
+               n=$(cat \"$dir/count\" 2>/dev/null || echo 0)\n\
+               if [ \"$n\" = 0 ]; then cat \"$dir/t1.json\"; echo 1 > \"$dir/count\"; else cat \"$dir/t2.json\"; fi\n\
+               exit 0\n\
+             fi\n\
+             if [ \"$1\" = photo ] && [ \"$2\" = upload ]; then echo \"$@\" >> \"$dir/upload.log\"; exit 0; fi\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&fake).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake, perms).unwrap();
+        let cli = Cli::for_test(fake);
+
+        let summary = sync(&cli, &photos, &state_dir, true, &[]).unwrap();
+        assert!(summary.error.is_empty(), "{}", summary.error);
+        assert_eq!(summary.uploaded, 1); // only restored.jpg
+        assert_eq!(summary.skipped.len(), 1);
+        assert_eq!(summary.skipped[0].name, "saved.jpg");
+        assert_eq!(summary.removed, 0);
+        assert!(photos.join("restored.jpg").is_file());
+        assert!(photos.join("saved.jpg").is_file());
+        let after = read_state(&state_dir);
+        assert!(after.synced.contains_key("restored.jpg"));
+        assert!(after.synced["restored.jpg"].ctime > 0);
+        assert_eq!(after.synced.len(), 3);
+        let log = std::fs::read_to_string(root.join("upload.log")).unwrap();
+        assert!(log.contains("restored.jpg"));
+        assert!(!log.contains("saved.jpg"));
+        assert!(!log.contains("keep1.jpg") && !log.contains("keep2.jpg"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -1338,6 +2039,8 @@ mod tests {
                 Synced {
                     uid: format!("u{i}"),
                     size: 5,
+                    ctime: 0,
+                    ctime_nsec: 0,
                 },
             );
         }
@@ -1402,6 +2105,8 @@ mod tests {
                 Synced {
                     uid: format!("u{i}"),
                     size: 5,
+                    ctime: 0,
+                    ctime_nsec: 0,
                 },
             );
         }
@@ -1589,14 +2294,19 @@ mod tests {
         let mut state = PhotoState::default();
         for i in 0..60 {
             let name = format!("p{i:02}.jpg");
-            if i >= 30 {
-                std::fs::write(photos.join(&name), b"12345").unwrap();
-            }
+            let (ctime, ctime_nsec) = if i >= 30 {
+                std::fs::write(photos.join(&name), b"\xFF\xD8\xFF\x00\x00").unwrap();
+                file_ctime(&std::fs::metadata(photos.join(&name)).unwrap())
+            } else {
+                (0, 0)
+            };
             state.synced.insert(
                 name.clone(),
                 Synced {
                     uid: format!("u{i}"),
                     size: 5,
+                    ctime,
+                    ctime_nsec,
                 },
             );
         }
@@ -1661,8 +2371,8 @@ mod tests {
         let state_dir = root.join("state");
         std::fs::create_dir_all(&photos).unwrap();
         std::fs::create_dir_all(&state_dir).unwrap();
-        std::fs::write(photos.join("old.jpg"), b"12345").unwrap();
-        std::fs::write(photos.join("new.jpg"), b"67890").unwrap();
+        std::fs::write(photos.join("old.jpg"), b"\xFF\xD8\xFF\x00\x00").unwrap();
+        std::fs::write(photos.join("new.jpg"), b"\xFF\xD8\xFF\x01\x01").unwrap();
         let state = PhotoState {
             synced: [synced("old.jpg", "u1", 5)].into(),
             ..Default::default()
@@ -1722,6 +2432,8 @@ mod tests {
                 Synced {
                     uid: format!("u{i}"),
                     size: 5,
+                    ctime: 0,
+                    ctime_nsec: 0,
                 },
             );
         }
@@ -1902,6 +2614,8 @@ mod tests {
             Synced {
                 uid: "u1".into(),
                 size: 100,
+                ctime: 0,
+                ctime_nsec: 0,
             },
         );
         write_json(&state_path(&state_dir), &state);

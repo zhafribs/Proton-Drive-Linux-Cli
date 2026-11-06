@@ -1,3 +1,29 @@
+## 3.20.23 — 2026-11-06
+
+- **A large photo import no longer stops at one bad file.** Files are checked
+  by their actual bytes, not just their extension. A web page saved as
+  `something.jpg` is skipped and named in Photos instead of being sent to the
+  CLI, where it failed the whole upload batch.
+- **Partial batches are reconciled and the rest keep going.** After a failed
+  batch the engine checks which files actually reached the cloud, counts them,
+  and retries only the genuinely missing ones. A failure in one chunk no longer
+  blocks later chunks.
+- **Retries cannot make duplicates.** Sync uploads now use Proton's `skip`
+  conflict strategy instead of `rename`, so retrying a partially successful
+  batch never creates `photo (1).jpg` copies.
+- **Restored photos are no longer moved back to the trash.** The engine now
+  records each local file's change time. An old state entry with no change time
+  (or a file restored/edited since it was synced) is uploaded, never used to
+  authorise a local delete. Normal cloud deletions still propagate for
+  untouched files.
+- **The Photos page tells the truth after a partial sync.** It shows the real
+  uploaded count, names files that could not upload, and gives non-image files
+  their own neutral “file skipped” card with the filename and reason. The
+  message is no longer “Photo sync failed” for one odd file.
+- **Failed local reads are safe.** A file that cannot be stat'ed is treated as
+  a 0-byte placeholder for the plan instead of silently disappearing and
+  causing its cloud copy to be trashed.
+
 ## 3.20.22 — 2026-11-06
 
 - **Update checks keep working when GitHub rate-limits the API.** GitHub's
