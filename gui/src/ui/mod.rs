@@ -2645,12 +2645,12 @@ mod glyph_tests {
 
     /// Every character the UI paints as an icon rather than as text.
     ///
-    /// None of them exist in the fonts this app bundles (Ubuntu-Light, Hack,
-    /// egui-icons), so they only render through the system font fallback that
-    /// eframe's `system_fonts` feature installs. 3.16.19 dropped that feature
-    /// while switching to glow, and these turned into blank boxes: the pane
-    /// carets, the sort arrow, the tri-state boxes, the upload/download arrows
-    /// and the folder emoji.
+    /// Most of them do not exist in the fonts this app bundles (Ubuntu-Light,
+    /// Hack, egui-icons), so they only render through the system font fallback
+    /// that eframe's `system_fonts` feature installs. 3.16.19 dropped that
+    /// feature while switching to glow, and these turned into blank boxes: the
+    /// pane carets, the sort arrow, the tri-state boxes, the upload/download
+    /// arrows, the folder emoji, and the info icon.
     const ICON_GLYPHS: &[char] = &[
         '\u{25b8}',  // ▸ collapsed caret
         '\u{25be}',  // ▾ expanded caret
@@ -2663,6 +2663,7 @@ mod glyph_tests {
         '\u{2193}',  // ↓ download
         '\u{1f4c1}', // 📁 local folder card
         '\u{1f4c2}', // 📂 selective-sync folder card
+        '\u{2139}',  // ℹ info icon
     ];
 
     /// A character's font files, not just its glyph, must exist - a tofu box

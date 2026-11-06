@@ -250,10 +250,10 @@ const TAB_LABELS: [&str; 6] = [
 const TAB_DESCRIPTIONS: [&str; 6] = [
     "Where your files live and how the app behaves when you close it.",
     "Choose what syncs, when, and how photos are handled.",
-    "Choose which events produce a desktop notification.",
-    "Theme, interface size, and background motion.",
+    "Choose which events produce a desktop notification. Changes here apply immediately.",
+    "Theme, interface size, and background motion. Changes here apply immediately.",
     "Tuning and recovery tools. The defaults work for most people.",
-    "Updates, the app-menu entry, and installation details.",
+    "Updates, the app-menu entry, and installation details. Changes here apply immediately.",
 ];
 
 const TAB_CARDS: [&[CardFn]; 6] = [
@@ -289,6 +289,7 @@ fn tab_bar(app: &mut App, ui: &mut egui::Ui) {
                     .selected(selected)
                     .corner_radius(crate::theme::pill()),
             );
+            let resp = resp.on_hover_text(TAB_DESCRIPTIONS[i]);
             // A plain Button is honest: it switches panels, but we are not
             // claiming the full ARIA tablist/roving-focus contract.
             resp.widget_info(|| {
@@ -305,7 +306,11 @@ fn tab_bar(app: &mut App, ui: &mut egui::Ui) {
 
 fn save_bar(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
-        if widgets::primary_button(ui, "  Save all changes") {
+        if widgets::primary_button_hint(
+            ui,
+            "  Save all changes",
+            "Saves your folder, sync, photo, and performance settings.",
+        ) {
             match validate(app) {
                 Some((title, body)) => {
                     if title == "Folder missing" {
@@ -316,27 +321,16 @@ fn save_bar(app: &mut App, ui: &mut egui::Ui) {
                 None => app.dialog = Some(Dialog::ConfirmSave),
             }
         }
-        if ui.button("Discard all changes").clicked() {
+        let discard_resp = ui
+            .button("Discard all changes")
+            .on_hover_text(
+                "Restores all settings, including appearance and notification changes.",
+            );
+        if discard_resp.clicked() {
             discard(app);
         }
         ui.label(egui::RichText::new(app.save_hint.clone()).weak());
     });
-    ui.label(
-        egui::RichText::new(
-            "Save writes every sync and performance field on every tab. Discard restores \
-             all settings, including appearance and notification changes.",
-        )
-        .size(11.5)
-        .weak(),
-    );
-}
-
-fn immediate_note(ui: &mut egui::Ui) {
-    ui.label(
-        egui::RichText::new("These changes apply immediately.")
-            .size(11.5)
-            .weak(),
-    );
 }
 
 pub fn draw(app: &mut App, ui: &mut egui::Ui) {
@@ -353,23 +347,11 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                 ui.vertical(|ui| {
                     ui.set_width(width);
                     ui.label(egui::RichText::new("Settings").strong().size(24.0));
-                    ui.label(
-                        egui::RichText::new(
-                            "A few clear groups. Advanced tools live in their own tab.",
-                        )
-                        .size(12.5)
-                        .weak(),
-                    );
-                    ui.add_space(12.0);
+                    ui.add_space(16.0);
                     tab_bar(app, ui);
                     ui.add_space(10.0);
 
                     let tab = app.settings_tab.min(TAB_LABELS.len() - 1);
-                    ui.label(
-                        egui::RichText::new(TAB_DESCRIPTIONS[tab])
-                            .size(12.5)
-                            .weak(),
-                    );
                     if !app.save_hint.is_empty() {
                         ui.label(egui::RichText::new(app.save_hint.clone()).size(11.5).weak());
                     }
@@ -380,8 +362,6 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                     ui.add_space(18.0);
                     if matches!(tab, 0 | 1 | 4) {
                         save_bar(app, ui);
-                    } else {
-                        immediate_note(ui);
                     }
                     ui.add_space(20.0);
                 });

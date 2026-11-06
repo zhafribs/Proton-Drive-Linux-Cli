@@ -37,6 +37,21 @@ pub fn section_label(ui: &mut egui::Ui, text: &str) {
     ui.add_space(4.0);
 }
 
+/// A small muted info glyph. Its explanation appears only on hover, keeping
+/// the page free of always-visible instructional paragraphs. U+2139 is present
+/// in the bundled fallback fonts (unlike U+24D8, which can show as tofu).
+pub fn info_icon(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let response = ui.add(
+        egui::Label::new(egui::RichText::new("\u{2139}").size(14.0).weak())
+            .sense(egui::Sense::focusable_noninteractive()),
+    );
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Help);
+    }
+    response.on_hover_text(text)
+}
+
 pub fn primary_button(ui: &mut egui::Ui, text: &str) -> bool {
     primary_button_hint(ui, text, "")
 }
@@ -134,17 +149,13 @@ pub fn danger_ghost_button(ui: &mut egui::Ui, text: &str) -> bool {
     .clicked()
 }
 
-/// Toggle row: checkbox + optional hint line under the label.
+/// Toggle row: checkbox + optional hover explanation.
 pub fn toggle(ui: &mut egui::Ui, label: &str, value: &mut bool, hint: Option<&str>) -> bool {
-    let mut changed = false;
-    ui.vertical(|ui| {
-        changed = ui.checkbox(value, label).changed();
-        if let Some(h) = hint {
-            ui.label(egui::RichText::new(h).size(12.0).weak())
-                .on_hover_text(h);
-        }
-    });
-    changed
+    let response = ui.checkbox(value, label);
+    if let Some(h) = hint {
+        response.clone().on_hover_text(h);
+    }
+    response.changed()
 }
 
 /// Status orb: a modern status ring - a soft ambient halo, a Proton-navy

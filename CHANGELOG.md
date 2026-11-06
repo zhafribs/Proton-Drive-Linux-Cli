@@ -1,3 +1,15 @@
+## 3.20.25 — 2026-11-06
+
+- **Removed the always-visible explainer paragraphs from Settings and Photos.**
+  The page now opens with just the title, tabs, and controls instead of
+  instructional copy.
+- **The information is still there on hover.** Each Settings tab explains
+  itself when you hover it; Save and Discard show their scope on hover; the
+  Photos selection hint is now a small info icon next to the title.
+- **The Animate the background hint is a hover tooltip** instead of a
+  permanent line under the checkbox.
+- No controls or features were removed.
+
 ## 3.20.24 — 2026-11-06
 
 - **A skipped-file card now disappears as soon as the file is gone.** The

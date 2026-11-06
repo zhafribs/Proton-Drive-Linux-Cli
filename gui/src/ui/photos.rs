@@ -746,6 +746,10 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
     // --- pinned header: never scrolls away ---
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Photos").strong().size(24.0));
+        widgets::info_icon(
+            ui,
+            "Click a photo to select it for download or delete.",
+        );
         if !app.photos.items.is_empty() {
             let total: u64 = app.photos.items.iter().map(|p| p.size).sum();
             ui.add_space(10.0);
@@ -902,14 +906,6 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                 App::open_url(&dir.to_string_lossy());
             }
         });
-        if sel.is_empty() && !app.photos.items.is_empty() {
-            ui.add_space(4.0);
-            ui.label(
-                egui::RichText::new("Click a photo to select it for download or delete.")
-                    .size(11.5)
-                    .weak(),
-            );
-        }
     });
 
     if !app.photos.error.is_empty() {
