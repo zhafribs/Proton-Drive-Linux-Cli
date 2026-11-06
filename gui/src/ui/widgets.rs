@@ -329,7 +329,67 @@ fn dir_color(dir: Dir, visuals: &egui::Visuals) -> egui::Color32 {
     }
 }
 
-/// One activity/recent row: colored glyph, name, parent path, label, time.
+/// Compact Home activity row: icon + file name + time. The action/path line
+/// belongs to the full Activity page, not the Home preview.
+pub fn move_row_compact(ui: &mut egui::Ui, row: &ChangeRow, when: &str) {
+    let color = dir_color(row.dir(), ui.visuals());
+    let height = 32.0;
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::hover(),
+    );
+    let a11y = format!("{}: {}, {}", row.label(), row.name, when);
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::ListItem, ui.is_enabled(), a11y.as_str())
+    });
+    if resp.hovered() {
+        ui.painter().rect_filled(
+            rect,
+            egui::CornerRadius::same(8),
+            ui.visuals().widgets.hovered.weak_bg_fill,
+        );
+    }
+
+    // Fixed icon box, painted at the row's exact vertical centre. This is the
+    // alignment the text glyph lacked when the row had two text lines.
+    let icon = egui::Rect::from_center_size(
+        egui::pos2(rect.left() + 10.0, rect.center().y),
+        egui::vec2(18.0, 18.0),
+    );
+    ui.painter().text(
+        icon.center(),
+        egui::Align2::CENTER_CENTER,
+        row.glyph(),
+        egui::FontId::proportional(15.0),
+        color,
+    );
+
+    let time_w = 64.0;
+    let name_rect = egui::Rect::from_min_max(
+        egui::pos2(rect.left() + 28.0, rect.top()),
+        egui::pos2(rect.right() - time_w - 8.0, rect.bottom()),
+    );
+    let mut name_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(name_rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    let name = name_ui.add(
+        egui::Label::new(egui::RichText::new(row.name.clone()).strong().size(13.5)).truncate(),
+    );
+    name.on_hover_text(row.rel.clone());
+
+    ui.painter().text(
+        egui::pos2(rect.right() - 8.0, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        when,
+        egui::FontId::proportional(12.0),
+        ui.visuals().weak_text_color(),
+    );
+    resp.on_hover_text(row.rel.clone());
+}
+
+/// One activity row: colored glyph, name, parent path, action label, time.
 pub fn move_row(ui: &mut egui::Ui, row: &ChangeRow, parent: &str, when: &str) {
     let color = dir_color(row.dir(), ui.visuals());
     // Hover cue: a soft rounded track under the row the pointer is on, the

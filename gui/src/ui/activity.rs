@@ -23,19 +23,8 @@ pub fn draw_preview(app: &mut App, ui: &mut egui::Ui, title: &str, max: usize) {
             if shown >= max {
                 break;
             }
-            let full = row.rel.trim_end_matches('/');
-            let name = full.rsplit('/').next().unwrap_or(full);
-            let parent = {
-                let p = &full[..full.len() - name.len()];
-                p.trim_end_matches('/')
-            };
             let when = crate::util::rel_time(row.ts);
-            widgets::move_row(
-                ui,
-                row,
-                if parent.is_empty() { "/" } else { parent },
-                &when,
-            );
+            widgets::move_row_compact(ui, row, &when);
             shown += 1;
         }
         if shown == 0 {

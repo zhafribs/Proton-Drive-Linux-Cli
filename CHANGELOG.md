@@ -1,3 +1,13 @@
+## 3.20.30 — 2026-11-06
+
+- **Home’s Recent activity is a summary again.** Each row shows the direction
+  icon, file name and time only. The action/path subtitle stays on the full
+  Activity page, where there is room for it.
+- **The direction icons now line up with the title.** They are painted in a
+  fixed 18 px box at the row’s center instead of being centered against a
+  two-line text block.
+- Hovering a row still reveals the full path.
+
 ## 3.20.29 — 2026-11-06
 
 - **Project Clarity, phase 4: one Settings save model.** Every tab now stages
