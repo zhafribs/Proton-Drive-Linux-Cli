@@ -1787,6 +1787,14 @@ mod tests {
         assert!(log.contains("restored.jpg"));
         assert!(!log.contains("saved.jpg"));
         assert!(!log.contains("keep1.jpg") && !log.contains("keep2.jpg"));
+
+        // Once the non-image is deleted, the very next cycle must stop
+        // reporting it as skipped.
+        std::fs::remove_file(photos.join("saved.jpg")).unwrap();
+        let clean = sync(&cli, &photos, &state_dir, true, &[]).unwrap();
+        assert!(clean.error.is_empty(), "{}", clean.error);
+        assert!(clean.skipped.is_empty(), "{:?}", clean.skipped);
+        assert_eq!(clean.local, 3);
         let _ = std::fs::remove_dir_all(&root);
     }
 

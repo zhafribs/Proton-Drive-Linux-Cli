@@ -190,15 +190,22 @@ fn draw_upload_issues(
                 );
             }
             ui.add_space(2.0);
-            ui.label(
-                egui::RichText::new(if skipped.len() == 1 {
-                    "It stays in your folder and wasn't uploaded."
-                } else {
-                    "They stay in your folder and weren't uploaded."
-                })
-                .size(12.0)
-                .weak(),
-            );
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new(if skipped.len() == 1 {
+                        "It stays in your folder and wasn't uploaded."
+                    } else {
+                        "They stay in your folder and weren't uploaded."
+                    })
+                    .size(12.0)
+                    .weak(),
+                );
+                if ui.button("Open folder").clicked() {
+                    let dir = local_dir(app);
+                    let _ = std::fs::create_dir_all(&dir);
+                    App::open_url(&dir.to_string_lossy());
+                }
+            });
         });
     }
 }
@@ -248,10 +255,24 @@ struct SyncSummary {
     error: String,
 }
 
+/// Only report issues for files that still exist. A skipped/failed card is
+/// about a file the user can act on; once it is deleted or renamed the card
+/// must not outlive it, even before the next engine summary arrives.
+fn existing_issues(dir: &std::path::Path, issues: &[FileIssue]) -> Vec<FileIssue> {
+    issues
+        .iter()
+        .filter(|i| dir.join(&i.name).is_file())
+        .cloned()
+        .collect()
+}
+
 fn render_summary(app: &mut App, s: &SyncSummary) -> String {
     app.photos.attention = s.attention as usize;
-    app.photos.upload_skipped = s.skipped.clone();
-    app.photos.upload_failed = s.failed.clone();
+    let dir = local_dir(app);
+    let skipped = existing_issues(&dir, &s.skipped);
+    let failed = existing_issues(&dir, &s.failed);
+    app.photos.upload_skipped = skipped.clone();
+    app.photos.upload_failed = failed.clone();
     if !s.error.is_empty() {
         app.photos.attention = app.photos.attention.max(1);
         if crate::health::is_login_error(&s.error) {
@@ -288,23 +309,23 @@ fn render_summary(app: &mut App, s: &SyncSummary) -> String {
             s.conflicts
         ));
     }
-    if !s.skipped.is_empty() {
+    if !skipped.is_empty() {
         line.push_str(&format!(
             " \u{b7} {}",
-            if s.skipped.len() == 1 {
+            if skipped.len() == 1 {
                 "1 file skipped".to_string()
             } else {
-                format!("{} files skipped", s.skipped.len())
+                format!("{} files skipped", skipped.len())
             }
         ));
     }
-    if !s.failed.is_empty() {
+    if !failed.is_empty() {
         line.push_str(&format!(
             " \u{b7} {}",
-            if s.failed.len() == 1 {
+            if failed.len() == 1 {
                 "1 couldn't upload".to_string()
             } else {
-                format!("{} couldn't upload", s.failed.len())
+                format!("{} couldn't upload", failed.len())
             }
         ));
     }
@@ -532,7 +553,8 @@ pub fn tick(app: &mut App) {
     app.photos.probed_at = now;
     let dir_stamp = file_stamp(&local_dir(app));
     // Files appearing or disappearing on disk (a download, a delete, a drop).
-    let mut changed = app.photos.dir_stamp != 0.0 && dir_stamp != app.photos.dir_stamp;
+    let dir_changed = app.photos.dir_stamp != 0.0 && dir_stamp != app.photos.dir_stamp;
+    let mut changed = dir_changed;
     app.photos.dir_stamp = dir_stamp;
     // A new engine summary always updates the line and clears a pending
     // "checking" state; only a real transfer or a changed cloud size re-lists
@@ -541,7 +563,7 @@ pub fn tick(app: &mut App) {
         .ok()
         .and_then(|t| serde_json::from_str::<SyncSummary>(&t).ok());
     match summary {
-        Some(s) if s.ts != app.photos.summary_ts => {
+        Some(s) if s.ts != app.photos.summary_ts || dir_changed => {
             let error = !s.error.is_empty();
             let moved = s.uploaded + s.downloaded + s.trashed + s.removed > 0;
             let cloud_changed = s.remote as usize != app.photos.items.len();
@@ -1392,6 +1414,34 @@ mod tests {
         assert_eq!(size_label(900), "900 B");
         assert_eq!(size_label(2 * 1024 * 1024), "2.0 MB");
         assert_eq!(size_label(3 * 1024), "3 KB");
+    }
+
+    #[test]
+    fn a_skipped_card_disappears_when_the_file_is_gone() {
+        let root = std::env::temp_dir().join(format!(
+            "pd-photos-issues-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("there.jpg"), b"x").unwrap();
+        let issues = vec![
+            FileIssue {
+                name: "there.jpg".into(),
+                reason: "isn't a photo".into(),
+            },
+            FileIssue {
+                name: "gone.jpg".into(),
+                reason: "isn't a photo".into(),
+            },
+        ];
+        assert_eq!(existing_issues(&root, &issues).len(), 1);
+        std::fs::remove_file(root.join("there.jpg")).unwrap();
+        assert!(existing_issues(&root, &issues).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Photos land in ~/ProtonPhotos unless the conf says otherwise.

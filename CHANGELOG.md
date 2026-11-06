@@ -1,3 +1,16 @@
+## 3.20.24 — 2026-11-06
+
+- **A skipped-file card now disappears as soon as the file is gone.** The
+  Photos page checks that the named file still exists before showing it, and
+  re-checks immediately when the folder changes. Deleting or renaming the file
+  no longer leaves a stale “1 file skipped” card until the next hourly photo
+  pass.
+- **The skipped-file card has an Open folder action**, so the exact file is
+  easy to find. The summary line likewise counts only skipped/failed files that
+  still exist.
+- The engine already clears the skip on the next cycle; a regression test now
+  verifies that the cycle summary becomes empty once the file is deleted.
+
 ## 3.20.23 — 2026-11-06
 
 - **A large photo import no longer stops at one bad file.** Files are checked
