@@ -104,6 +104,8 @@ pub fn load(app: &mut App, rel: String, push: bool, announce: bool, paint: bool)
 /// Force a fresh listing, ignoring the cache TTL (Refresh, or after a
 /// mutation). Used for both the files view and Trash.
 pub fn reload(app: &mut App) {
+    app.cloud.status = "Opening...".to_string();
+    app.cloud.status_tip.clear();
     if app.cloud.trash_view {
         load_trash(app, false);
     } else {
@@ -974,11 +976,60 @@ pub fn fmt_size(n: u64) -> String {
 // ------------------------------------------------------------------ drawing
 
 pub fn draw(app: &mut App, ui: &mut egui::Ui) {
+    page_head(app, ui);
+    ui.add_space(10.0);
     top_row(app, ui);
     ui.add_space(8.0);
     table(app, ui);
     ui.add_space(6.0);
     bottom_row(app, ui);
+}
+
+fn page_head(app: &mut App, ui: &mut egui::Ui) {
+    let (trash_view, busy) = (app.cloud.trash_view, app.cloud.busy);
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(if trash_view { "Trash" } else { "Files" })
+                .strong()
+                .size(24.0),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if trash_view {
+                if ui
+                    .add_enabled(!busy, egui::Button::new("Empty trash"))
+                    .on_hover_text("Permanently delete everything in the trash")
+                    .clicked()
+                {
+                    app.dialog = Some(super::Dialog::ConfirmEmptyTrash);
+                }
+            } else {
+                let upload = ui
+                    .add_enabled_ui(!busy, |ui| {
+                        widgets::primary_button_hint(
+                            ui,
+                            "  Upload",
+                            "Upload files from this computer.",
+                        )
+                    })
+                    .inner;
+                if upload {
+                    pick_upload_files(app);
+                }
+                let new_folder = ui
+                    .add_enabled_ui(!busy, |ui| ui.button("New folder"))
+                    .inner
+                    .clicked();
+                if new_folder {
+                    app.input_buf.clear();
+                    app.dialog = Some(super::Dialog::Input {
+                        title: "New folder".to_string(),
+                        label: "Folder name:".to_string(),
+                        intent: super::InputIntent::CloudNewFolder,
+                    });
+                }
+            }
+        });
+    });
 }
 
 /// A square icon button for the files toolbar: the glyph is painted onto an
@@ -1051,13 +1102,11 @@ fn collapse_segments(segs: &mut Vec<(String, String)>, crumb_w: f32) {
 }
 
 fn top_row(app: &mut App, ui: &mut egui::Ui) {
-    let (has_back, has_fwd, busy) = {
+    let (has_back, has_fwd, busy, trash_view) = {
         let c = &app.cloud;
-        (!c.hist.is_empty(), !c.fwd.is_empty(), c.busy)
+        (!c.hist.is_empty(), !c.fwd.is_empty(), c.busy, c.trash_view)
     };
     ui.horizontal(|ui| {
-        // Icon-only toolbar: Refresh first, then back/forward - all drawn
-        // in the nav-icon line style, the words live on hover.
         if top_icon_button(ui, widgets::TopIcon::Refresh, true, "Refresh") {
             reload(app);
         }
@@ -1069,81 +1118,78 @@ fn top_row(app: &mut App, ui: &mut egui::Ui) {
         }
         ui.add_space(6.0);
 
-        // Breadcrumbs: "My Files > a > b", compact - unframed segments,
-        // tight chevrons - collapsing the middle when the row would
-        // overflow ("..." stays inert). The crumb area is bounded so it
-        // can never stretch into the Refresh button's room.
-        let (segs, trash_view) = {
-            let c = &app.cloud;
-            let mut segs: Vec<String> = vec!["My Files".to_string()];
-            if !c.rel.is_empty() {
-                segs.extend(c.rel.split('/').map(str::to_string));
-            }
-            (segs, c.trash_view)
-        };
-        // The row's full remainder: nothing sits to the right of the crumbs
-        // anymore, so long paths get maximum room before the middle
-        // collapses to "...".
-        let crumb_w = ui.available_width().max(120.0);
-        // Each crumb carries its path from the uncollapsed list, so hiding
-        // middle segments never breaks where a visible crumb points.
-        let mut segs: Vec<(String, String)> = segs
-            .iter()
-            .enumerate()
-            .map(|(i, s)| {
-                let prefix = segs[1..=i]
-                    .iter()
-                    .map(String::as_str)
-                    .filter(|x| *x != "...")
-                    .collect::<Vec<_>>()
-                    .join("/");
-                (s.clone(), prefix)
-            })
-            .collect();
-        collapse_segments(&mut segs, crumb_w);
-        ui.allocate_ui_with_layout(
-            egui::vec2(crumb_w, 26.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                if trash_view {
-                    ui.label(egui::RichText::new("Trash").strong());
-                    return;
-                }
-                for (i, (seg, prefix)) in segs.iter().enumerate() {
-                    if i > 0 {
-                        ui.label(egui::RichText::new("\u{203a}").weak().size(12.0));
-                    }
-                    if seg == "..." {
-                        // A plain label keeps the same metrics as the crumbs
-                        // around it - a disabled Button sits a few px lower
-                        // and reads as a stumble in the row.
-                        ui.label(egui::RichText::new("\u{2026}").weak().size(13.5));
-                        continue;
-                    }
-                    let current = i == segs.len() - 1;
-                    let label = widgets::elide(seg, 34);
-                    if current {
-                        // Proton's breadcrumb: the open folder reads as bold
-                        // navy; ancestors are quiet, clickable text.
-                        ui.label(egui::RichText::new(&label).strong().size(13.5))
-                            .on_hover_text(format!("/{prefix}"));
-                    } else {
-                        let resp = ui
-                            .add(
-                                egui::Label::new(egui::RichText::new(&label).size(13.5))
-                                    .sense(egui::Sense::click()),
-                            )
-                            .on_hover_text(format!("/{prefix}"));
-                        if resp.clicked() {
-                            load(app, prefix.clone(), true, true, true);
-                        }
-                    }
-                }
-            },
-        );
-
+        let search_w = (ui.available_width() * 0.30).clamp(150.0, 240.0);
+        if !trash_view {
+            let crumb_w = (ui.available_width() - search_w - 12.0).max(120.0);
+            breadcrumb(app, ui, crumb_w);
+        }
+        ui.add_space(6.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_sized(
+                egui::vec2(search_w, 28.0),
+                egui::TextEdit::singleline(&mut app.cloud.query).hint_text("Search files..."),
+            );
+        });
     });
+}
+
+/// "My files / a / b" with clickable ancestors and a collapsed middle when
+/// the row is too narrow. The full path is always on the hover text.
+fn breadcrumb(app: &mut App, ui: &mut egui::Ui, crumb_w: f32) {
+    let segs = {
+        let c = &app.cloud;
+        let mut segs: Vec<String> = vec!["My files".to_string()];
+        if !c.rel.is_empty() {
+            segs.extend(c.rel.split('/').map(str::to_string));
+        }
+        segs
+    };
+    let mut segs: Vec<(String, String)> = segs
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let prefix = segs[1..=i]
+                .iter()
+                .map(String::as_str)
+                .filter(|x| *x != "...")
+                .collect::<Vec<_>>()
+                .join("/");
+            (s.clone(), prefix)
+        })
+        .collect();
+    collapse_segments(&mut segs, crumb_w);
+    ui.allocate_ui_with_layout(
+        egui::vec2(crumb_w, 26.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            for (i, (seg, prefix)) in segs.iter().enumerate() {
+                if i > 0 {
+                    ui.label(egui::RichText::new("\u{203a}").weak().size(12.0));
+                }
+                if seg == "..." {
+                    ui.label(egui::RichText::new("\u{2026}").weak().size(13.5));
+                    continue;
+                }
+                let current = i == segs.len() - 1;
+                let label = widgets::elide(seg, 34);
+                if current {
+                    ui.label(egui::RichText::new(&label).strong().size(13.5))
+                        .on_hover_text(format!("/{prefix}"));
+                } else {
+                    let resp = ui
+                        .add(
+                            egui::Label::new(egui::RichText::new(&label).size(13.5))
+                                .sense(egui::Sense::click()),
+                        )
+                        .on_hover_text(format!("/{prefix}"));
+                    if resp.clicked() {
+                        load(app, prefix.clone(), true, true, true);
+                    }
+                }
+            }
+        },
+    );
 }
 
 const HEAD_H: f32 = 26.0;
@@ -1243,7 +1289,7 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
     egui::Frame::new()
         .fill(theme::glass_fill(ui.visuals()))
         .stroke(theme::glass_stroke(ui.visuals()))
-        .corner_radius(egui::CornerRadius::same(18))
+        .corner_radius(egui::CornerRadius::same(12))
         .shadow(theme::card_shadow(ui.visuals()))
         .inner_margin(egui::Margin::symmetric(16, 12))
         .show(ui, |ui| {
@@ -1267,12 +1313,16 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
             });
             ui.separator();
 
-            let (trash_view, busy, sort_col, sort_desc) = {
+            let (trash_view, sort_col, sort_desc) = {
                 let c = &app.cloud;
-                (c.trash_view, c.busy, c.sort_col, c.sort_desc)
+                (c.trash_view, c.sort_col, c.sort_desc)
             };
             let rows = sorted(&app.cloud.entries, sort_col, sort_desc);
             let query = app.cloud.query.trim().to_lowercase();
+            let loading = app.cloud.status == "Opening...";
+            let load_failed = app.cloud.entries.is_empty()
+                && !loading
+                && app.cloud.status.starts_with("Couldn't open");
             // Frame margin (24) + gap (6) + the action row (~36).
             let max_h = (ui.available_height() - 66.0).max(120.0);
 
@@ -1283,10 +1333,11 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
                 .auto_shrink([false, false])
                 .max_height(max_h)
                 .show(ui, |ui| {
-                    for e in rows
+                    let filtered: Vec<&cli::RemoteEntry> = rows
                         .iter()
                         .filter(|e| query.is_empty() || e.name.to_lowercase().contains(&query))
-                    {
+                        .collect();
+                    for e in filtered.iter().copied() {
                         row(
                             app,
                             ui,
@@ -1300,43 +1351,87 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
                             &mut menu_item,
                         );
                     }
-                    // A folder with nothing in it gets a friendly, centred
-                    // empty state instead of a blank card.
-                    if rows.is_empty() && !busy {
+                    if filtered.is_empty() {
+                        let query_active = !query.is_empty();
                         ui.add_space(26.0);
                         ui.vertical_centered(|ui| {
-                            // Folder glyph on a soft accent disc - a designed
-                            // empty state instead of a lone emoji.
-                            let (r, _) = ui.allocate_exact_size(
-                                egui::vec2(64.0, 64.0),
-                                egui::Sense::hover(),
-                            );
-                            ui.painter().circle_filled(
-                                r.center(),
-                                32.0,
-                                theme::accent(ui.visuals()).gamma_multiply(0.12),
-                            );
-                            ui.painter().text(
-                                r.center(),
-                                egui::Align2::CENTER_CENTER,
-                                "\u{1f4c1}",
-                                egui::FontId::proportional(28.0),
-                                egui::Color32::WHITE,
-                            );
-                            ui.add_space(10.0);
-                            let msg = if trash_view {
-                                "Your trash is empty"
-                            } else {
-                                "This folder is empty"
-                            };
-                            ui.label(egui::RichText::new(msg).strong().size(15.0));
-                            ui.add_space(2.0);
-                            if !trash_view {
+                            if loading {
+                                ui.spinner();
+                                ui.add_space(8.0);
+                                ui.label(egui::RichText::new("Loading files\u{2026}").weak());
+                            } else if query_active {
                                 ui.label(
-                                    egui::RichText::new("Drop files here or use \u{201c}+ New\u{201d}")
+                                    egui::RichText::new("No files match")
+                                        .strong()
+                                        .size(15.0),
+                                );
+                                ui.add_space(2.0);
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "\u{201c}{}\u{201d}",
+                                        app.cloud.query.trim()
+                                    ))
+                                    .size(12.5)
+                                    .weak(),
+                                );
+                                ui.add_space(8.0);
+                                if ui.button("Clear search").clicked() {
+                                    app.cloud.query.clear();
+                                }
+                            } else if load_failed {
+                                ui.label(
+                                    egui::RichText::new("Couldn't open this folder")
+                                        .strong()
+                                        .size(15.0),
+                                );
+                                ui.add_space(2.0);
+                                ui.label(
+                                    egui::RichText::new("Check your connection and try again.")
                                         .size(12.5)
                                         .weak(),
                                 );
+                                ui.add_space(8.0);
+                                if ui.button("Retry").clicked() {
+                                    reload(app);
+                                }
+                            } else {
+                                // A drawn folder glyph on a soft accent disc -
+                                // no emoji in the file browser.
+                                let (r, _) = ui.allocate_exact_size(
+                                    egui::vec2(64.0, 64.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().circle_filled(
+                                    r.center(),
+                                    32.0,
+                                    theme::accent(ui.visuals()).gamma_multiply(0.10),
+                                );
+                                widgets::nav_icon(
+                                    ui.painter(),
+                                    egui::Rect::from_center_size(
+                                        r.center(),
+                                        egui::vec2(24.0, 24.0),
+                                    ),
+                                    widgets::NavIcon::Folder,
+                                    theme::accent(ui.visuals()),
+                                );
+                                ui.add_space(10.0);
+                                let msg = if trash_view {
+                                    "Your trash is empty"
+                                } else {
+                                    "This folder is empty"
+                                };
+                                ui.label(egui::RichText::new(msg).strong().size(15.0));
+                                ui.add_space(2.0);
+                                if !trash_view {
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "Drop files here or use Upload.",
+                                        )
+                                        .size(12.5)
+                                        .weak(),
+                                    );
+                                }
                             }
                         });
                         ui.add_space(18.0);
@@ -1396,7 +1491,7 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
             let del = ui.input(|i| i.key_pressed(egui::Key::Delete))
                 && !ui.ctx().text_edit_focused()
                 && app.dialog.is_none();
-            if del && !trash_view && !busy && !app.cloud.sel.is_empty() {
+            if del && !trash_view && !app.cloud.busy && !app.cloud.sel.is_empty() {
                 app.dialog = Some(super::Dialog::ConfirmTrash { n: app.cloud.sel.len() });
             }
         });
@@ -1886,72 +1981,76 @@ fn bottom_row(app: &mut App, ui: &mut egui::Ui) {
         .collect();
     let docs_only = !sel.is_empty() && sel.iter().all(|e| e.doc);
     let dl_enabled = !sel.is_empty() && !docs_only && !trash_view && !busy;
+    let query = app.cloud.query.trim().to_lowercase();
+    let visible = app
+        .cloud
+        .entries
+        .iter()
+        .filter(|e| query.is_empty() || e.name.to_lowercase().contains(&query))
+        .count();
+    let items = if visible == 1 {
+        "1 item".to_string()
+    } else {
+        format!("{visible} items")
+    };
 
-    ui.horizontal(|ui| {
-        ui.add(
-            egui::TextEdit::singleline(&mut app.cloud.query)
-                .hint_text("Search files...")
-                .desired_width(150.0),
+    if sel.is_empty() {
+        ui.horizontal(|ui| {
+            let short = widgets::elide(&status, 52);
+            let resp = ui
+                .add(egui::Label::new(egui::RichText::new(short).size(12.5).weak()).truncate());
+            if resp.hovered() {
+                let full = if status_tip.is_empty() { status } else { status_tip };
+                resp.clone().on_hover_text(full);
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(egui::RichText::new(&items).size(12.0).weak());
+            });
+        });
+        return;
+    }
+
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            egui::RichText::new(format!("{} selected", sel.len()))
+                .strong()
+                .size(12.5),
         );
-        ui.add_space(6.0);
-        // Status on the left, never justified: a justified truncate-label
-        // takes the whole row and clips the actions (the label's galley is
-        // laid to the full available width in a justified layout). Eliding
-        // also keeps a long done-message from crowding the buttons.
-        let short = widgets::elide(&status, 44);
-        let resp = ui
-            .add(egui::Label::new(egui::RichText::new(short).size(12.5).weak()).truncate());
-        if resp.hovered() {
-            let full = if status_tip.is_empty() { status } else { status_tip };
-            resp.clone().on_hover_text(full);
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // right_to_left: the first item sits at the row's right edge.
-            if trash_view {
-                // Trash only ever needs clean-up actions - no upload, no new
-                // folder, no download.
-                if ui
-                    .add_enabled(!busy, egui::Button::new("Empty trash"))
-                    .on_hover_text("Permanently delete everything in the trash")
-                    .clicked()
-                {
-                    app.dialog = Some(super::Dialog::ConfirmEmptyTrash);
-                }
-                if !sel.is_empty() {
-                    if widgets::danger_ghost_button(ui, "Delete permanently") {
-                        app.dialog = Some(super::Dialog::ConfirmDelete { n: sel.len() });
-                    }
-                    if ui.button("Restore").clicked() {
-                        action_restore(app);
-                    }
-                }
-                return;
+        ui.separator();
+        if trash_view {
+            if ui.add_enabled(!busy, egui::Button::new("Restore")).clicked() {
+                action_restore(app);
             }
-            if ui
-                .add_enabled(!busy, egui::Button::new("\u{2191} Upload"))
-                .on_hover_text("Upload files or a folder")
-                .clicked()
-            {
-                pick_upload_files(app);
+            let delete = ui
+                .add_enabled_ui(!busy, |ui| {
+                    widgets::danger_ghost_button(ui, "Delete permanently")
+                })
+                .inner;
+            if delete {
+                app.dialog = Some(super::Dialog::ConfirmDelete { n: sel.len() });
             }
+        } else {
             if ui
-                .add_enabled(!busy, egui::Button::new("New folder"))
-                .clicked()
-            {
-                app.input_buf.clear();
-                app.dialog = Some(super::Dialog::Input {
-                    title: "New folder".to_string(),
-                    label: "Folder name:".to_string(),
-                    intent: super::InputIntent::CloudNewFolder,
-                });
-            }
-            if ui
-                .add_enabled(dl_enabled, egui::Button::new("\u{2193} Download"))
+                .add_enabled(dl_enabled, egui::Button::new("Download"))
                 .clicked()
             {
                 pick_download(app);
             }
-        });
+            if ui
+                .add_enabled(!busy, egui::Button::new("Move to trash"))
+                .on_hover_text("Move the selected items to the Proton trash")
+                .clicked()
+            {
+                app.dialog = Some(super::Dialog::ConfirmTrash { n: sel.len() });
+            }
+        }
+        if ui
+            .button("Clear")
+            .on_hover_text("Clear the selection")
+            .clicked()
+        {
+            app.cloud.sel.clear();
+        }
     });
 }
 

@@ -1,3 +1,20 @@
+## 3.20.27 — 2026-11-06
+
+- **Project Clarity, phase 2: Files.** The browser now has a proper page
+  header: **Files** or **Trash**, with Upload/New folder or Empty trash in the
+  top-right, and a second row with refresh, back/forward, the breadcrumb, and a
+  right-aligned search field.
+- **The file list is quieter.** A 12 px card, the same solid surfaces as Home,
+  and a drawn folder empty state instead of an emoji. Column sorting, context
+  menus, drag/drop, keyboard selection and every existing action remain.
+- **Selection now gets its own bar.** “N selected” shows the count, with
+  Download, Move to trash, Restore, Delete permanently and Clear as
+  appropriate. With nothing selected, the bar shows the sync status and item
+  count.
+- **Trash is first-class.** Its header offers Empty trash; selected trash rows
+  can be restored or permanently deleted.
+- No engine, sync, or data-path changes in this phase.
+
 ## 3.20.26 — 2026-11-06
 
 - **Project Clarity, phase 1: the new app shell.** Neutral solid surfaces
