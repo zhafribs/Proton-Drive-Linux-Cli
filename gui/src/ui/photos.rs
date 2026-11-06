@@ -122,7 +122,8 @@ fn draw_upload_issues(
     ui: &mut egui::Ui,
     failed: &[FileIssue],
     skipped: &[FileIssue],
-    ready: bool,
+    can_retry: bool,
+    signed_out: bool,
 ) {
     if !failed.is_empty() {
         ui.add_space(8.0);
@@ -158,8 +159,12 @@ fn draw_upload_issues(
                         .weak(),
                 );
                 if ui
-                    .add_enabled(ready, egui::Button::new("Retry uploads"))
-                    .on_disabled_hover_text("Wait for the current photo action to finish.")
+                    .add_enabled(can_retry, egui::Button::new("Retry uploads"))
+                    .on_disabled_hover_text(if signed_out {
+                        "Sign in on Home first."
+                    } else {
+                        "Wait for the current photo action to finish."
+                    })
                     .clicked()
                 {
                     request_sync(app, None);
@@ -341,7 +346,7 @@ fn read_summary(app: &mut App) -> String {
         app.photos.attention = 0;
         app.photos.upload_skipped.clear();
         app.photos.upload_failed.clear();
-        return "Not synced yet - the engine syncs this folder with /photos.".to_string();
+        return "Not synced yet.".to_string();
     };
     let Ok(s) = serde_json::from_str::<SyncSummary>(&text) else {
         app.photos.upload_skipped.clear();
@@ -743,7 +748,22 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
     }
     app.photos.thumb_gen = app.photos.thumb_gen.wrapping_add(1);
 
-    // --- pinned header: never scrolls away ---
+    let photo_sync_on = app.conf.get("PROTON_SYNC_PHOTOS").is_none_or(|v| v != "0");
+    let syncing =
+        app.health.status == "syncing" || app.health.phase.as_deref() == Some("photos");
+    let ready = !app.photos.busy && !app.photos.deleting && !syncing;
+    let signed_out = matches!(
+        app.ui_status(),
+        crate::health::UiStatus::SignedOut
+            | crate::health::UiStatus::NeedsLogin
+            | crate::health::UiStatus::SigningIn
+    );
+    let can_act = ready && !signed_out;
+    let sel = app.photos.sel.clone();
+    let total: u64 = app.photos.items.iter().map(|p| p.size).sum();
+
+    // --- pinned header: title, count, then the actions on their own row so
+    // they wrap cleanly at the minimum window width ---
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Photos").strong().size(24.0));
         widgets::info_icon(
@@ -751,7 +771,6 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
             "Click a photo to select it for download or delete.",
         );
         if !app.photos.items.is_empty() {
-            let total: u64 = app.photos.items.iter().map(|p| p.size).sum();
             ui.add_space(10.0);
             ui.label(
                 egui::RichText::new(format!(
@@ -763,42 +782,10 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
             );
         }
     });
-    ui.add_space(2.0);
-    ui.horizontal_wrapped(|ui| {
-        ui.label(
-            egui::RichText::new("Two-way sync with /photos")
-                .weak()
-                .size(12.0),
-        );
-        ui.label(egui::RichText::new("\u{b7}").weak().size(12.0));
-        ui.label(egui::RichText::new(short_path(&dir)).weak().size(12.0))
-            .on_hover_text(dir.display().to_string());
-    });
-    if !app.photos.last_sync.is_empty() {
-        let color = if app.photos.attention > 0 {
-            theme::warning_text(ui.visuals())
-        } else {
-            ui.visuals().weak_text_color()
-        };
-        ui.label(
-            egui::RichText::new(&app.photos.last_sync)
-                .size(12.0)
-                .color(color),
-        );
-    }
-    ui.add_space(10.0);
-
-    // One calm action card. A selection replaces the normal actions, so the
-    // page never shows two competing toolbars.
-    widgets::card(ui, None, |ui| {
-        let photo_sync_on = app.conf.get("PROTON_SYNC_PHOTOS").is_none_or(|v| v != "0");
-        let syncing =
-            app.health.status == "syncing" || app.health.phase.as_deref() == Some("photos");
-        let ready = !app.photos.busy && !app.photos.deleting && !syncing;
-        let sel = app.photos.sel.clone();
-
+    ui.add_space(6.0);
+    if sel.is_empty() {
         ui.horizontal_wrapped(|ui| {
-            if sel.is_empty() {
+            if !signed_out {
                 if app.active && photo_sync_on {
                     if ready {
                         if widgets::primary_button_hint(
@@ -835,7 +822,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                 }
                 if ui
                     .add_enabled(
-                        ready && !app.photos.items.is_empty(),
+                        can_act && !app.photos.items.is_empty(),
                         egui::Button::new("Download missing"),
                     )
                     .on_hover_text(
@@ -858,14 +845,52 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                         download(app, missing);
                     }
                 }
-            } else {
+            }
+            if ui.button("Open folder").clicked() {
+                let _ = std::fs::create_dir_all(&dir);
+                App::open_url(&dir.to_string_lossy());
+            }
+        });
+    }
+    ui.add_space(2.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            egui::RichText::new("Two-way sync with /photos")
+                .weak()
+                .size(12.0),
+        );
+        ui.label(egui::RichText::new("\u{b7}").weak().size(12.0));
+        ui.label(egui::RichText::new(short_path(&dir)).weak().size(12.0))
+            .on_hover_text(dir.display().to_string());
+    });
+    if !app.photos.last_sync.is_empty() {
+        let color = if app.photos.attention > 0 {
+            theme::warning_text(ui.visuals())
+        } else {
+            ui.visuals().weak_text_color()
+        };
+        ui.label(
+            egui::RichText::new(&app.photos.last_sync)
+                .size(12.0)
+                .color(color),
+        );
+    }
+    if signed_out {
+        ui.label(
+            egui::RichText::new("Sign in on Home to sync photos.")
+                .size(12.0)
+                .weak(),
+        );
+    }
+
+    if !sel.is_empty() {
+        ui.add_space(8.0);
+        widgets::card(ui, None, |ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(egui::RichText::new(format!("{} selected", sel.len())).strong());
                 ui.add_space(4.0);
                 if ui
-                    .add_enabled(
-                        ready,
-                        egui::Button::new(format!("Download {}", sel.len())),
-                    )
+                    .add_enabled(can_act, egui::Button::new(format!("Download {}", sel.len())))
                     .clicked()
                 {
                     let missing: Vec<String> = app
@@ -887,10 +912,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                     }
                 }
                 if ui
-                    .add_enabled(
-                        ready,
-                        egui::Button::new(format!("Delete {}", sel.len())),
-                    )
+                    .add_enabled(can_act, egui::Button::new(format!("Delete {}", sel.len())))
                     .on_hover_text("Move to the Proton photos trash and remove the local copy")
                     .clicked()
                 {
@@ -900,13 +922,31 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                     app.photos.sel.clear();
                 }
                 ui.separator();
-            }
-            if ui.button("Open folder").clicked() {
-                let _ = std::fs::create_dir_all(&dir);
-                App::open_url(&dir.to_string_lossy());
-            }
+                if ui.button("Open folder").clicked() {
+                    let _ = std::fs::create_dir_all(&dir);
+                    App::open_url(&dir.to_string_lossy());
+                }
+            });
         });
-    });
+    }
+
+    if syncing && app.active && photo_sync_on {
+        ui.add_space(8.0);
+        widgets::card(ui, None, |ui| {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(
+                    egui::RichText::new(if app.health.phase.as_deref() == Some("photos") {
+                        "Syncing photos\u{2026}"
+                    } else {
+                        "Waiting for the file sync to finish\u{2026}"
+                    })
+                    .size(12.5)
+                    .weak(),
+                );
+            });
+        });
+    }
 
     if !app.photos.error.is_empty() {
         ui.add_space(8.0);
@@ -932,9 +972,6 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
         ui.label(egui::RichText::new(&app.photos.status).weak());
     }
 
-    let syncing =
-        app.health.status == "syncing" || app.health.phase.as_deref() == Some("photos");
-    let ready = !app.photos.busy && !app.photos.deleting && !syncing;
     let failed_issues = app.photos.upload_failed.clone();
     let skipped_issues = app.photos.upload_skipped.clone();
 
@@ -943,7 +980,14 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
         .id_salt("photos-scroll")
         .auto_shrink([false, false])
         .show_viewport(ui, |ui, viewport| {
-            draw_upload_issues(app, ui, &failed_issues, &skipped_issues, ready);
+            draw_upload_issues(
+                app,
+                ui,
+                &failed_issues,
+                &skipped_issues,
+                can_act,
+                signed_out,
+            );
             if app.photos.items.is_empty() {
                 if !app.photos.loading && app.photos.error.is_empty() {
                     ui.add_space(18.0);
@@ -1293,16 +1337,21 @@ fn tile(ui: &mut egui::Ui, app: &mut App, p: &cli::PhotoEntry, dir: &std::path::
                     .color(color),
             );
             if matches!(state, TileState::Missing | TileState::Incomplete) {
+                let can_act = !app.photos.busy
+                    && !app.photos.deleting
+                    && !matches!(
+                        app.ui_status(),
+                        crate::health::UiStatus::SignedOut
+                            | crate::health::UiStatus::NeedsLogin
+                            | crate::health::UiStatus::SigningIn
+                    );
                 let label = if state == TileState::Incomplete {
                     "Re-download"
                 } else {
                     "Download"
                 };
                 if ui
-                    .add_enabled(
-                        !app.photos.busy && !app.photos.deleting,
-                        egui::Button::new(label).small(),
-                    )
+                    .add_enabled(can_act, egui::Button::new(label).small())
                     .clicked()
                 {
                     if state == TileState::Incomplete {

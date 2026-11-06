@@ -1,3 +1,19 @@
+## 3.20.28 — 2026-11-06
+
+- **Project Clarity, phase 3: Photos.** The page header now carries the real
+  actions — **Sync photos**, **Download missing**, **Open folder** — with the
+  same hierarchy as Home and Files. The old action card is gone.
+- **Selection has its own bar.** “N selected” with Download, Delete, Clear
+  selection and Open folder; all busy/sync guards remain.
+- **Syncing is visible.** While a photo pass is running, a compact banner says
+  “Syncing photos…” or “Waiting for the file sync to finish…” instead of leaving
+  a disabled button with no explanation.
+- **Signed-out photo actions are honest.** Sync/Download/Delete are unavailable
+  until you sign in on Home; the page no longer offers actions that can only
+  fail.
+- The grid, date grouping, thumbnails, skipped/failed cards, selection toggle,
+  per-tile actions and photo deletion confirmation are unchanged.
+
 ## 3.20.27 — 2026-11-06
 
 - **Project Clarity, phase 2: Files.** The browser now has a proper page
