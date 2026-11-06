@@ -1,6 +1,6 @@
 # Proton Drive Linux — Project Clarity
 
-**Status:** Phase 1 shipped in 3.20.26 — shell, Home, Activity  
+**Status:** Phase 4 shipped in 3.20.29 — shell, Home, Activity, Files, Photos, Settings  
 **Scope:** whole application, not a theme refresh  
 **Foundation:** GNOME / libadwaita behavior, Proton brand, Material and Fluent discipline
 
@@ -243,11 +243,11 @@ Every phase ships only if:
 | Phase | Deliverable | User-visible? |
 |---|---|---|
 | 0 | This constitution, tokens, component inventory, visual prototype | No |
-| 1 | New shell, sidebar, header, Home | Yes |
-| 2 | Files table + Activity timeline | Yes |
-| 3 | Photos grid + import progress + notices | Yes |
-| 4 | Settings rebuild + unified save model + dialogs | Yes |
-| 5 | Onboarding, accessibility audit, motion/performance polish | Yes |
+| 1 | New shell, sidebar, header, Home (3.20.26) | Yes |
+| 2 | Files page + Activity (3.20.27) | Yes |
+| 3 | Photos header, selection, sync states (3.20.28) | Yes |
+| 4 | Settings unified save model (3.20.29) | Yes |
+| 5 | Onboarding, accessibility audit, motion/performance polish | Next |
 
 Each phase gets a three-seat review (design, engineering, QA), a version bump,
 and a signed release. No phase is a big-bang rewrite.
