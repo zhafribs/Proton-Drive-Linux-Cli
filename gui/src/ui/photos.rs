@@ -39,6 +39,8 @@ pub struct PhotoState {
     pub items: Vec<cli::PhotoEntry>,
     /// A fetch has been started (the page only auto-fetches once).
     pub loaded: bool,
+    /// The local photos folder was ensured this session.
+    pub dir_ready: bool,
     pub loading: bool,
     /// A download is in flight.
     pub busy: bool,
@@ -228,10 +230,10 @@ fn shorten(text: &str, max: usize) -> String {
 /// The page was shown (navigation): list the timeline the first time only.
 pub fn on_shown(app: &mut App) {
     // The folder existing is what turns the engine's photo sync on, so create
-    // it the first time the page is opened.
-    let _ = std::fs::create_dir_all(local_dir(app));
-    // Later re-reads come from `tick` (folder or engine summary changed), not
-    // from a timer: a background reload every minute only flickered.
+    // it once per session. Re-reading the timeline comes from `tick`.
+    if !app.photos.dir_ready && std::fs::create_dir_all(local_dir(app)).is_ok() {
+        app.photos.dir_ready = true;
+    }
     if !app.photos.loaded {
         refresh(app);
     }
@@ -934,7 +936,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
         ui.add_space(8.0);
         widgets::card(ui, None, |ui| {
             ui.horizontal(|ui| {
-                ui.spinner();
+                widgets::busy_spinner(ui, app.prefs.motion_enabled());
                 ui.label(
                     egui::RichText::new(if app.health.phase.as_deref() == Some("photos") {
                         "Syncing photos\u{2026}"

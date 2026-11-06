@@ -114,6 +114,16 @@ pub fn success_text(visuals: &egui::Visuals) -> egui::Color32 {
     }
 }
 
+/// Info blue for glyphs and dots: lighter on dark surfaces so the 3:1
+/// non-text bar still holds.
+pub fn info_text(visuals: &egui::Visuals) -> egui::Color32 {
+    if visuals.dark_mode {
+        egui::Color32::from_rgb(0x7D, 0xA7, 0xFF)
+    } else {
+        INFO
+    }
+}
+
 /// Text colour for a status pill: the dot uses [`status_color`], the label
 /// uses this so 11–12 px text keeps AA contrast on its tinted background.
 pub fn status_text_color(key: &str, visuals: &egui::Visuals) -> egui::Color32 {
@@ -240,7 +250,7 @@ pub fn force(ctx: &egui::Context, theme: &Theme) {
 /// the same corner radius, checkboxes cap their rounding themselves, and
 /// `strong_text_color()` resolves to `widgets.active.fg_stroke` - so the
 /// whole look cascades from these two blocks.
-pub fn apply(ctx: &egui::Context, _theme: &Theme) {
+pub fn apply(ctx: &egui::Context, _theme: &Theme, animate: bool) {
     let mut base = ctx.style_of(egui::Theme::Dark).as_ref().clone();
     base.spacing.item_spacing = egui::vec2(10.0, 8.0);
     base.spacing.button_padding = egui::vec2(14.0, 7.0);
@@ -330,6 +340,11 @@ pub fn apply(ctx: &egui::Context, _theme: &Theme) {
     for (t, visuals) in [(egui::Theme::Light, light), (egui::Theme::Dark, dark)] {
         let mut style = base.clone();
         style.visuals = visuals;
+        style.animation_time = if animate {
+            egui::Style::default().animation_time
+        } else {
+            0.0
+        };
         ctx.set_style_of(t, style);
     }
 }
@@ -351,6 +366,20 @@ mod tests {
             ctx.options(|o| o.theme_preference),
             egui::ThemePreference::System
         );
+    }
+
+    #[test]
+    fn motion_off_disables_widget_animation() {
+        let ctx = egui::Context::default();
+        force(&ctx, &Theme::Dark);
+        apply(&ctx, &Theme::Dark, false);
+        assert_eq!(ctx.style_of(egui::Theme::Dark).animation_time, 0.0);
+        apply(&ctx, &Theme::Dark, true);
+        assert!(ctx.style_of(egui::Theme::Dark).animation_time > 0.0);
+        apply(&ctx, &Theme::Light, false);
+        assert_eq!(ctx.style_of(egui::Theme::Light).animation_time, 0.0);
+        apply(&ctx, &Theme::Light, true);
+        assert!(ctx.style_of(egui::Theme::Light).animation_time > 0.0);
     }
 
     fn luminance(c: egui::Color32) -> f64 {
@@ -395,10 +424,13 @@ mod tests {
             (MUTED, SURFACE, 3.0),
             (MUTED, DARK_PAGE, 3.0),
             (SUCCESS, SURFACE, 3.0),
+            (SUCCESS, DARK_SURFACE, 3.0),
             (WARNING, SURFACE, 3.0),
             (SUCCESS, DARK_PAGE, 3.0),
             (WARNING, DARK_PAGE, 4.5),
             (WARNING, DARK_SURFACE, 4.5),
+            (info_text(&egui::Visuals::dark()), DARK_SURFACE, 3.0),
+            (info_text(&egui::Visuals::light()), SURFACE, 4.5),
             (egui::Color32::WHITE, ACCENT, 4.5),
         ] {
             let r = ratio(fg, bg);

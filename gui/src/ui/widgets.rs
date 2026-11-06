@@ -126,12 +126,58 @@ pub fn secondary_button_hint(ui: &mut egui::Ui, text: &str, hint: &str) -> bool 
 }
 
 pub fn danger_ghost_button(ui: &mut egui::Ui, text: &str) -> bool {
-    ui.add(
-        egui::Button::new(egui::RichText::new(text).color(theme::ERROR))
-            .stroke(egui::Stroke::new(1.0, theme::ERROR.gamma_multiply(0.5)))
+    let red = theme::danger_text(ui.visuals());
+    let response = ui.add(
+        egui::Button::new(egui::RichText::new(text).color(red))
+            // Keep the surface behind the red text on hover/focus too; the
+            // accent active fill drops the text below AA.
+            .fill(theme::glass_fill(ui.visuals()))
+            .stroke(egui::Stroke::new(1.0, red.gamma_multiply(0.5)))
             .corner_radius(theme::pill()),
-    )
-    .clicked()
+    );
+    // The explicit fill/stroke also override egui's hover and focus styling,
+    // so draw those cues ourselves.
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        ui.painter().rect_stroke(
+            response.rect.expand(2.0),
+            theme::pill(),
+            egui::Stroke::new(1.0, red.gamma_multiply(0.8)),
+            egui::StrokeKind::Inside,
+        );
+    }
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            response.rect.expand(2.0),
+            theme::pill(),
+            egui::Stroke::new(1.5, theme::accent(ui.visuals())),
+            egui::StrokeKind::Inside,
+        );
+    }
+    response.clicked()
+}
+
+/// Busy indicator. With motion off it becomes a static ring, so the row still
+/// says "working" without a continuous repaint.
+pub fn busy_spinner(ui: &mut egui::Ui, animate: bool) {
+    if animate {
+        ui.spinner();
+    } else {
+        let (rect, resp) =
+            ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+        resp.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::Role::ProgressIndicator,
+                ui.is_enabled(),
+                "Working",
+            )
+        });
+        ui.painter().circle_stroke(
+            rect.center(),
+            7.0,
+            egui::Stroke::new(2.0, ui.visuals().weak_text_color()),
+        );
+    }
 }
 
 /// Toggle row: checkbox + optional hover explanation.
@@ -322,10 +368,10 @@ pub fn status_orb(ui: &mut egui::Ui, status: &str, animate: bool) {
 
 fn dir_color(dir: Dir, visuals: &egui::Visuals) -> egui::Color32 {
     match dir {
-        Dir::Up => theme::SUCCESS_TEXT,
-        Dir::Down => theme::INFO,
+        Dir::Up => theme::success_text(visuals),
+        Dir::Down => theme::info_text(visuals),
         Dir::Other => theme::muted(visuals),
-        Dir::Warn => theme::WARNING_TEXT,
+        Dir::Warn => theme::warning_text(visuals),
     }
 }
 

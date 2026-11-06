@@ -1,3 +1,24 @@
+## 3.20.32 — 2026-11-07
+
+- **“Animate status changes” now reaches the rest of the app.** Toasts,
+  spinners and egui's widget transitions stop animating when it is off;
+  `PROTON_UI_MOTION=0` now applies the same freeze to those surfaces, not just
+  the Home orb.
+- **Files is honest while signed out.** Upload and New folder are hidden,
+  account actions are disabled, and an inline sign-in banner explains why.
+  The remote listing is skipped (cached names stay visible), and an empty
+  signed-out browser offers Sign in instead of claiming the folder is empty.
+- **Accessibility pass on Files and the selective-sync tree.** Toolbar
+  buttons, sort headers, breadcrumbs and folder-tree rows now expose
+  accessible names; sort direction and mixed checkbox state are announced;
+  headers, breadcrumbs and checkboxes work with Enter/Space and show a focus
+  ring.
+- **Contrast fixes.** Destructive ghost buttons use the AA danger colour and
+  keep their surface fill when focused; activity icons and the download glyph
+  now use theme-aware success, info and warning colours, with WCAG checks.
+- The Photos page marks its local folder ready only after creation succeeds,
+  and re-checks it after Save, rather than on every frame.
+
 ## 3.20.31 — 2026-11-06
 
 - **Activity icons are drawn geometry now.** The up/down arrows, the removed

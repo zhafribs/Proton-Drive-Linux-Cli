@@ -161,11 +161,29 @@ fn load_inner(app: &mut App, rel: String, push: bool, announce: bool, paint: boo
             .is_some_and(|t| epoch_now() - *t < LIST_TTL);
     if fresh {
         if announce && (app.cloud.status == "Opening..." || app.cloud.status.is_empty()) {
-            app.cloud.status = if app.cloud.entries.is_empty() {
+            app.cloud.status = if !app.can_transfer() {
+                "Sign in to load your files.".to_string()
+            } else if app.cloud.entries.is_empty() {
                 "This folder is empty.".to_string()
             } else {
                 String::new()
             };
+        }
+        return;
+    }
+
+    if !app.can_transfer() {
+        if announce && app.cloud.status == "Opening..." {
+            app.cloud.status = if matches!(
+                app.ui_status(),
+                crate::health::UiStatus::SigningIn
+            ) {
+                "Signing in…".to_string()
+            } else {
+                "Sign in to load your files.".to_string()
+            };
+            app.cloud.status_tip
+                .push_str("Cached names stay visible; the remote listing needs a session.");
         }
         return;
     }
@@ -197,6 +215,21 @@ pub fn load_trash(app: &mut App, announce: bool) {
         .or_else(|| app.cloud.disk.get(TRASH_KEY).map(|d| d.entries.clone()));
     if let Some(src) = src {
         fill(app, src);
+    }
+    if !app.can_transfer() {
+        if announce && app.cloud.status == "Opening..." {
+            app.cloud.status = if matches!(
+                app.ui_status(),
+                crate::health::UiStatus::SigningIn
+            ) {
+                "Signing in…".to_string()
+            } else {
+                "Sign in to load your trash.".to_string()
+            };
+            app.cloud.status_tip
+                .push_str("Cached names stay visible; the remote listing needs a session.");
+        }
+        return;
     }
     let serial = app.cloud.serial;
     let tx = app.tx.clone();
@@ -538,6 +571,10 @@ pub fn action_duplicate(app: &mut App) {
 // ------------------------------------------------------- uploads / downloads
 
 pub fn pick_upload_files(app: &mut App) {
+    if !app.can_transfer() {
+        app.toast_error("Sign in to upload files.");
+        return;
+    }
     let tx = app.tx.clone();
     std::thread::spawn(move || {
         let paths = portal::open_files();
@@ -547,6 +584,10 @@ pub fn pick_upload_files(app: &mut App) {
 }
 
 pub fn pick_upload_folder(app: &mut App) {
+    if !app.can_transfer() {
+        app.toast_error("Sign in to upload folders.");
+        return;
+    }
     let tx = app.tx.clone();
     std::thread::spawn(move || {
         let picked = portal::open_dir("Upload folder").map(super::Picked::UploadFolder);
@@ -555,6 +596,10 @@ pub fn pick_upload_folder(app: &mut App) {
 }
 
 pub fn pick_download(app: &mut App) {
+    if !app.can_transfer() {
+        app.toast_error("Sign in to download files.");
+        return;
+    }
     // Selections with only Proton documents can't be downloaded.
     let plain: Vec<String> = app
         .cloud
@@ -986,7 +1031,8 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn page_head(app: &mut App, ui: &mut egui::Ui) {
-    let (trash_view, busy) = (app.cloud.trash_view, app.cloud.busy);
+    let (trash_view, busy, can_transfer) =
+        (app.cloud.trash_view, app.cloud.busy, app.can_transfer());
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(if trash_view { "Trash" } else { "Files" })
@@ -995,14 +1041,15 @@ fn page_head(app: &mut App, ui: &mut egui::Ui) {
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if trash_view {
-                if ui
-                    .add_enabled(!busy, egui::Button::new("Empty trash"))
-                    .on_hover_text("Permanently delete everything in the trash")
-                    .clicked()
+                if can_transfer
+                    && ui
+                        .add_enabled(!busy, egui::Button::new("Empty trash"))
+                        .on_hover_text("Permanently delete everything in the trash")
+                        .clicked()
                 {
                     app.dialog = Some(super::Dialog::ConfirmEmptyTrash);
                 }
-            } else {
+            } else if can_transfer {
                 let upload = ui
                     .add_enabled_ui(!busy, |ui| {
                         widgets::primary_button_hint(
@@ -1030,6 +1077,51 @@ fn page_head(app: &mut App, ui: &mut egui::Ui) {
             }
         });
     });
+    if !can_transfer {
+        sign_in_banner(app, ui);
+    }
+}
+
+/// A signed-out browser is still useful for cached names, but every action
+/// would fail against the CLI. Say why and offer the one action that works.
+fn sign_in_banner(app: &mut App, ui: &mut egui::Ui) {
+    let signing_in = matches!(app.ui_status(), crate::health::UiStatus::SigningIn);
+    let message = if app.cloud.trash_view {
+        "Sign in to restore or permanently delete items."
+    } else {
+        "Sign in to upload, download and sync."
+    };
+    egui::Frame::new()
+        .fill(theme::accent_soft(ui.visuals()))
+        .corner_radius(egui::CornerRadius::same(10))
+        .inner_margin(egui::Margin::symmetric(14, 10))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(message)
+                        .size(13.0),
+                );
+                ui.with_layout(
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
+                        if signing_in {
+                            ui.label(
+                                egui::RichText::new("Signing in\u{2026}")
+                                    .size(12.5)
+                                    .weak(),
+                            );
+                        } else if widgets::primary_button_hint(
+                            ui,
+                            "Sign in",
+                            "Open the Proton sign-in terminal.",
+                        ) {
+                            app.action_login();
+                        }
+                    },
+                );
+            });
+        });
+    ui.add_space(8.0);
 }
 
 /// A square icon button for the files toolbar: the glyph is painted onto an
@@ -1041,6 +1133,9 @@ fn top_icon_button(ui: &mut egui::Ui, kind: widgets::TopIcon, enabled: bool, hov
             egui::Button::new(egui::RichText::new("")).min_size(egui::vec2(30.0, 30.0)),
         )
         .on_hover_text(hover);
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::Button, enabled, hover)
+    });
     let color = if enabled {
         ui.visuals().text_color()
     } else {
@@ -1183,7 +1278,27 @@ fn breadcrumb(app: &mut App, ui: &mut egui::Ui, crumb_w: f32) {
                                 .sense(egui::Sense::click()),
                         )
                         .on_hover_text(format!("/{prefix}"));
-                    if resp.clicked() {
+                    resp.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::Role::Button,
+                            ui.is_enabled(),
+                            format!("Open {}", seg),
+                        )
+                    });
+                    if resp.has_focus() {
+                        ui.painter().rect_stroke(
+                            resp.rect.expand(2.0),
+                            egui::CornerRadius::same(4),
+                            egui::Stroke::new(1.5, theme::accent(ui.visuals())),
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                    let keyboard = resp.has_focus()
+                        && ui.input(|i| {
+                            i.key_pressed(egui::Key::Enter)
+                                || i.key_pressed(egui::Key::Space)
+                        });
+                    if resp.clicked() || keyboard {
                         load(app, prefix.clone(), true, true, true);
                     }
                 }
@@ -1208,6 +1323,27 @@ fn header_cell(app: &mut App, ui: &mut egui::Ui, w: f32, label: &str, col: usize
         ui.visuals().weak_text_color()
     };
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, HEAD_H), egui::Sense::click());
+    let descending = app.cloud.sort_desc;
+    resp.widget_info(|| {
+        let name = if active {
+            format!(
+                "Sort by {label}, {}",
+                if descending { "descending" } else { "ascending" }
+            )
+        } else {
+            format!("Sort by {label}")
+        };
+        egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), name)
+    });
+    if active {
+        let direction = if descending {
+            egui::accesskit::SortDirection::Descending
+        } else {
+            egui::accesskit::SortDirection::Ascending
+        };
+        ui.ctx()
+            .accesskit_node_builder(resp.id, |n| n.set_sort_direction(direction));
+    }
 
     let layout = if right {
         egui::Layout::right_to_left(egui::Align::Center)
@@ -1245,13 +1381,26 @@ fn header_cell(app: &mut App, ui: &mut egui::Ui, w: f32, label: &str, col: usize
     }
 
     if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         ui.painter().hline(
             rect.x_range(),
             rect.bottom() - 1.0,
             ui.visuals().widgets.noninteractive.fg_stroke,
         );
     }
-    if resp.clicked() {
+    if resp.has_focus() {
+        ui.painter().rect_stroke(
+            rect.shrink(2.0),
+            egui::CornerRadius::same(6),
+            egui::Stroke::new(1.5, accent),
+            egui::StrokeKind::Inside,
+        );
+    }
+    let keyboard = resp.has_focus()
+        && ui.input(|i| {
+            i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space)
+        });
+    if resp.clicked() || keyboard {
         // Same column flips the order, a new column starts ascending.
         if app.cloud.sort_col == col {
             app.cloud.sort_desc = !app.cloud.sort_desc;
@@ -1356,7 +1505,7 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
                         ui.add_space(26.0);
                         ui.vertical_centered(|ui| {
                             if loading {
-                                ui.spinner();
+                                widgets::busy_spinner(ui, app.prefs.motion_enabled());
                                 ui.add_space(8.0);
                                 ui.label(egui::RichText::new("Loading files\u{2026}").weak());
                             } else if query_active {
@@ -1378,7 +1527,7 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
                                 if ui.button("Clear search").clicked() {
                                     app.cloud.query.clear();
                                 }
-                            } else if load_failed {
+                            } else if load_failed && app.can_transfer() {
                                 ui.label(
                                     egui::RichText::new("Couldn't open this folder")
                                         .strong()
@@ -1393,6 +1542,69 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
                                 ui.add_space(8.0);
                                 if ui.button("Retry").clicked() {
                                     reload(app);
+                                }
+                            } else if !app.can_transfer() {
+                                let (r, _) = ui.allocate_exact_size(
+                                    egui::vec2(64.0, 64.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().circle_filled(
+                                    r.center(),
+                                    32.0,
+                                    theme::accent(ui.visuals()).gamma_multiply(0.10),
+                                );
+                                widgets::nav_icon(
+                                    ui.painter(),
+                                    egui::Rect::from_center_size(
+                                        r.center(),
+                                        egui::vec2(24.0, 24.0),
+                                    ),
+                                    widgets::NavIcon::Folder,
+                                    theme::accent(ui.visuals()),
+                                );
+                                ui.add_space(10.0);
+                                if trash_view {
+                                    ui.label(
+                                        egui::RichText::new("Sign in to see your trash")
+                                            .strong()
+                                            .size(15.0),
+                                    );
+                                    ui.add_space(2.0);
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "Deleted files stay here until you sign in.",
+                                        )
+                                        .size(12.5)
+                                        .weak(),
+                                    );
+                                } else {
+                                    ui.label(
+                                        egui::RichText::new("Sign in to see your files")
+                                            .strong()
+                                            .size(15.0),
+                                    );
+                                    ui.add_space(2.0);
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "Your files will appear here after you sign in.",
+                                        )
+                                        .size(12.5)
+                                        .weak(),
+                                    );
+                                }
+                                ui.add_space(8.0);
+                                let signing_in = matches!(
+                                    app.ui_status(),
+                                    crate::health::UiStatus::SigningIn
+                                );
+                                if signing_in {
+                                    ui.label(
+                                        egui::RichText::new("Signing in…")
+                                            .size(12.5)
+                                            .weak(),
+                                    );
+                                } else if widgets::primary_button_hint(ui, "Sign in", "") {
+                                    app.action_login();
                                 }
                             } else {
                                 // A drawn folder glyph on a soft accent disc -
@@ -1446,23 +1658,39 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
                     if resp.clicked() && !app.cloud.sel.is_empty() {
                         app.cloud.sel.clear();
                     }
+                    let can_transfer = app.can_transfer();
                     resp.context_menu(|ui| {
                         if trash_view {
-                            if ui.button("Empty trash").clicked() {
+                            if ui
+                                .add_enabled(
+                                    can_transfer,
+                                    egui::Button::new("Empty trash"),
+                                )
+                                .clicked()
+                            {
                                 ui.close();
                                 menu_item = Some("emptytrash");
                             }
                             return;
                         }
-                        if ui.button("New folder...").clicked() {
+                        if ui
+                            .add_enabled(can_transfer, egui::Button::new("New folder..."))
+                            .clicked()
+                        {
                             ui.close();
                             menu_item = Some("newfolder");
                         }
-                        if ui.button("Upload files...").clicked() {
+                        if ui
+                            .add_enabled(can_transfer, egui::Button::new("Upload files..."))
+                            .clicked()
+                        {
                             ui.close();
                             menu_item = Some("uploadfiles");
                         }
-                        if ui.button("Upload folder...").clicked() {
+                        if ui
+                            .add_enabled(can_transfer, egui::Button::new("Upload folder..."))
+                            .clicked()
+                        {
                             ui.close();
                             menu_item = Some("uploadfolder");
                         }
@@ -1491,7 +1719,12 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
             let del = ui.input(|i| i.key_pressed(egui::Key::Delete))
                 && !ui.ctx().text_edit_focused()
                 && app.dialog.is_none();
-            if del && !trash_view && !app.cloud.busy && !app.cloud.sel.is_empty() {
+            if del
+                && !trash_view
+                && !app.cloud.busy
+                && app.can_transfer()
+                && !app.cloud.sel.is_empty()
+            {
                 app.dialog = Some(super::Dialog::ConfirmTrash { n: app.cloud.sel.len() });
             }
         });
@@ -1779,13 +2012,20 @@ fn row(
 /// The context menu shared by a row and each of its cells, so right-clicking
 /// the name (or the size/date text) opens the same menu as the row background.
 fn row_menu_body(app: &mut App, ui: &mut egui::Ui, menu_item: &mut Option<&'static str>) {
+    let can_transfer = app.can_transfer();
     if app.cloud.trash_view {
-        if ui.button("Restore").clicked() {
+        if ui
+            .add_enabled(can_transfer, egui::Button::new("Restore"))
+            .clicked()
+        {
             ui.close();
             *menu_item = Some("restore");
         }
         ui.separator();
-        if ui.button("Delete permanently").clicked() {
+        if ui
+            .add_enabled(can_transfer, egui::Button::new("Delete permanently"))
+            .clicked()
+        {
             ui.close();
             *menu_item = Some("delete");
         }
@@ -1793,15 +2033,24 @@ fn row_menu_body(app: &mut App, ui: &mut egui::Ui, menu_item: &mut Option<&'stat
     }
     let sel = &app.cloud.sel;
     if sel.is_empty() {
-        if ui.button("New folder...").clicked() {
+        if ui
+            .add_enabled(can_transfer, egui::Button::new("New folder..."))
+            .clicked()
+        {
             ui.close();
             *menu_item = Some("newfolder");
         }
-        if ui.button("Upload files...").clicked() {
+        if ui
+            .add_enabled(can_transfer, egui::Button::new("Upload files..."))
+            .clicked()
+        {
             ui.close();
             *menu_item = Some("uploadfiles");
         }
-        if ui.button("Upload folder...").clicked() {
+        if ui
+            .add_enabled(can_transfer, egui::Button::new("Upload folder..."))
+            .clicked()
+        {
             ui.close();
             *menu_item = Some("uploadfolder");
         }
@@ -1825,15 +2074,26 @@ fn row_menu_body(app: &mut App, ui: &mut egui::Ui, menu_item: &mut Option<&'stat
             if it.dir && ui.button("Open").clicked() {
                 ui.close();
                 *menu_item = Some("open");
-            } else if !it.dir && !it.doc && ui.button("Download").clicked() {
+            } else if !it.dir
+                && !it.doc
+                && ui
+                    .add_enabled(can_transfer, egui::Button::new("Download"))
+                    .clicked()
+            {
                 ui.close();
                 *menu_item = Some("download");
             }
-            if ui.button("Rename...").clicked() {
+            if ui
+                .add_enabled(can_transfer, egui::Button::new("Rename..."))
+                .clicked()
+            {
                 ui.close();
                 *menu_item = Some("rename");
             }
-            if ui.button("Duplicate").clicked() {
+            if ui
+                .add_enabled(can_transfer, egui::Button::new("Duplicate"))
+                .clicked()
+            {
                 ui.close();
                 *menu_item = Some("duplicate");
             }
@@ -1844,25 +2104,43 @@ fn row_menu_body(app: &mut App, ui: &mut egui::Ui, menu_item: &mut Option<&'stat
             }
         }
         ui.separator();
-        if ui.button("Move to...").clicked() {
+        if ui
+            .add_enabled(can_transfer, egui::Button::new("Move to..."))
+            .clicked()
+        {
             ui.close();
             *menu_item = Some("move");
         }
-        if ui.button("Move to trash").clicked() {
+        if ui
+            .add_enabled(can_transfer, egui::Button::new("Move to trash"))
+            .clicked()
+        {
             ui.close();
             *menu_item = Some("trash");
         }
     } else {
-        if ui.button(format!("Download ({} items)", sel.len())).clicked() {
+        if ui
+            .add_enabled(
+                can_transfer,
+                egui::Button::new(format!("Download ({} items)", sel.len())),
+            )
+            .clicked()
+        {
             ui.close();
             *menu_item = Some("download");
         }
         ui.separator();
-        if ui.button("Move to...").clicked() {
+        if ui
+            .add_enabled(can_transfer, egui::Button::new("Move to..."))
+            .clicked()
+        {
             ui.close();
             *menu_item = Some("move");
         }
-        if ui.button("Move to trash").clicked() {
+        if ui
+            .add_enabled(can_transfer, egui::Button::new("Move to trash"))
+            .clicked()
+        {
             ui.close();
             *menu_item = Some("trash");
         }
@@ -1980,7 +2258,9 @@ fn bottom_row(app: &mut App, ui: &mut egui::Ui) {
         .cloned()
         .collect();
     let docs_only = !sel.is_empty() && sel.iter().all(|e| e.doc);
-    let dl_enabled = !sel.is_empty() && !docs_only && !trash_view && !busy;
+    let can_transfer = app.can_transfer();
+    let dl_enabled =
+        !sel.is_empty() && !docs_only && !trash_view && !busy && can_transfer;
     let query = app.cloud.query.trim().to_lowercase();
     let visible = app
         .cloud
@@ -2018,11 +2298,14 @@ fn bottom_row(app: &mut App, ui: &mut egui::Ui) {
         );
         ui.separator();
         if trash_view {
-            if ui.add_enabled(!busy, egui::Button::new("Restore")).clicked() {
+            if ui
+                .add_enabled(!busy && can_transfer, egui::Button::new("Restore"))
+                .clicked()
+            {
                 action_restore(app);
             }
             let delete = ui
-                .add_enabled_ui(!busy, |ui| {
+                .add_enabled_ui(!busy && can_transfer, |ui| {
                     widgets::danger_ghost_button(ui, "Delete permanently")
                 })
                 .inner;
@@ -2037,7 +2320,10 @@ fn bottom_row(app: &mut App, ui: &mut egui::Ui) {
                 pick_download(app);
             }
             if ui
-                .add_enabled(!busy, egui::Button::new("Move to trash"))
+                .add_enabled(
+                    !busy && can_transfer,
+                    egui::Button::new("Move to trash"),
+                )
                 .on_hover_text("Move the selected items to the Proton trash")
                 .clicked()
             {

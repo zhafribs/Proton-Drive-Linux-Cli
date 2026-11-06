@@ -520,6 +520,9 @@ pub fn do_save(app: &mut App, ctx: &egui::Context) {
     ctx.set_zoom_factor(scale.factor());
     app.preview_theme = None;
     app.preview_scale = None;
+    // The photos folder may have changed in this save; re-ensure it next time
+    // the page opens so a moved path is created too.
+    app.photos.dir_ready = false;
     ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(if top {
         egui::WindowLevel::AlwaysOnTop
     } else {
@@ -1185,7 +1188,31 @@ fn sel_row(app: &mut App, ui: &mut egui::Ui, rel: &str, label: &str) {
             let expanded = app.draft.expanded.contains(rel);
             let arrow = if expanded { "\u{25be}" } else { "\u{25b8}" };
             let resp = ui.add(egui::Label::new(arrow).sense(egui::Sense::click()));
-            if resp.clicked() || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+            let action = if expanded { "Collapse" } else { "Expand" };
+            resp.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::Role::Button,
+                    ui.is_enabled(),
+                    format!("{action} {label}"),
+                )
+            });
+            if resp.gained_focus() {
+                resp.scroll_to_me(Some(egui::Align::Center));
+            }
+            if resp.has_focus() {
+                ui.painter().rect_stroke(
+                    resp.rect.expand(2.0),
+                    egui::CornerRadius::same(3),
+                    egui::Stroke::new(1.5, theme::accent(ui.visuals())),
+                    egui::StrokeKind::Inside,
+                );
+            }
+            if resp.clicked()
+                || (resp.has_focus()
+                    && ui.input(|i| {
+                        i.key_pressed(egui::Key::Enter)
+                            || i.key_pressed(egui::Key::Space)
+                    }))
             {
                 if expanded {
                     app.draft.expanded.remove(rel);
@@ -1207,7 +1234,40 @@ fn sel_row(app: &mut App, ui: &mut egui::Ui, rel: &str, label: &str) {
             "\u{2610}"
         };
         let resp = ui.add(egui::Label::new(glyph).sense(egui::Sense::click()));
-        if resp.clicked() || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+        resp.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::Role::CheckBox,
+                ui.is_enabled(),
+                label,
+            )
+        });
+        let toggled = if partial {
+            egui::accesskit::Toggled::Mixed
+        } else if state {
+            egui::accesskit::Toggled::True
+        } else {
+            egui::accesskit::Toggled::False
+        };
+        ui.ctx()
+            .accesskit_node_builder(resp.id, |n| n.set_toggled(toggled));
+        if resp.gained_focus() {
+            resp.scroll_to_me(Some(egui::Align::Center));
+        }
+        if resp.has_focus() {
+            ui.painter().rect_stroke(
+                resp.rect.expand(2.0),
+                egui::CornerRadius::same(3),
+                egui::Stroke::new(1.5, theme::accent(ui.visuals())),
+                egui::StrokeKind::Inside,
+            );
+        }
+        if resp.clicked()
+            || (resp.has_focus()
+                && ui.input(|i| {
+                    i.key_pressed(egui::Key::Enter)
+                        || i.key_pressed(egui::Key::Space)
+                }))
+        {
             app.draft.toggle_node(rel);
         }
         ui.label(label);

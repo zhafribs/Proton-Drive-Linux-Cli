@@ -30,8 +30,7 @@ fn draw_inner(app: &mut App, ui: &mut egui::Ui) {
         signing_in,
     );
 
-    let animate = app.prefs.motion_enabled()
-        && std::env::var("PROTON_UI_MOTION").ok().as_deref() != Some("0");
+    let animate = app.prefs.motion_enabled();
     ui.add_space(14.0);
     widgets::card(ui, None, |ui| {
         ui.horizontal(|ui| {

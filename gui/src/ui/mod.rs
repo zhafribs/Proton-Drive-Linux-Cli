@@ -640,7 +640,7 @@ impl App {
         let upd_next_check = prefs
             .updates_auto()
             .then(|| std::time::Instant::now() + Duration::from_secs(5));
-        theme::apply(&cc.egui_ctx, &prefs.theme());
+        theme::apply(&cc.egui_ctx, &prefs.theme(), prefs.motion_enabled());
         theme::force(
             &cc.egui_ctx,
             &system_theme::resolve(&prefs.theme(), &detected_theme),
@@ -841,6 +841,18 @@ impl App {
 
     pub fn logged_in(&self) -> bool {
         self.identity.as_ref().is_some_and(|i| i.logged_in)
+    }
+
+    /// Account-scoped actions need a session. An unresolved probe is treated
+    /// as allowed: it settles within a frame or two, and blocking the first
+    /// click after launch would be worse than a possible failure toast.
+    pub fn can_transfer(&self) -> bool {
+        !matches!(
+            self.ui_status(),
+            health::UiStatus::SignedOut
+                | health::UiStatus::NeedsLogin
+                | health::UiStatus::SigningIn
+        )
     }
 
     pub fn toast(&mut self, msg: impl Into<String>) {
@@ -1372,9 +1384,19 @@ impl App {
         // unlocked the keyring and is syncing): the first identity probe was
         // answered while the keyring was still locked.
         let engine_signed_in = matches!(health.status.as_str(), "ok" | "syncing");
-        let identity_ready = self.identity.as_ref().is_some_and(|i| i.error.is_none());
-        if (keyring_issue || (active && engine_signed_in))
-            && identity_ready
+        let identity_error = self.identity.as_ref().and_then(|i| i.error.as_deref());
+        // A timeout/lock error is not a sign-out: retry it even when the
+        // engine is not running, or a transient probe failure would leave a
+        // signed-in user on the welcome screen for the whole session.
+        let transient_error =
+            identity_error.is_some_and(|e| !health::is_login_error(e));
+        let probe_retryable = self.identity.as_ref().is_some_and(|i| {
+            i.error
+                .as_deref()
+                .is_none_or(|e| !health::is_login_error(e))
+        });
+        if (keyring_issue || (active && engine_signed_in) || transient_error)
+            && probe_retryable
             && !self.logged_in()
             && self.identity_retry.is_none()
         {
@@ -1819,8 +1841,10 @@ impl App {
             front.error,
         );
         let age = (t - since) as f32;
-        // Errors stay until dismissed; info slides in and fades out.
-        let (fade, slide) = if error {
+        let animate = self.prefs.motion_enabled();
+        // Errors stay until dismissed; info slides in and fades out. With
+        // motion off the toast appears and leaves without the slide/fade.
+        let (fade, slide) = if error || !animate {
             (1.0, 0.0)
         } else if age < 0.15 {
             (age / 0.15, (1.0 - age / 0.15) * 14.0)
@@ -1829,7 +1853,7 @@ impl App {
         } else {
             (1.0, 0.0)
         };
-        if !error {
+        if !error && animate {
             ctx.request_repaint();
         }
         let mut dismiss = false;
@@ -2533,7 +2557,7 @@ impl eframe::App for App {
             if pref == prefs::Theme::System {
                 self.system_theme = system_theme::detect();
             }
-            theme::apply(ctx, &pref);
+            theme::apply(ctx, &pref, self.prefs.motion_enabled());
             theme::force(ctx, &self.resolved_theme());
             self.style_dirty = false;
         }
@@ -2547,13 +2571,20 @@ impl eframe::App for App {
             ctx.set_zoom_factor(want_zoom);
         }
 
+        // Awake once a second for relative times and the status pollers. The
+        // poller does not own the egui context, so this is also what delivers
+        // a second-launch "show window" poke while the app sits in the tray.
         ctx.request_repaint_after(Duration::from_millis(900));
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // Drag-and-drop upload: files dropped on My Files upload into the
         // folder that is currently open.
-        if self.page == Page::Cloud && !self.cloud.trash_view && !self.cloud.busy {
+        if self.page == Page::Cloud
+            && !self.cloud.trash_view
+            && !self.cloud.busy
+            && self.can_transfer()
+        {
             let dropped: Vec<std::path::PathBuf> = ui.ctx().input(|i| {
                 i.raw
                     .dropped_files

@@ -150,6 +150,7 @@ impl Prefs {
     /// Animate status changes / request continuous repaints.
     pub fn motion_enabled(&self) -> bool {
         self.bool_of("motion", true)
+            && std::env::var("PROTON_UI_MOTION").ok().as_deref() != Some("0")
     }
     pub fn always_on_top(&self) -> bool {
         self.bool_of("always_on_top", true)
