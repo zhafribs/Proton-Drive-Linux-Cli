@@ -35,6 +35,13 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                     if ui.button("Visit the website").clicked() {
                         App::open_url(REPO_URL);
                     }
+                    if ui
+                        .button("Keyboard shortcuts")
+                        .on_hover_text("F1 opens this list from any page.")
+                        .clicked()
+                    {
+                        app.show_shortcuts();
+                    }
                 });
             });
         });

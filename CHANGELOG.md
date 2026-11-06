@@ -1,3 +1,12 @@
+## 3.20.33 — 2026-11-07
+
+- **The first screen shows where files will sync.** While signed out, Home
+  shows the configured folder (hover for the full path) with a Change link
+  that opens the folder setting. No wizard and no extra confirmation step.
+- **Keyboard shortcuts, with a list.** Ctrl+F jumps to Files and focuses the
+  search box, Ctrl+Q quits, and F1 opens a grouped shortcut list (also linked
+  from About) from any page. Delete, Enter and Space stay row-scoped to Files.
+
 ## 3.20.32 — 2026-11-07
 
 - **“Animate status changes” now reaches the rest of the app.** Toasts,

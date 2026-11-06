@@ -149,6 +149,8 @@ pub enum Dialog {
         label: String,
         intent: InputIntent,
     },
+    /// The F1 shortcut reference.
+    Shortcuts,
     ConfirmTrash {
         n: usize,
     },
@@ -267,6 +269,8 @@ pub struct App {
     /// Buffer of the open text-input dialog (rename / new folder).
     pub input_buf: String,
     pub input_focus: bool,
+    /// Set by Ctrl+F; the Files search field takes focus on the next frame.
+    pub search_focus: bool,
 
     pub cool: notify::Cooldowns,
     pub last_seen: Option<chrono::DateTime<chrono::FixedOffset>>,
@@ -522,6 +526,25 @@ fn spawn_poller(tx: mpsc::Sender<Back>, paths: Paths, journal_open: Arc<AtomicBo
     });
 }
 
+/// Two-column shortcut reference: monospace keys, plain-language action.
+fn shortcut_grid(ui: &mut egui::Ui, id: &str, rows: &[(&str, &str)]) {
+    egui::Grid::new(id)
+        .num_columns(2)
+        .spacing([20.0, 6.0])
+        .show(ui, |ui| {
+            for (keys, action) in rows {
+                ui.label(
+                    egui::RichText::new(*keys)
+                        .monospace()
+                        .strong()
+                        .size(12.5),
+                );
+                ui.label(egui::RichText::new(*action).size(12.5).weak());
+                ui.end_row();
+            }
+        });
+}
+
 /// Account-popup action row: a full-width, focusable menu item with a
 /// logout glyph. Danger rows hover with a red tint.
 fn account_action(ui: &mut egui::Ui, label: &str, danger: bool) -> bool {
@@ -767,6 +790,7 @@ impl App {
             photos: photos::PhotoState::default(),
             input_buf: String::new(),
             input_focus: false,
+            search_focus: false,
             cool: notify::Cooldowns::default(),
             last_seen: Some(chrono::Utc::now().into()),
             prev_hstatus: String::new(),
@@ -1513,6 +1537,36 @@ impl App {
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
+    pub(crate) fn show_shortcuts(&mut self) {
+        self.dialog = Some(Dialog::Shortcuts);
+    }
+
+    /// Global shortcuts. Typing in a field keeps every key except quit and
+    /// help, so Ctrl+F does not steal focus while the search box is active.
+    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Q)) {
+            self.quit(ctx);
+            return;
+        }
+        if self.dialog.is_some() {
+            return;
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::F1)) {
+            self.show_shortcuts();
+            return;
+        }
+        if ctx.text_edit_focused() {
+            return;
+        }
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
+            if self.cloud.trash_view {
+                cloud::trash_toggle(self, false);
+            }
+            self.page = Page::Cloud;
+            self.search_focus = true;
+        }
+    }
+
     // ------------------------------------------------------------- shell
 
     fn sidebar(&mut self, ui: &mut egui::Ui) {
@@ -1941,6 +1995,52 @@ impl App {
                     .show(ctx, |ui| {
                         ui.label(body.clone());
                         ui.add_space(10.0);
+                        if widgets::primary_button(ui, "OK") || escape {
+                            act = Some(DlgAct::Close);
+                        }
+                    });
+            }
+            Dialog::Shortcuts => {
+                egui::Window::new("Keyboard shortcuts")
+                    .collapsible(false)
+                    .order(egui::Order::Foreground)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .open(&mut open)
+                    .show(ctx, |ui| {
+                        ui.label(
+                            egui::RichText::new("Anywhere")
+                                .strong()
+                                .size(12.5),
+                        );
+                        ui.add_space(4.0);
+                        shortcut_grid(
+                            ui,
+                            "shortcut-anywhere",
+                            &[
+                                ("Ctrl+Q", "Quit"),
+                                ("F1", "Open this list"),
+                                ("Esc", "Close a dialog"),
+                            ],
+                        );
+                        ui.add_space(12.0);
+                        ui.label(
+                            egui::RichText::new("In My Files")
+                                .strong()
+                                .size(12.5),
+                        );
+                        ui.add_space(4.0);
+                        shortcut_grid(
+                            ui,
+                            "shortcut-files",
+                            &[
+                                ("Ctrl+F", "Search files"),
+                                ("Delete", "Move the selection to trash"),
+                                ("Enter", "Open the focused folder or file"),
+                                ("Space", "Select or deselect the focused file"),
+                            ],
+                        );
+                        ui.add_space(12.0);
                         if widgets::primary_button(ui, "OK") || escape {
                             act = Some(DlgAct::Close);
                         }
@@ -2578,6 +2678,7 @@ impl eframe::App for App {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.handle_shortcuts(ui.ctx());
         // Drag-and-drop upload: files dropped on My Files upload into the
         // folder that is currently open.
         if self.page == Page::Cloud

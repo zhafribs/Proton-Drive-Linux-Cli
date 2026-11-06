@@ -51,6 +51,43 @@ fn draw_inner(app: &mut App, ui: &mut egui::Ui) {
                 };
                 ui.label(egui::RichText::new(sub).size(12.5).weak());
 
+                if (signed_out || needs_login) && !signing_in {
+                    let local = app
+                        .conf
+                        .get("PROTON_SYNC_LOCAL")
+                        .filter(|s| !s.is_empty())
+                        .cloned()
+                        .unwrap_or_else(|| "~/ProtonDrive".to_string());
+                    ui.add_space(5.0);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("Files will sync to")
+                                .size(11.5)
+                                .weak(),
+                        );
+                        ui.label(
+                            egui::RichText::new(widgets::elide_middle(&local, 48))
+                                .size(11.5)
+                                .strong(),
+                        )
+                        .on_hover_text(&local);
+                        let change = ui
+                            .small_button("Change")
+                            .on_hover_text("Opens Settings > General.");
+                        change.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::Role::Button,
+                                true,
+                                "Change sync folder",
+                            )
+                        });
+                        if change.clicked() {
+                            app.page = super::Page::Settings;
+                            app.settings_tab = 0;
+                        }
+                    });
+                }
+
                 if app.health.audit_pending == Some(true) {
                     let note = if app.health.audit_phase.as_deref() == Some("error") {
                         "Background check failed - deletes and existing-file edits stay held for safety."

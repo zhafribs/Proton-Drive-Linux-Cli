@@ -817,10 +817,35 @@ pub fn elide(s: &str, max: usize) -> String {
     }
 }
 
+/// Keep both ends of a path: the leaf matters more than the middle.
+pub fn elide_middle(s: &str, max: usize) -> String {
+    let n = s.chars().count();
+    if n <= max {
+        return s.to_string();
+    }
+    let keep = max.saturating_sub(1);
+    let head = keep / 2;
+    let tail = keep - head;
+    let start: String = s.chars().take(head).collect();
+    let end: String = s.chars().skip(n - tail).collect();
+    format!("{start}\u{2026}{end}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::journal::{ChangeKind, ChangeRow};
+
+    #[test]
+    fn middle_elision_keeps_the_leaf() {
+        let path = "/home/someone/a/very/long/ProtonDrive";
+        let out = elide_middle(path, 24);
+        assert_eq!(out.chars().count(), 24);
+        assert!(out.starts_with("/home"));
+        assert!(out.ends_with("ProtonDrive"));
+        assert!(out.contains('\u{2026}'));
+        assert_eq!(elide_middle("short", 10), "short");
+    }
 
     /// Golden-layout gate: at a narrow card width the activity row must not
     /// overflow its container (the timestamp column absorbs the slack).

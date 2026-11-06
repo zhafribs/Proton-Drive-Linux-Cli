@@ -247,7 +247,7 @@ Every phase ships only if:
 | 2 | Files page + Activity (3.20.27) | Yes |
 | 3 | Photos header, selection, sync states (3.20.28) | Yes |
 | 4 | Settings unified save model (3.20.29) | Yes |
-| 5 | Onboarding, accessibility audit, motion/performance polish | Next |
+| 5 | Onboarding, accessibility audit, motion/performance polish (3.20.32–3.20.33) | Yes |
 
 Each phase gets a three-seat review (design, engineering, QA), a version bump,
 and a signed release. No phase is a big-bang rewrite.

@@ -1220,10 +1220,14 @@ fn top_row(app: &mut App, ui: &mut egui::Ui) {
         }
         ui.add_space(6.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add_sized(
+            let search = ui.add_sized(
                 egui::vec2(search_w, 28.0),
                 egui::TextEdit::singleline(&mut app.cloud.query).hint_text("Search files..."),
             );
+            if app.search_focus {
+                search.request_focus();
+                app.search_focus = false;
+            }
         });
     });
 }
