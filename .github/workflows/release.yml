@@ -5,7 +5,8 @@ name: Check upstream & release
 #   schedule        every 6 hours - detects a new upstream release, rewrites
 #                   upstream.lock, builds the AppImage and publishes a
 #                   GitHub release tagged v<cli>-gui<gui> (one release per
-#                   distinct CLI+GUI pair; existing releases stay untouched)
+#                   distinct CLI+GUI pair; existing releases stay untouched
+#                   and are never pruned)
 #   workflow_dispatch  manual run; set force_rebuild to rebuild + re-upload
 #                   assets for the current CLI+GUI version
 #   push to main    rebuilds whenever the packaging itself changes; a new
@@ -260,20 +261,6 @@ jobs:
               "${ASSETS[@]}"
             echo "Created release $TAG."
           fi
-
-      - name: Keep the seven newest releases
-        if: github.event_name != 'pull_request'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh release list --limit 100 --json tagName,createdAt \
-            --jq 'sort_by(.createdAt) | reverse | .[7:] | .[].tagName' |
-          while read -r tag; do
-            [ -n "$tag" ] || continue
-            echo "Removing old release $tag"
-            gh release delete "$tag" --yes --cleanup-tag
-          done
 
       - name: Keep the built artifacts for inspection
         uses: actions/upload-artifact@v7

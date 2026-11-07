@@ -1,3 +1,10 @@
+## 3.20.34 — 2026-11-07
+
+- **Releases are no longer pruned.** The release workflow used to delete
+  everything beyond the seven newest GitHub releases; it now keeps every
+  published release and its tag. Older releases removed by the previous
+  cleanup cannot be restored automatically.
+
 ## 3.20.33 — 2026-11-07
 
 - **The first screen shows where files will sync.** While signed out, Home
