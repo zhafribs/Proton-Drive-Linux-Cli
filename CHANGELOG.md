@@ -1,3 +1,9 @@
+## 3.20.39 — 2026-11-07
+
+- **The Photos action reads "Download all".** It still copies only photos
+  missing from this computer; the shorter label keeps the title and three
+  actions on one line at the minimum window width.
+
 ## 3.20.38 — 2026-11-07
 
 - **Photos' hero copy lines up with the status pill.** The title and context

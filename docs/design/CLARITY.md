@@ -169,7 +169,7 @@ No card wall. The hero is the only elevated surface; metrics are a single row.
 2. Import progress banner when a pass is running.
 3. Sticky date sections; responsive grid; hover checkbox; selection toolbar.
 4. Skipped/failed files as a compact, named notice with actions.
-5. Download missing / delete selected only when relevant.
+5. Download all (missing copies only) / delete selected only when relevant.
 
 ### Activity
 1. Filter chips: All, Errors, Conflicts, Transfers.

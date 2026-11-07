@@ -47,7 +47,7 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
 
 **Photos** — the same status hero and three summary cards as Home, above the timeline:
 
-![Photos](docs/screenshots/photos-3.20.38.png)
+![Photos](docs/screenshots/photos-3.20.39.png)
 
 ## Features
 
@@ -62,7 +62,8 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
 - **Photos** — the account's photo timeline as a **day-grouped tile grid with
   real thumbnails** (PNG and JPEG decoded in-process, downscaled and cached),
   with the day label pinned while you scroll. **Sync photos** checks Proton
-  Photos on its own; select tiles to **Download missing** or **Delete** (moves
+  Photos on its own; select tiles to **Download all** (missing copies only) or
+  **Delete** (moves
   to the Proton photos trash and moves the local copy to
   `<photo folder>/.proton-photos-trash`). A tile says whether a
   photo is missing, still downloading, a different copy, or has a duplicate

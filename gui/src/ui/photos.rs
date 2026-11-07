@@ -764,7 +764,7 @@ fn photo_actions(app: &mut App, ui: &mut egui::Ui) {
     let download_resp = ui
         .add_enabled(
             can_act && !app.photos.items.is_empty(),
-            egui::Button::new("Download missing"),
+            egui::Button::new("Download all"),
         )
         .on_hover_text(
             "Copy every photo that is not on this computer. Nothing in the cloud changes.",
@@ -1050,7 +1050,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
             ui.label(egui::RichText::new("Photos").strong().size(24.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.allocate_ui_with_layout(
-                    egui::vec2(348.0, 30.0),
+                    egui::vec2(325.0, 30.0),
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| photo_actions(app, ui),
                 );
