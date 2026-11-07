@@ -146,10 +146,15 @@ fn tags(ui: &mut egui::Ui) {
                 .corner_radius(theme::pill())
                 .inner_margin(egui::Margin::symmetric(8, 3))
                 .show(ui, |ui| {
-                    ui.label(
-                        egui::RichText::new(text)
-                            .size(10.5)
-                            .color(theme::accent_text(ui.visuals())),
+                    // Keep a tag on one line; the pill row wraps between
+                    // tags, never inside "AppImage" or "MIT".
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(text)
+                                .size(10.5)
+                                .color(theme::accent_text(ui.visuals())),
+                        )
+                        .extend(),
                     );
                 });
             ui.add_space(4.0);

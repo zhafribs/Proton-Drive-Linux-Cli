@@ -1,3 +1,9 @@
+## 3.20.42 — 2026-11-07
+
+- **About tags stay intact at the minimum window width.** Rust, egui,
+  AppImage and MIT no longer break inside a word; the tag row wraps between
+  tags instead.
+
 ## 3.20.41 — 2026-11-07
 
 - **About shows a clean Proton CLI version.** Values such as
