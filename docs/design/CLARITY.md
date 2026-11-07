@@ -1,6 +1,6 @@
 # Proton Drive Linux — Project Clarity
 
-**Status:** Phase 4 shipped in 3.20.29 — shell, Home, Activity, Files, Photos, Settings  
+**Status:** Phase 5 shipped in 3.20.33; Photos header polished in 3.20.39 — shell, Home, Activity, Files, Photos, Settings  
 **Scope:** whole application, not a theme refresh  
 **Foundation:** GNOME / libadwaita behavior, Proton brand, Material and Fluent discipline
 
