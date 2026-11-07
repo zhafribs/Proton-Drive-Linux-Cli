@@ -847,216 +847,186 @@ fn photo_actions(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
-fn photo_stat(ui: &mut egui::Ui, value: &str, label: &str) {
-    ui.vertical(|ui| {
-        ui.label(egui::RichText::new(value).strong().size(16.0));
-        ui.label(egui::RichText::new(label).size(11.0).weak());
-    });
-}
-
-fn stat_separator(ui: &mut egui::Ui) {
-    ui.add_space(8.0);
-    ui.separator();
-    ui.add_space(12.0);
-}
-
-fn photo_status_line(
-    ui: &mut egui::Ui,
-    key: &str,
-    label: &str,
-    updated: &str,
-    last_sync: &str,
-) {
-    ui.horizontal(|ui| {
-        widgets::status_pill(ui, key, label);
-        ui.add_space(4.0);
-        let resp = ui.label(egui::RichText::new(updated).size(11.5).weak());
-        if !last_sync.is_empty() {
-            if resp.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Help);
-            }
-            resp.on_hover_text(last_sync);
-        }
-    });
-}
-
-/// One compact card replaces the three technical lines: who the library is,
-/// how big it is, where the copies are, and when it last ran.
-fn photo_summary(
-    app: &App,
-    ui: &mut egui::Ui,
-    total: u64,
-    signed_out: bool,
-    photo_sync_on: bool,
-    syncing: bool,
-) {
+/// Photos hero, in Home's language: status orb, plain-language title,
+/// one context line, and the same pill on the right.
+fn photo_hero(app: &App, ui: &mut egui::Ui) {
+    let status = app.ui_status();
+    let signing_in = matches!(status, crate::health::UiStatus::SigningIn);
+    let signed_out = matches!(status, crate::health::UiStatus::SignedOut);
+    let needs_login = matches!(status, crate::health::UiStatus::NeedsLogin);
+    let paused = matches!(status, crate::health::UiStatus::Paused);
+    let starting = matches!(status, crate::health::UiStatus::Starting);
+    let photo_sync_on = app.conf.get("PROTON_SYNC_PHOTOS").is_none_or(|v| v != "0");
+    let syncing =
+        app.health.status == "syncing" || app.health.phase.as_deref() == Some("photos");
     let cloud = if app.photos.cloud_count > 0 {
         app.photos.cloud_count
     } else {
         app.photos.items.len() as u64
     };
-    let have_sync = app.photos.last_sync_ts.is_some();
     let disk = app.photos.disk_count;
-    let updated = if have_sync {
-        format!(
-            "Updated {}",
-            crate::util::rel_time(app.photos.last_sync_ts)
-        )
-    } else {
-        "Not synced yet".to_string()
-    };
-    let attention = app.photos.attention;
+    let total: u64 = app.photos.items.iter().map(|p| p.size).sum();
+    let have_sync = app.photos.last_sync_ts.is_some();
     let summary_error = app.photos.sync_error.clone();
     let timeline_error = app.photos.error.clone();
-    let has_summary_error = !summary_error.is_empty();
-    let has_error = has_summary_error || !timeline_error.is_empty();
-    let signing_in = matches!(app.ui_status(), crate::health::UiStatus::SigningIn);
     let login_error = crate::health::is_login_error(&summary_error);
-    let signed_out = signed_out || (login_error && !signing_in);
-    let cloud_label = if has_summary_error && app.photos.cloud_count == 0 && app.photos.items.is_empty() {
-        "Unknown".to_string()
-    } else {
-        cloud.to_string()
-    };
-    let disk_label = if have_sync && !has_summary_error {
-        disk.to_string()
-    } else {
-        "Unknown".to_string()
-    };
-    let (status_key, status_label) = if signing_in {
-        ("signing_in", "Signing in")
+    let needs_login = needs_login || (login_error && !signing_in);
+    let needs_signin = signed_out || needs_login;
+    let attention = app.photos.attention;
+    let photos_phase = app.health.phase.as_deref() == Some("photos");
+    let (key, label, title, sub): (&str, &str, &str, String) = if signing_in {
+        (
+            "signing_in",
+            "Signing in",
+            "Signing in...",
+            "Finish signing in in the terminal window.".to_string(),
+        )
+    } else if needs_login {
+        (
+            "needs_login",
+            "Session expired",
+            "Sign in again to sync photos",
+            "Your session expired. Your files stay safe on this computer.".to_string(),
+        )
     } else if signed_out {
-        ("signed_out", "Sign in to sync")
+        (
+            "signed_out",
+            "Sign in to sync",
+            "Sign in to sync photos",
+            "Your photos will appear here after you sign in.".to_string(),
+        )
     } else if !photo_sync_on {
-        ("engine_stopped", "Photo sync off")
-    } else if has_error || attention > 0 {
-        ("paused", "Needs attention")
+        (
+            "engine_stopped",
+            "Photo sync off",
+            "Photo sync is off",
+            "Turn photo sync on in Settings > Sync.".to_string(),
+        )
+    } else if !summary_error.is_empty() || !timeline_error.is_empty() {
+        let reason = if !summary_error.is_empty() {
+            format!("Photo sync: {}", shorten(&summary_error, 80))
+        } else {
+            "See the message below.".to_string()
+        };
+        (
+            "paused",
+            "Needs attention",
+            "Photo sync needs attention",
+            reason,
+        )
+    } else if attention > 0 {
+        (
+            "paused",
+            "Needs attention",
+            "Some photos need attention",
+            format!("{attention} need attention - see below."),
+        )
     } else if syncing {
         (
             "syncing",
-            if app.health.phase.as_deref() == Some("photos") {
+            if photos_phase {
                 "Syncing photos"
             } else {
-                "Syncing files first"
+                "Waiting for files"
             },
-        )
-    } else if !app.active {
-        (
-            "engine_stopped",
-            if app.paused_by_user { "Paused" } else { "Sync stopped" },
-        )
-    } else if have_sync {
-        ("synced", "Synced")
-    } else {
-        ("engine_stopped", "Not synced yet")
-    };
-    let warn = theme::warning_text(ui.visuals());
-    let hint: Option<(String, egui::Color32)> = if signing_in {
-        Some((
-            "Finish signing in in the terminal window.".to_string(),
-            ui.visuals().weak_text_color(),
-        ))
-    } else if signed_out {
-        Some(("Sign in to sync photos.".to_string(), warn))
-    } else if !photo_sync_on {
-        Some(("Turn photo sync on in Settings > Sync.".to_string(), warn))
-    } else if has_summary_error {
-        Some((
-            format!("Photo sync: {}", shorten(&summary_error, 72)),
-            theme::danger_text(ui.visuals()),
-        ))
-    } else if !timeline_error.is_empty() {
-        Some(("Photo sync needs attention - see the message below.".to_string(), warn))
-    } else if attention > 0 {
-        Some((format!("{attention} photo(s) need attention - see below."), warn))
-    } else if syncing {
-        Some((
-            if app.health.phase.as_deref() == Some("photos") {
+            if photos_phase {
+                "Syncing your photos"
+            } else {
+                "Waiting for the file sync"
+            },
+            if photos_phase {
                 "Checking Proton Photos now.".to_string()
             } else {
                 "Waiting for the file sync to finish.".to_string()
             },
-            ui.visuals().weak_text_color(),
-        ))
+        )
+    } else if paused {
+        (
+            "paused",
+            "Paused",
+            "Photo sync is paused",
+            "Resume on Home to continue.".to_string(),
+        )
+    } else if starting {
+        (
+            "starting",
+            "Starting",
+            "Starting photo sync",
+            "The photo timeline will appear shortly.".to_string(),
+        )
     } else if !app.active {
-        Some((
-            if app.paused_by_user {
-                "Paused - resume on Home.".to_string()
-            } else {
-                "Sync is stopped - start it on Home.".to_string()
-            },
-            ui.visuals().weak_text_color(),
-        ))
+        (
+            "engine_stopped",
+            "Stopped",
+            "Photo sync is stopped",
+            "Start syncing on Home.".to_string(),
+        )
+    } else if have_sync {
+        let when = crate::util::rel_time(app.photos.last_sync_ts);
+        let pending = cloud.saturating_sub(disk);
+        let sub = if pending > 0 {
+            format!("Last checked {when} \u{b7} {pending} waiting to download")
+        } else {
+            format!("Last checked {when} \u{b7} All photos are on this computer")
+        };
+        ("synced", "Synced", "Your photos are up to date", sub)
     } else {
-        None
+        (
+            "starting",
+            "Not synced yet",
+            "Your photo library",
+            format!(
+                "{} photos \u{b7} {}",
+                app.photos.items.len(),
+                size_label(total)
+            ),
+        )
     };
-    let last_sync = app.photos.last_sync.clone();
-    let compact = ui.available_width() < 560.0;
-
+    let animate = app.prefs.motion_enabled();
     widgets::card(ui, None, |ui| {
-        let header = |ui: &mut egui::Ui| {
-            let accent = theme::accent(ui.visuals());
-            let (icon_rect, _) =
-                ui.allocate_exact_size(egui::vec2(44.0, 44.0), egui::Sense::hover());
-            ui.painter().circle_filled(
-                icon_rect.center(),
-                22.0,
-                accent.gamma_multiply(0.10),
-            );
-            widgets::nav_icon(
-                ui.painter(),
-                egui::Rect::from_center_size(
-                    icon_rect.center(),
-                    egui::vec2(24.0, 24.0),
-                ),
-                widgets::NavIcon::Photos,
-                accent,
-            );
-            ui.add_space(14.0);
+        ui.horizontal(|ui| {
+            widgets::status_orb(ui, key, animate);
+            ui.add_space(18.0);
             ui.vertical(|ui| {
-                ui.label(
-                    egui::RichText::new("Your photo library")
-                        .strong()
-                        .size(15.0),
-                );
-                ui.label(
-                    egui::RichText::new("Two-way sync with Proton Photos.")
-                        .size(12.0)
-                        .weak(),
-                );
-                if let Some((text, color)) = &hint {
-                    ui.label(egui::RichText::new(text).size(11.5).color(*color));
+                ui.label(egui::RichText::new(title).strong().size(20.0));
+                let sub = ui.label(egui::RichText::new(sub).size(12.5).weak());
+                if !app.photos.last_sync.is_empty() && !needs_signin {
+                    sub.on_hover_text(&app.photos.last_sync);
                 }
             });
-        };
-        if compact {
-            ui.horizontal(header);
-            ui.add_space(8.0);
-            photo_status_line(ui, status_key, status_label, &updated, &last_sync);
-        } else {
-            ui.columns(2, |cols| {
-                cols[0].horizontal(header);
-                cols[1].with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                    photo_status_line(
-                        ui,
-                        status_key,
-                        status_label,
-                        &updated,
-                        &last_sync,
-                    );
-                });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                widgets::status_pill(ui, key, label);
             });
-        }
-        ui.add_space(12.0);
-        ui.separator();
-        ui.add_space(10.0);
-        ui.horizontal_wrapped(|ui| {
-            photo_stat(ui, &cloud_label, "In the cloud");
-            stat_separator(ui);
-            photo_stat(ui, &size_label(total), "Library size");
-            stat_separator(ui);
-            photo_stat(ui, &disk_label, "On this computer");
         });
+    });
+}
+
+fn photo_metrics(app: &App, ui: &mut egui::Ui) {
+    let cloud = if app.photos.cloud_count > 0 {
+        app.photos.cloud_count
+    } else {
+        app.photos.items.len() as u64
+    };
+    let cloud_label =
+        if !app.photos.sync_error.is_empty()
+            && app.photos.cloud_count == 0
+            && app.photos.items.is_empty()
+        {
+            "Unknown".to_string()
+        } else {
+            cloud.to_string()
+        };
+    let total: u64 = app.photos.items.iter().map(|p| p.size).sum();
+    let disk_label = if app.photos.last_sync_ts.is_some() && app.photos.sync_error.is_empty()
+    {
+        app.photos.disk_count.to_string()
+    } else {
+        "Unknown".to_string()
+    };
+    ui.columns(3, |cols| {
+        widgets::metric(&mut cols[0], "In the cloud", &cloud_label, "Proton Photos");
+        widgets::metric(&mut cols[1], "Library size", &size_label(total), "All photos");
+        widgets::metric(&mut cols[2], "On this computer", &disk_label, "Local copies");
     });
 }
 
@@ -1079,12 +1049,11 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
     );
     let can_act = ready && !signed_out;
     let sel = app.photos.sel.clone();
-    let total: u64 = app.photos.items.iter().map(|p| p.size).sum();
 
-    // --- header: title + actions, then one library summary card -------------
+    // --- header: title + actions, then the Home-style hero and metrics ------
     let narrow = ui.available_width() < 520.0;
     let info = format!(
-        "Two-way sync with /photos. Downloads are saved to {}. Click a photo to select it for download or delete.",
+        "Downloaded photos are saved to {}. Click a photo to select it for download or delete.",
         short_path(&dir)
     );
     if sel.is_empty() && !narrow {
@@ -1092,8 +1061,6 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
             ui.label(egui::RichText::new("Photos").strong().size(24.0));
             widgets::info_icon(ui, &info);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Place the actions at the right but lay them out left-to-
-                // right, so Tab order matches what the eye reads.
                 ui.allocate_ui_with_layout(
                     egui::vec2(348.0, 30.0),
                     egui::Layout::left_to_right(egui::Align::Center),
@@ -1111,8 +1078,13 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
             ui.horizontal_wrapped(|ui| photo_actions(app, ui));
         }
     }
-    ui.add_space(10.0);
-    photo_summary(app, ui, total, signed_out, photo_sync_on, syncing);
+    ui.add_space(14.0);
+    photo_hero(app, ui);
+    if !signed_out {
+        ui.add_space(12.0);
+        photo_metrics(app, ui);
+    }
+    ui.add_space(12.0);
 
     if !sel.is_empty() {
         ui.add_space(8.0);

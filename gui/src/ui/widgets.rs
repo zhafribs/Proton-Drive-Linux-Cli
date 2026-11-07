@@ -27,6 +27,17 @@ pub fn section_label(ui: &mut egui::Ui, text: &str) {
     ui.add_space(4.0);
 }
 
+/// One compact metric card (label, large value, context line). Shared by
+/// Home and Photos so their summary rows look identical.
+pub fn metric(ui: &mut egui::Ui, label: &str, value: &str, sub: &str) {
+    card(ui, None, |ui| {
+        ui.label(egui::RichText::new(label).size(11.5).weak());
+        ui.add_space(2.0);
+        ui.label(egui::RichText::new(value).strong().size(23.0));
+        ui.label(egui::RichText::new(sub).size(11.0).weak());
+    });
+}
+
 /// A status pill: tinted track, colored dot, short label. Shared by Home and
 /// Photos so a status reads the same everywhere.
 pub fn status_pill(ui: &mut egui::Ui, key: &str, label: &str) {

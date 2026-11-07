@@ -45,9 +45,9 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
 
 *Dark theme shown; light and system themes are built in.*
 
-**Photos** — the timeline plus a single library summary card:
+**Photos** — the same status hero and three summary cards as Home, above the timeline:
 
-![Photos](docs/screenshots/photos-3.20.png)
+![Photos](docs/screenshots/photos-3.20.36.png)
 
 ## Features
 

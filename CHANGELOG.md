@@ -1,3 +1,11 @@
+## 3.20.36 — 2026-11-07
+
+- **Photos now matches the Home layout.** The library card is replaced by the
+  same status hero as Home: orb, "Your photos are up to date", one context
+  line, and the status pill. Three metric cards show In the cloud, Library
+  size and On this computer. The separate "Two-way sync with Proton Photos."
+  line is gone; technical paths and last-pass details stay in hover text.
+
 ## 3.20.35 — 2026-11-07
 
 - **Photos has a proper library header.** The old three-line technical summary

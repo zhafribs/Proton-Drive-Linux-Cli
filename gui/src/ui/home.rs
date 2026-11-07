@@ -271,18 +271,9 @@ fn metrics(app: &App, ui: &mut egui::Ui) {
         .unwrap_or_else(|| "Not yet".to_string());
 
     ui.columns(3, |cols| {
-        metric(&mut cols[0], "Files", &files, "In your sync folder");
-        metric(&mut cols[1], "On disk", &bytes, "Local copy");
-        metric(&mut cols[2], "Last check", &last, "Background audit");
-    });
-}
-
-fn metric(ui: &mut egui::Ui, label: &str, value: &str, sub: &str) {
-    widgets::card(ui, None, |ui| {
-        ui.label(egui::RichText::new(label).size(11.5).weak());
-        ui.add_space(2.0);
-        ui.label(egui::RichText::new(value).strong().size(23.0));
-        ui.label(egui::RichText::new(sub).size(11.0).weak());
+        widgets::metric(&mut cols[0], "Files", &files, "In your sync folder");
+        widgets::metric(&mut cols[1], "On disk", &bytes, "Local copy");
+        widgets::metric(&mut cols[2], "Last check", &last, "Background audit");
     });
 }
 
