@@ -1,3 +1,13 @@
+## 3.20.40 — 2026-11-07
+
+- **About is rebuilt as a product page.** Identity hero with live update
+  status and project tags, three version/platform cards, What it does, Good
+  to know, Updates, Details with copyable diagnostics, Credits, and a
+  collapsible legal notice.
+- **Dialogs take keyboard focus.** The safe/default action receives focus when
+  a dialog opens, and the page behind it is disabled while it is up, so Tab
+  stays inside the dialog instead of wandering through the background.
+
 ## 3.20.39 — 2026-11-07
 
 - **The Photos action reads "Download all".** It still copies only photos

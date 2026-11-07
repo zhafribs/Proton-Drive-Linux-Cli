@@ -14,7 +14,10 @@ pub fn card(ui: &mut egui::Ui, title: Option<&str>, add: impl FnOnce(&mut egui::
         // Proton's cards always span the content column.
         ui.set_min_width(ui.available_width());
         if let Some(t) = title {
-            ui.label(egui::RichText::new(t).strong().size(15.0));
+            let heading = ui.label(egui::RichText::new(t).strong().size(15.0));
+            heading.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Heading, true, t)
+            });
             ui.add_space(10.0);
         }
         add(ui);
@@ -92,10 +95,23 @@ pub fn status_pill(ui: &mut egui::Ui, key: &str, label: &str) {
 }
 
 pub fn primary_button(ui: &mut egui::Ui, text: &str) -> bool {
-    primary_button_hint(ui, text, "")
+    primary_button_response(ui, text).clicked()
+}
+
+/// The same primary button, returned as a response for focus management.
+pub fn primary_button_response(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    primary_button_hint_response(ui, text, "")
 }
 
 pub fn primary_button_hint(ui: &mut egui::Ui, text: &str, hint: &str) -> bool {
+    primary_button_hint_response(ui, text, hint).clicked()
+}
+
+pub fn primary_button_hint_response(
+    ui: &mut egui::Ui,
+    text: &str,
+    hint: &str,
+) -> egui::Response {
     let response = ui.add(
         egui::Button::new(egui::RichText::new(text).color(egui::Color32::WHITE))
             .fill(theme::ACCENT)
@@ -116,7 +132,7 @@ pub fn primary_button_hint(ui: &mut egui::Ui, text: &str, hint: &str) -> bool {
             egui::StrokeKind::Inside,
         );
     }
-    response.clicked()
+    response
 }
 
 /// Full-width primary CTA, for popups and empty states. Painted rather than

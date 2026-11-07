@@ -278,6 +278,9 @@ pub struct App {
     pub tray_warned: bool,
 
     pub dialog: Option<Dialog>,
+    /// First frame of a dialog: focus the safe action once.
+    dialog_seen: Option<std::mem::Discriminant<Dialog>>,
+    dialog_focus: bool,
     pub save_hint: String,
     pub sub_override: Option<(String, f64)>,
     pub toasts: std::collections::VecDeque<Toast>,
@@ -545,6 +548,14 @@ fn shortcut_grid(ui: &mut egui::Ui, id: &str, rows: &[(&str, &str)]) {
         });
 }
 
+/// Focus the safe/default action once when a dialog opens.
+fn focus_first(pending: &mut bool, response: &egui::Response) {
+    if *pending {
+        response.request_focus();
+        *pending = false;
+    }
+}
+
 /// Account-popup action row: a full-width, focusable menu item with a
 /// logout glyph. Danger rows hover with a red tint.
 fn account_action(ui: &mut egui::Ui, label: &str, danger: bool) -> bool {
@@ -796,6 +807,8 @@ impl App {
             prev_hstatus: String::new(),
             tray_warned: false,
             dialog: None,
+            dialog_seen: None,
+            dialog_focus: false,
             save_hint: String::new(),
             sub_override: None,
             toasts: std::collections::VecDeque::new(),
@@ -1961,8 +1974,16 @@ impl App {
     fn dialog_ui(&mut self, ctx: &egui::Context) {
         let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
         let Some(dlg) = self.dialog.clone() else {
+            self.dialog_seen = None;
+            self.dialog_focus = false;
             return;
         };
+        let disc = std::mem::discriminant(&dlg);
+        if self.dialog_seen != Some(disc) {
+            self.dialog_seen = Some(disc);
+            self.dialog_focus = true;
+        }
+        let mut focus_pending = self.dialog_focus;
         // Modal input blocker: pointer clicks and drags stay out of the page
         // while a dialog is up. The dialog windows are Foreground, above this.
         egui::Area::new(egui::Id::unique("dialog-blocker"))
@@ -1970,7 +1991,9 @@ impl App {
             .fixed_pos(egui::Pos2::ZERO)
             .show(ctx, |ui| {
                 let screen = ctx.viewport_rect();
-                let resp = ui.allocate_rect(screen, egui::Sense::click_and_drag());
+                // Block pointer input but stay out of the Tab order: CLICK |
+                // DRAG without FOCUSABLE.
+                let resp = ui.allocate_rect(screen, egui::Sense::CLICK | egui::Sense::DRAG);
                 resp.widget_info(|| {
                     egui::WidgetInfo::labeled(
                         egui::Role::GenericContainer,
@@ -1995,7 +2018,9 @@ impl App {
                     .show(ctx, |ui| {
                         ui.label(body.clone());
                         ui.add_space(10.0);
-                        if widgets::primary_button(ui, "OK") || escape {
+                        let ok = widgets::primary_button_response(ui, "OK");
+                        focus_first(&mut focus_pending, &ok);
+                        if ok.clicked() || escape {
                             act = Some(DlgAct::Close);
                         }
                     });
@@ -2041,7 +2066,9 @@ impl App {
                             ],
                         );
                         ui.add_space(12.0);
-                        if widgets::primary_button(ui, "OK") || escape {
+                        let ok = widgets::primary_button_response(ui, "OK");
+                        focus_first(&mut focus_pending, &ok);
+                        if ok.clicked() || escape {
                             act = Some(DlgAct::Close);
                         }
                     });
@@ -2057,7 +2084,9 @@ impl App {
                         ui.label("Save your settings now?");
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            if ui.button("Cancel").clicked() || escape {
+                            let cancel = ui.button("Cancel");
+                            focus_first(&mut focus_pending, &cancel);
+                            if cancel.clicked() || escape {
                                 act = Some(DlgAct::Close);
                             }
                             if widgets::primary_button(ui, "Save") {
@@ -2080,7 +2109,9 @@ impl App {
                         );
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            if ui.button("Cancel").clicked() || escape {
+                            let cancel = ui.button("Cancel");
+                            focus_first(&mut focus_pending, &cancel);
+                            if cancel.clicked() || escape {
                                 act = Some(DlgAct::Close);
                             }
                             if widgets::primary_button(ui, "Sign out") {
@@ -2097,7 +2128,9 @@ impl App {
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                     .open(&mut open)
                     .show(ctx, |ui| {
-                        if ui.button("Pause for 15 minutes").clicked() {
+                        let first = ui.button("Pause for 15 minutes");
+                        focus_first(&mut focus_pending, &first);
+                        if first.clicked() {
                             act = Some(DlgAct::Pause(Some(900)));
                         }
                         if ui.button("Pause for 1 hour").clicked() {
@@ -2151,7 +2184,9 @@ impl App {
                             });
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            if ui.button("Cancel").clicked() || escape {
+                            let cancel = ui.button("Cancel");
+                            focus_first(&mut focus_pending, &cancel);
+                            if cancel.clicked() || escape {
                                 act = Some(DlgAct::Close);
                             }
                             if widgets::primary_button(ui, "Choose this folder") {
@@ -2187,11 +2222,14 @@ impl App {
                         if self.input_focus {
                             ui.memory_mut(|m| m.request_focus(id));
                             self.input_focus = false;
+                            focus_pending = false;
                         }
                         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            if ui.button("Cancel").clicked() || escape {
+                            let cancel = ui.button("Cancel");
+                            focus_first(&mut focus_pending, &cancel);
+                            if cancel.clicked() || escape {
                                 act = Some(DlgAct::Close);
                             }
                             if widgets::primary_button(ui, "OK") || enter {
@@ -2225,7 +2263,9 @@ impl App {
                         ));
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            if ui.button("Cancel").clicked() || escape {
+                            let cancel = ui.button("Cancel");
+                            focus_first(&mut focus_pending, &cancel);
+                            if cancel.clicked() || escape {
                                 act = Some(DlgAct::Close);
                             }
                             if widgets::primary_button(ui, "Move to trash") {
@@ -2269,7 +2309,9 @@ impl App {
                         ui.label("This approval applies once to this exact set of files.");
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            if ui.button("Cancel").clicked() || escape {
+                            let cancel = ui.button("Cancel");
+                            focus_first(&mut focus_pending, &cancel);
+                            if cancel.clicked() || escape {
                                 act = Some(DlgAct::Close);
                             }
                             if widgets::danger_ghost_button(ui, &format!("Delete {total} files")) {
@@ -2304,7 +2346,9 @@ impl App {
                         ));
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            if ui.button("Cancel").clicked() || escape {
+                            let cancel = ui.button("Cancel");
+                            focus_first(&mut focus_pending, &cancel);
+                            if cancel.clicked() || escape {
                                 act = Some(DlgAct::Close);
                             }
                             if widgets::primary_button(ui, "Move to trash") {
@@ -2329,7 +2373,9 @@ impl App {
                         ui.label(format!("Permanently delete {word}? This cannot be undone."));
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            if ui.button("Cancel").clicked() || escape {
+                            let cancel = ui.button("Cancel");
+                            focus_first(&mut focus_pending, &cancel);
+                            if cancel.clicked() || escape {
                                 act = Some(DlgAct::Close);
                             }
                             if widgets::danger_ghost_button(ui, "Delete permanently") {
@@ -2352,7 +2398,9 @@ impl App {
                         );
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            if ui.button("Cancel").clicked() || escape {
+                            let cancel = ui.button("Cancel");
+                            focus_first(&mut focus_pending, &cancel);
+                            if cancel.clicked() || escape {
                                 act = Some(DlgAct::Close);
                             }
                             if widgets::danger_ghost_button(ui, "Empty trash") {
@@ -2375,7 +2423,9 @@ impl App {
                         );
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            if ui.button("Cancel").clicked() || escape {
+                            let cancel = ui.button("Cancel");
+                            focus_first(&mut focus_pending, &cancel);
+                            if cancel.clicked() || escape {
                                 act = Some(DlgAct::Close);
                             }
                             if widgets::primary_button(ui, "Clear cache") {
@@ -2402,7 +2452,9 @@ impl App {
                         ui.add_space(10.0);
                         let can = self.cloud.picker.as_ref().is_some_and(|p| p.sel.is_some());
                         ui.horizontal(|ui| {
-                            if ui.button("Cancel").clicked() || escape {
+                            let cancel = ui.button("Cancel");
+                            focus_first(&mut focus_pending, &cancel);
+                            if cancel.clicked() || escape {
                                 act = Some(DlgAct::Close);
                             }
                             if can && widgets::primary_button(ui, "Move here") {
@@ -2424,6 +2476,8 @@ impl App {
             None if !open => self.dialog = None,
             None => {}
         }
+        // One shot: a dialog gets focus on its first frame, not every frame.
+        self.dialog_focus = false;
     }
 
     /// One row of the "Move to..." folder tree (lazily expanded, like the
@@ -2679,9 +2733,15 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.handle_shortcuts(ui.ctx());
+        // A dialog owns the keyboard: disabling the page behind it keeps Tab
+        // inside the dialog, and the modal blocker already owns the pointer.
+        if self.dialog.is_some() {
+            ui.disable();
+        }
         // Drag-and-drop upload: files dropped on My Files upload into the
         // folder that is currently open.
-        if self.page == Page::Cloud
+        if self.dialog.is_none()
+            && self.page == Page::Cloud
             && !self.cloud.trash_view
             && !self.cloud.busy
             && self.can_transfer()
@@ -2767,7 +2827,9 @@ impl eframe::App for App {
         self.central(ui);
 
         let ctx = ui.ctx().clone();
-        self.toast_ui(&ctx);
+        if self.dialog.is_none() {
+            self.toast_ui(&ctx);
+        }
         self.dialog_ui(&ctx);
     }
 }

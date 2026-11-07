@@ -49,6 +49,10 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
 
 ![Photos](docs/screenshots/photos-3.20.39.png)
 
+**About** — versions, updates, diagnostics and credits:
+
+![About](docs/screenshots/about-3.20.40.png)
+
 ## Features
 
 - **Folder sync** — `~/ProtonDrive` mirrors `/my-files` both ways: local edits

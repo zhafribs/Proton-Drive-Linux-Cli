@@ -1068,6 +1068,7 @@ fn page_head(app: &mut App, ui: &mut egui::Ui) {
                     .clicked();
                 if new_folder {
                     app.input_buf.clear();
+                    app.input_focus = true;
                     app.dialog = Some(super::Dialog::Input {
                         title: "New folder".to_string(),
                         label: "Folder name:".to_string(),
@@ -2184,6 +2185,7 @@ fn apply_menu_item(app: &mut App, item: Option<&'static str>) {
         Some("download") => pick_download(app),
         Some("newfolder") => {
             app.input_buf.clear();
+            app.input_focus = true;
             app.dialog = Some(super::Dialog::Input {
                 title: "New folder".to_string(),
                 label: "Folder name:".to_string(),
@@ -2194,6 +2196,7 @@ fn apply_menu_item(app: &mut App, item: Option<&'static str>) {
             if let Some(rel) = app.cloud.sel.first().cloned() {
                 let name = rel.rsplit('/').next().unwrap_or(&rel).to_string();
                 app.input_buf = name.clone();
+                app.input_focus = true;
                 app.dialog = Some(super::Dialog::Input {
                     title: "Rename".to_string(),
                     label: "New name:".to_string(),
