@@ -1,3 +1,15 @@
+## 3.20.35 — 2026-11-07
+
+- **Photos has a proper library header.** The old three-line technical summary
+  is now one card: photos in the cloud, library size, copies on this computer,
+  sync status and the last update. Actions sit on the title row, with a
+  stacked layout on narrow windows; the remote/local paths and last-pass
+  details moved to hover.
+- Signed-out, signing-in, paused, photo-sync-off, syncing and error states now
+  get a status pill and one clear hint instead of a run-on sentence. Summary
+  counts reset when the engine summary disappears, and the relative time
+  updates live.
+
 ## 3.20.34 — 2026-11-07
 
 - **Releases are no longer pruned.** The release workflow used to delete

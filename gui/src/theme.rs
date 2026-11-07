@@ -138,7 +138,7 @@ pub fn status_text_color(key: &str, visuals: &egui::Visuals) -> egui::Color32 {
                 INFO
             }
         }
-        "signing_in" | "syncing" => accent(visuals),
+        "signing_in" | "syncing" => accent_text(visuals),
         "engine_stopped" => muted(visuals),
         _ => muted(visuals),
     }

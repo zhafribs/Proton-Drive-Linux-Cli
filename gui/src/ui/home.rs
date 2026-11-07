@@ -2,7 +2,7 @@
 //! and the actions people actually use.
 
 use super::{App, Dialog, activity, widgets};
-use crate::{health, service, theme, util};
+use crate::{health, service, util};
 use eframe::egui;
 
 pub fn draw(app: &mut App, ui: &mut egui::Ui) {
@@ -155,7 +155,7 @@ fn draw_inner(app: &mut App, ui: &mut egui::Ui) {
                 }
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                status_pill(ui, key, health::short_label(key));
+                widgets::status_pill(ui, key, health::short_label(key));
             });
         });
     });
@@ -356,23 +356,6 @@ fn next_check_text(secs: i64) -> String {
     } else {
         format!("in {}d {}h", secs / 86_400, (secs % 86_400) / 3600)
     }
-}
-
-fn status_pill(ui: &mut egui::Ui, key: &str, label: &str) {
-    let color = theme::status_color(key);
-    let text = theme::status_text_color(key, ui.visuals());
-    egui::Frame::new()
-        .fill(color.gamma_multiply(0.10))
-        .corner_radius(theme::pill())
-        .inner_margin(egui::Margin::symmetric(10, 4))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
-                ui.painter().circle_filled(rect.center(), 3.5, color);
-                ui.label(egui::RichText::new(label).size(11.5).color(text));
-            });
-        });
 }
 
 #[cfg(test)]

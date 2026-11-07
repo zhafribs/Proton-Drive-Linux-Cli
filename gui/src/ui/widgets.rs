@@ -27,6 +27,52 @@ pub fn section_label(ui: &mut egui::Ui, text: &str) {
     ui.add_space(4.0);
 }
 
+/// A status pill: tinted track, colored dot, short label. Shared by Home and
+/// Photos so a status reads the same everywhere.
+pub fn status_pill(ui: &mut egui::Ui, key: &str, label: &str) {
+    let color = theme::status_color(key);
+    let text = theme::status_text_color(key, ui.visuals());
+    egui::Frame::new()
+        .fill(color.gamma_multiply(0.10))
+        .corner_radius(theme::pill())
+        .inner_margin(egui::Margin::symmetric(10, 4))
+        .show(ui, |ui| {
+            // An outer RTL header can flip a plain horizontal, so give the
+            // pill's contents an exact LTR box. The label width comes from
+            // the same font the label paints with.
+            let text_w = ui
+                .painter()
+                .layout_no_wrap(
+                    label.to_string(),
+                    egui::FontId::proportional(11.5),
+                    text,
+                )
+                .size()
+                .x;
+            let content_w = 7.0 + 5.0 + text_w + 2.0;
+            ui.allocate_ui_with_layout(
+                egui::vec2(content_w, 18.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 5.0;
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(7.0, 7.0),
+                        egui::Sense::hover(),
+                    );
+                    ui.painter().circle_filled(rect.center(), 3.5, color);
+                    let resp =
+                        ui.label(egui::RichText::new(label).size(11.5).color(text));
+                    resp.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::Role::Status, true, label)
+                    });
+                    ui.ctx().accesskit_node_builder(resp.id, |n| {
+                        n.set_live(egui::accesskit::Live::Polite)
+                    });
+                },
+            );
+        });
+}
+
 /// A small muted info glyph. Its explanation appears only on hover, keeping
 /// the page free of always-visible instructional paragraphs. U+2139 is present
 /// in the bundled fallback fonts (unlike U+24D8, which can show as tofu).
@@ -36,6 +82,14 @@ pub fn info_icon(ui: &mut egui::Ui, text: &str) -> egui::Response {
             .sense(egui::Sense::focusable_noninteractive()),
     );
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            response.rect.expand(2.0),
+            egui::CornerRadius::same(4),
+            egui::Stroke::new(1.5, theme::accent(ui.visuals())),
+            egui::StrokeKind::Inside,
+        );
+    }
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Help);
     }
