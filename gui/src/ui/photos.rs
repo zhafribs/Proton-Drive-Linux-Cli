@@ -969,7 +969,9 @@ fn photo_hero(app: &App, ui: &mut egui::Ui) {
     };
     let animate = app.prefs.motion_enabled();
     widgets::card(ui, None, |ui| {
-        ui.horizontal(|ui| {
+        // Top-align the copy with the status pill; centering a two-line block
+        // against the 72 px orb left the title visibly lower than the pill.
+        ui.horizontal_top(|ui| {
             widgets::status_orb(ui, key, animate);
             ui.add_space(18.0);
             let text_w = (ui.available_width() - 124.0).max(80.0);

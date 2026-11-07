@@ -47,7 +47,7 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
 
 **Photos** — the same status hero and three summary cards as Home, above the timeline:
 
-![Photos](docs/screenshots/photos-3.20.37.png)
+![Photos](docs/screenshots/photos-3.20.38.png)
 
 ## Features
 

@@ -1,3 +1,10 @@
+## 3.20.38 — 2026-11-07
+
+- **Photos' hero copy lines up with the status pill.** The title and context
+  now start at the same height as the pill instead of sitting lower in the
+  orb's vertical centre. The 415.7 MB library value stays on one line at the
+  minimum window width.
+
 ## 3.20.37 — 2026-11-07
 
 - **Photos fits the smallest window.** The title and its three actions stay
