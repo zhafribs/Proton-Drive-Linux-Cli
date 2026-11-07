@@ -108,21 +108,6 @@ pub fn local_dir(app: &App) -> std::path::PathBuf {
     local_dir_from(&app.conf)
 }
 
-/// `~/ProtonPhotos` instead of the full home path, for the header.
-fn short_path(path: &std::path::Path) -> String {
-    if let Some(home) = dirs::home_dir()
-        && let Ok(rest) = path.strip_prefix(&home)
-    {
-        let rest = rest.display().to_string();
-        return if rest.is_empty() {
-            "~".to_string()
-        } else {
-            format!("~/{rest}")
-        };
-    }
-    path.display().to_string()
-}
-
 /// Show upload exceptions at the top of the scroll area, so a long list can
 /// never push the grid (or this card's own actions) off the panel.
 fn draw_upload_issues(
@@ -969,7 +954,7 @@ fn photo_hero(app: &App, ui: &mut egui::Ui) {
         } else {
             format!("Last checked {when} \u{b7} All photos are on this computer")
         };
-        ("synced", "Synced", "Your photos are up to date", sub)
+        ("synced", "Synced", "You're up to date", sub)
     } else {
         (
             "starting",
@@ -987,13 +972,19 @@ fn photo_hero(app: &App, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             widgets::status_orb(ui, key, animate);
             ui.add_space(18.0);
-            ui.vertical(|ui| {
-                ui.label(egui::RichText::new(title).strong().size(20.0));
-                let sub = ui.label(egui::RichText::new(sub).size(12.5).weak());
-                if !app.photos.last_sync.is_empty() && !needs_signin {
-                    sub.on_hover_text(&app.photos.last_sync);
-                }
-            });
+            let text_w = (ui.available_width() - 124.0).max(80.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(text_w, 0.0),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    ui.set_min_width(text_w);
+                    ui.label(egui::RichText::new(title).strong().size(20.0));
+                    let sub = ui.label(egui::RichText::new(sub).size(12.5).weak());
+                    if !app.photos.last_sync.is_empty() && !needs_signin {
+                        sub.on_hover_text(&app.photos.last_sync);
+                    }
+                },
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
                 widgets::status_pill(ui, key, label);
             });
@@ -1051,15 +1042,10 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
     let sel = app.photos.sel.clone();
 
     // --- header: title + actions, then the Home-style hero and metrics ------
-    let narrow = ui.available_width() < 520.0;
-    let info = format!(
-        "Downloaded photos are saved to {}. Click a photo to select it for download or delete.",
-        short_path(&dir)
-    );
+    let narrow = ui.available_width() < 420.0;
     if sel.is_empty() && !narrow {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Photos").strong().size(24.0));
-            widgets::info_icon(ui, &info);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.allocate_ui_with_layout(
                     egui::vec2(348.0, 30.0),
@@ -1071,7 +1057,6 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
     } else {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Photos").strong().size(24.0));
-            widgets::info_icon(ui, &info);
         });
         if sel.is_empty() {
             ui.add_space(6.0);

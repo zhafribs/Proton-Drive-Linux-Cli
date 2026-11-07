@@ -33,7 +33,14 @@ pub fn metric(ui: &mut egui::Ui, label: &str, value: &str, sub: &str) {
     card(ui, None, |ui| {
         ui.label(egui::RichText::new(label).size(11.5).weak());
         ui.add_space(2.0);
-        ui.label(egui::RichText::new(value).strong().size(23.0));
+        // A long value ("415.7 MB") must stay on one line in the narrow
+        // three-column row; the smaller size applies only in that case.
+        let value_size = if ui.available_width() < 120.0 {
+            18.5
+        } else {
+            23.0
+        };
+        ui.label(egui::RichText::new(value).strong().size(value_size));
         ui.label(egui::RichText::new(sub).size(11.0).weak());
     });
 }
@@ -82,29 +89,6 @@ pub fn status_pill(ui: &mut egui::Ui, key: &str, label: &str) {
                 },
             );
         });
-}
-
-/// A small muted info glyph. Its explanation appears only on hover, keeping
-/// the page free of always-visible instructional paragraphs. U+2139 is present
-/// in the bundled fallback fonts (unlike U+24D8, which can show as tofu).
-pub fn info_icon(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    let response = ui.add(
-        egui::Label::new(egui::RichText::new("\u{2139}").size(14.0).weak())
-            .sense(egui::Sense::focusable_noninteractive()),
-    );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
-    if response.has_focus() {
-        ui.painter().rect_stroke(
-            response.rect.expand(2.0),
-            egui::CornerRadius::same(4),
-            egui::Stroke::new(1.5, theme::accent(ui.visuals())),
-            egui::StrokeKind::Inside,
-        );
-    }
-    if response.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Help);
-    }
-    response.on_hover_text(text)
 }
 
 pub fn primary_button(ui: &mut egui::Ui, text: &str) -> bool {

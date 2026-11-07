@@ -1,3 +1,11 @@
+## 3.20.37 — 2026-11-07
+
+- **Photos fits the smallest window.** The title and its three actions stay
+  on one row, the status pill no longer collides with the hero title, and
+  the three metric cards keep equal heights with large values (such as
+  "415.7 MB") on a single line. The small info glyph was removed from the
+  Photos header.
+
 ## 3.20.36 — 2026-11-07
 
 - **Photos now matches the Home layout.** The library card is replaced by the
