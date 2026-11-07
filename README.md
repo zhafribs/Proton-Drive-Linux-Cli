@@ -19,8 +19,8 @@ no AUR.
 
 **[Download the latest AppImage →](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/latest)**
 
-The releases page keeps the **seven most recent builds**; older ones are
-removed automatically.
+Every published build stays on the releases page; older releases are never
+pruned automatically.
 
 ## Quick start
 
