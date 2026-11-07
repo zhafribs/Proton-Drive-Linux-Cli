@@ -20,23 +20,27 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
             if ui.available_width() >= 620.0 {
                 let full = ui.available_width();
                 let left = (full - 14.0) * 0.5;
+                // Equal card bodies when they sit side by side, even though
+                // the two lists have different natural heights. Measure the
+                // wrapped text first, then give both cards the larger body.
+                let min_body = Some(equal_body_height(ui, left));
                 ui.horizontal_top(|ui| {
                     ui.allocate_ui_with_layout(
                         egui::vec2(left, 0.0),
                         egui::Layout::top_down(egui::Align::Min),
-                        what_it_does,
+                        |ui| what_it_does(ui, min_body),
                     );
                     ui.add_space(14.0);
                     ui.allocate_ui_with_layout(
                         egui::vec2(ui.available_width(), 0.0),
                         egui::Layout::top_down(egui::Align::Min),
-                        good_to_know,
+                        |ui| good_to_know(ui, min_body),
                     );
                 });
             } else {
-                what_it_does(ui);
+                what_it_does(ui, None);
                 ui.add_space(12.0);
-                good_to_know(ui);
+                good_to_know(ui, None);
             }
 
             ui.add_space(12.0);
@@ -190,12 +194,29 @@ fn update_pill(app: &App, ui: &mut egui::Ui) {
 }
 
 fn cli_version(app: &App) -> String {
-    let raw = app
-        .identity
-        .as_ref()
-        .map(|i| i.version.split_whitespace().last().unwrap_or(""))
+    cli_version_from(
+        app.identity
+            .as_ref()
+            .map(|i| i.version.as_str())
+            .unwrap_or(""),
+    )
+}
+
+/// The CLI reports names such as `cli-drive@0.9.0` or `proton-drive 0.9.0`.
+/// Show only the version, without the package prefix or build suffix.
+fn cli_version_from(raw: &str) -> String {
+    let token = raw
+        .split_whitespace()
+        .rev()
+        .find_map(|part| {
+            let candidate = part.rsplit_once('@').map(|(_, v)| v).unwrap_or(part);
+            let candidate = candidate.trim_matches(|c: char| !c.is_ascii_digit() && c != '.');
+            (candidate.starts_with(|c: char| c.is_ascii_digit())
+                && candidate.contains('.'))
+            .then_some(candidate)
+        })
         .unwrap_or("");
-    let version = util::strip_build_suffix(raw);
+    let version = util::strip_build_suffix(token);
     if version.is_empty() || version == "?" {
         "\u{2014}".to_string()
     } else {
@@ -217,26 +238,98 @@ fn versions(app: &App, ui: &mut egui::Ui) {
     });
 }
 
-fn what_it_does(ui: &mut egui::Ui) {
+const FEATURES: [(&str, &str); 3] = [
+    (
+        "Two-way folder sync",
+        "Keeps a local folder equal to Proton Drive in both directions.",
+    ),
+    (
+        "Cloud file manager",
+        "Upload, download, rename, move and search from one list.",
+    ),
+    (
+        "Photos timeline",
+        "Review the timeline and keep local copies in step.",
+    ),
+];
+
+const GOOD_TO_KNOW: [&str; 6] = [
+    "Deletes go to trash by default; permanent delete is an explicit action.",
+    "Conflicts keep both versions, so nothing is lost.",
+    "Proton Docs and Sheets stay online only.",
+    "Sign-in persists until you sign out.",
+    "Your password is handled by Proton's official CLI, not this app.",
+    "Updates are signed and verified before they run.",
+];
+
+/// The taller of the two card bodies, measured with the same fonts and wrap
+/// width the cards will use. A fixed minimum would be a guess; this grows the
+/// shorter card to match the longer one.
+fn equal_body_height(ui: &egui::Ui, column_w: f32) -> f32 {
+    let inner = (column_w - 40.0).max(80.0);
+    let feature_w = (inner - 42.0).max(40.0);
+    let bullet_w = (inner - 14.0).max(40.0);
+    let color = ui.visuals().text_color();
+    let line_gap = ui.spacing().item_spacing.y;
+    let feature_h: f32 = FEATURES
+        .iter()
+        .map(|(title, body)| {
+            let title_h = ui
+                .painter()
+                .layout_no_wrap(
+                    title.to_string(),
+                    egui::FontId::proportional(13.5),
+                    color,
+                )
+                .size()
+                .y;
+            let body_h = ui
+                .painter()
+                .layout(
+                    body.to_string(),
+                    egui::FontId::proportional(12.0),
+                    color,
+                    feature_w,
+                )
+                .size()
+                .y;
+            32.0f32.max(title_h + line_gap + body_h) + 10.0
+        })
+        .sum();
+    let bullet_h: f32 = GOOD_TO_KNOW
+        .iter()
+        .map(|text| {
+            let text_h = ui
+                .painter()
+                .layout(
+                    text.to_string(),
+                    egui::FontId::proportional(12.0),
+                    color,
+                    bullet_w,
+                )
+                .size()
+                .y;
+            6.0f32.max(text_h) + 6.0
+        })
+        .sum();
+    feature_h.max(bullet_h) + 24.0
+}
+
+fn what_it_does(ui: &mut egui::Ui, min_body: Option<f32>) {
     widgets::card(ui, Some("What it does"), |ui| {
-        feature(
-            ui,
+        if let Some(h) = min_body {
+            ui.set_min_height(h);
+        }
+        for (icon, (title, body)) in [
             widgets::NavIcon::Home,
-            "Two-way folder sync",
-            "Keeps a local folder equal to Proton Drive in both directions.",
-        );
-        feature(
-            ui,
             widgets::NavIcon::Folder,
-            "Cloud file manager",
-            "Upload, download, rename, move and search from one list.",
-        );
-        feature(
-            ui,
             widgets::NavIcon::Photos,
-            "Photos timeline",
-            "Review the timeline and keep local copies in step.",
-        );
+        ]
+        .into_iter()
+        .zip(FEATURES)
+        {
+            feature(ui, icon, title, body);
+        }
     });
 }
 
@@ -262,16 +355,12 @@ fn feature(ui: &mut egui::Ui, icon: widgets::NavIcon, title: &str, body: &str) {
     ui.add_space(10.0);
 }
 
-fn good_to_know(ui: &mut egui::Ui) {
+fn good_to_know(ui: &mut egui::Ui, min_body: Option<f32>) {
     widgets::card(ui, Some("Good to know"), |ui| {
-        for text in [
-            "Deletes go to trash by default; permanent delete is an explicit action.",
-            "Conflicts keep both versions, so nothing is lost.",
-            "Proton Docs and Sheets stay online only.",
-            "Sign-in persists until you sign out.",
-            "Your password is handled by Proton's official CLI, not this app.",
-            "Updates are signed and verified before they run.",
-        ] {
+        if let Some(h) = min_body {
+            ui.set_min_height(h);
+        }
+        for text in GOOD_TO_KNOW {
             bullet(ui, text);
         }
     });
@@ -477,6 +566,15 @@ fn legal(ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cli_version_drops_package_prefixes() {
+        assert_eq!(cli_version_from("cli-drive@0.9.0"), "0.9.0");
+        assert_eq!(cli_version_from("proton-drive 0.9.0"), "0.9.0");
+        assert_eq!(cli_version_from("0.9.0+official"), "0.9.0");
+        assert_eq!(cli_version_from("proton-drive 0.9.0 (build 7)"), "0.9.0");
+        assert_eq!(cli_version_from("?"), "\u{2014}");
+    }
 
     #[test]
     fn update_state_never_reports_failure_as_up_to_date() {

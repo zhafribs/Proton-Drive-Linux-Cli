@@ -1,3 +1,12 @@
+## 3.20.41 — 2026-11-07
+
+- **About shows a clean Proton CLI version.** Values such as
+  `cli-drive@0.9.0` and `proton-drive 0.9.0` now display as `0.9.0`.
+- **The What it does and Good to know cards match heights side by side.**
+  Both cards use the taller measured body, so adding a line to either one
+  grows the other instead of leaving mismatched panels. Narrow windows still
+  stack them naturally.
+
 ## 3.20.40 — 2026-11-07
 
 - **About is rebuilt as a product page.** Identity hero with live update

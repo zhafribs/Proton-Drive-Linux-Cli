@@ -51,7 +51,7 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
 
 **About** — versions, updates, diagnostics and credits:
 
-![About](docs/screenshots/about-3.20.40.png)
+![About](docs/screenshots/about-3.20.41.png)
 
 ## Features
 
