@@ -43,7 +43,7 @@ file, the evidence, an owner, a fix and a verification step.
 | G2 UI/frontend | 0 | 0 | Shipped `v0.9.0-gui3.20.46`; UI P1s closed; G3/G4 carry-over tracked below |
 | G3 Backend/contract | 0 | 0 | Shipped `v0.9.0-gui3.20.47`; engine timeout/lock/state P1s closed; UI logout/pause-race items carried |
 | G4 Security/legal/release | 0 | 0 | Shipped `v0.9.0-gui3.20.48`; 0 cargo-audit vulnerabilities, action pins and 0600 config tests verified |
-| G5 Consolidation | 0 | 0 | Shipped `v0.9.0-gui3.20.49` + patch `v0.9.0-gui3.20.50`; P0/P1 closed; director sign-off pending |
+| G5 Consolidation | 0 | 0 | Shipped `v0.9.0-gui3.20.49`, patch `v0.9.0-gui3.20.50` and residual patch `v0.9.0-gui3.20.51`; P0/P1 closed; director sign-off pending |
 
 ## G2 release — 3.20.46 (fixed)
 
@@ -150,15 +150,20 @@ accepted product decisions.
 | F-093 | P2 | AppRun | A non-UTF-8 first operand was mistaken for “no argument” and sent to the GUI, whose `args()` aborts on non-Unicode. | Dispatch on `OsStr`; non-UTF-8 goes to the CLI; exec errors use 126 vs 127. | `non_utf8_operands_go_to_the_cli`. |
 | F-094 | P2 | Tray | A same-session peer owning the predictable StatusNotifierItem bus name triggered an upstream assert; release builds abort. | Vendored ksni returns `NameTaken` as `Error::Dbus`; tray becomes unavailable. | Code review; vendor patch documented. |
 
+## G5 residual patch — 3.20.51 (fixed)
+
+| ID | Sev | Area | Finding | Fix | Verified |
+|---|---|---|---|---|---|
+| F-086 | P2 | Approval | The deletion-approval digest was unkeyed 64-bit FNV and not bound to the sync roots. | SHA-256 over the side and exact path set; `local_root`/`remote_root` are stored in the approval and matched before it can be consumed; missing or different roots fail closed. | `delete_approval::tests`; `approval_must_match_the_reviewed_paths_and_never_a_wipe`. |
+| F-087 | P2 | Keyring | Any Proton auth-session label was accepted, so two sessions could route quota/event calls to the wrong account. | The exact CLI item is preferred; one renamed auth-session is tolerated; two ambiguous sessions fail closed. | Code review; clippy clean. |
+| F-088 | P2 | State | A post-download edit before the state rescan could be stamped as synced. | The fingerprint captured immediately after placement is carried into `state_update` and stored instead of the later rescan value. | `downloaded_fingerprint_is_not_replaced_by_a_later_rescan_edit`; execute tests. |
+| F-091 | P2 | Service | Pause/resume workers were not serialized; a fast pause→resume could leave the engine in the opposite state. | One service-control mutex plus a desired-state bit: the last click wins and the worker re-checks the bit under the lock. | Code review; `service::tests`; clippy clean. |
+
 ## Remaining P2/P3 after G5
 
 | ID | Sev | Finding | Next window |
 |---|---|---|---|
-| F-086 | P2 | Deletion-approval digest is unkeyed 64-bit FNV and not bound to roots. | Maintenance |
-| F-087 | P2 | Keyring lookup accepts any Proton auth-session label; prefer exact/unique. | Maintenance |
-| F-088 | P2 | A post-download edit before the state rescan can be stamped as synced; carry the placed fingerprint. | Maintenance |
 | F-089 | P2 | Upload target is captured when the picker closes, not when it opens. | Maintenance |
 | F-090 | P2 | Context-menu-only actions still need a full keyboard path; status/error line is hidden during selection. | Maintenance |
-| F-091 | P2 | Pause/resume workers are not serialized. | Maintenance |
 | F-092 | P3 | Non-UTF8 picker paths, portal cancel refinement, second-launch quit race, tree-label elision. | Backlog |
 | F-004 | P2 | Formatter decision: the tree is not rustfmt-clean; no fmt gate. | Director decision |

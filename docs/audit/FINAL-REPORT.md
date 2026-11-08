@@ -4,7 +4,8 @@
 **Period:** 2026-11-08  
 **Director:** approved scope, 50–200% interface size, file-coverage model,
 soft freeze until G5, one signed release per milestone  
-**Status:** G0–G4 complete; G5 release `v0.9.0-gui3.20.49` verified; director
+**Status:** G0–G5 complete; releases `v0.9.0-gui3.20.49`, patch
+`v0.9.0-gui3.20.50` and residual patch `v0.9.0-gui3.20.51` verified; director
 sign-off line below remains to be signed.
 
 ## 1. What was audited
@@ -36,15 +37,16 @@ The audit was performed by four councils:
 | G4 Security/legal/release | `v0.9.0-gui3.20.48` | Advisory updates, 0600 config, action pins, threat model/licences |
 | G5 Consolidation | `v0.9.0-gui3.20.49` | Data-safety P0/P1 fixes, dead deps, final screenshots |
 | G5 patch | `v0.9.0-gui3.20.50` | Non-UTF-8 AppRun dispatch and tray name-collision safety |
+| G5 residual patch | `v0.9.0-gui3.20.51` | Residual data-safety P2 fixes (F-086, F-087, F-088, F-091) |
 
-All eight releases have a signed `SHA256SUMS`, an Ed25519 signature, a smoke
+All nine releases have a signed `SHA256SUMS`, an Ed25519 signature, a smoke
 test and a verified GLIBC 2.28 floor. The releases page is never pruned.
 
 ## 3. Verification
 
 | Check | Result |
 |---|---|
-| `cargo test --workspace` | 280 passed, 4 ignored |
+| `cargo test --workspace` | 281 passed, 4 ignored |
 | `cargo clippy --release --workspace --all-targets -- -D warnings` | clean |
 | Release-gate fixtures | 12/12 |
 | `cargo audit` | 0 vulnerabilities; 3 unmaintained zbus-family warnings documented |
@@ -100,24 +102,32 @@ misattribute user data:
 14. **P1 — partial failures still showed “up to date”.** The engine writes
     `error` when a cycle had failed transfers.
 
+The residual patch `3.20.51` closed four more data-safety P2s:
+
+15. **P2 — a post-download edit could be stamped as synced.** The fingerprint
+    of the bytes actually placed is carried into `state_update`; a rescan
+    after placement cannot hide an edit made between the download and the
+    state write.
+16. **P2 — pause and resume could interleave.** One service-control lane and a
+    desired-state bit make the last click win; a quick pause→resume cannot
+    leave the engine in the opposite state.
+17. **P2 — deletion approvals were unkeyed and root-agnostic.** The one-shot
+    approval now uses SHA-256 over the side and exact path set and is bound to
+    the local/remote roots; a stale path set or a different root fails closed.
+18. **P2 — keyring lookup could pick the wrong Proton session.** The exact CLI
+    item is preferred; a single renamed auth-session is tolerated, but two
+    ambiguous sessions no longer route quota/event calls to the wrong account.
+
 ## 5. Open P2/P3 backlog
 
 No P0 or P1 is open. The remaining findings are scheduled for the next
 maintenance window:
 
-- P2: unkeyed 64-bit deletion-approval digest; bind it to roots and use
-  SHA-256.
-- P2: keyring lookup accepts a non-exact Proton auth-session label; prefer the
-  exact label and reject ambiguous matches.
-- P2: a post-download edit before the state rescan can be stamped as synced;
-  carry the placed fingerprint into `state_update`.
 - P2: upload destination is captured when the file picker closes; carry the
   target folder from the opening click.
 - P2: context-menu-only file actions still need a full keyboard path beyond
   Ctrl+A.
 - P2: the Files status/error line is hidden while a selection is active.
-- P2: pause/resume workers are not serialized; a fast pause→resume can leave
-  the service in the opposite state.
 - P2: the folder-tree label can clip at the 150 pt sidebar; width-aware
   elision and a hover are pending.
 - P3: non-UTF-8 file-picker paths, portal cancel-vs-unavailable refinements,

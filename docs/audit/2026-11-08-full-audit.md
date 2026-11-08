@@ -1,7 +1,8 @@
 # Full product audit and interface-size program
 
-**Status:** G0-G4 complete; G5 release `v0.9.0-gui3.20.49` verified; director sign-off pending  
-**Date:** 2026-11-08  
+**Status:** G0-G5 complete; releases `v0.9.0-gui3.20.49`, `v0.9.0-gui3.20.50` and `v0.9.0-gui3.20.51` verified; director sign-off pending
+
+**Date:** 2026-11-08
 **Scope:** every Rust file in the workspace, every UI surface, every CLI/engine
 command, the release pipeline, and the legal notices.  
 **Participants:** director, Design Council, Engineering Council, Trust Council,
@@ -177,12 +178,12 @@ no unrelated feature work. Interface size is the one planned feature.
 - [x] Remove confirmed dead code, dead flags, dead dependencies and stale docs
       (vendored ksni's unused optional `futures-lite` removed).
 - [x] Re-run full coverage ledger; all 60 Rust files have a council read and
-      22 high-risk files have a second read.
+      23 high-risk files have a second read.
 - [x] Final layout screenshot matrix and README screenshots.
-- [x] Full regression: 279 tests, clippy, gate, AppImage smoke, signatures,
+- [x] Full regression: 281 tests, clippy, gate, AppImage smoke, signatures,
       GLIBC 2.28.
 - [x] Final audit report `docs/audit/FINAL-REPORT.md`.
-- [ ] Director signs the final audit report (release `v0.9.0-gui3.20.49`
+- [ ] Director signs the final audit report (release `v0.9.0-gui3.20.51`
       verified).
 
 ## 8. Director decisions (approved 2026-11-08)
