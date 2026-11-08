@@ -43,7 +43,7 @@ file, the evidence, an owner, a fix and a verification step.
 | G2 UI/frontend | 0 | 0 | Shipped `v0.9.0-gui3.20.46`; UI P1s closed; G3/G4 carry-over tracked below |
 | G3 Backend/contract | 0 | 0 | Shipped `v0.9.0-gui3.20.47`; engine timeout/lock/state P1s closed; UI logout/pause-race items carried |
 | G4 Security/legal/release | 0 | 0 | Shipped `v0.9.0-gui3.20.48`; 0 cargo-audit vulnerabilities, action pins and 0600 config tests verified |
-| G5 Consolidation | 0 | 0 | Shipped `v0.9.0-gui3.20.49`; P0/P1 closed; director sign-off pending |
+| G5 Consolidation | 0 | 0 | Shipped `v0.9.0-gui3.20.49` + patch `v0.9.0-gui3.20.50`; P0/P1 closed; director sign-off pending |
 
 ## G2 release — 3.20.46 (fixed)
 
@@ -147,6 +147,8 @@ accepted product decisions.
 | F-083 | P1 | Journal/health | systemd `+0800` timestamps failed, notification verbs matched file names, and failed transfers still said “up to date”. | Precise timestamps/normalization, leading-verb classification, engine writes `error` on failure. | Journal tests; loop tests. |
 | F-084 | P2 | Paths | Engine still accepted relative/empty XDG values and raw data dirs. | One absolute resolver shared by GUI/engine; `dirs::data_dir()`. | Code review. |
 | F-085 | P2 | UI/desktop | Theme detection order, tray “Open”, update recovery before the lock, startup tray notification, portal cancel, icon self-copy. | Targeted fixes. | Tests/code review. |
+| F-093 | P2 | AppRun | A non-UTF-8 first operand was mistaken for “no argument” and sent to the GUI, whose `args()` aborts on non-Unicode. | Dispatch on `OsStr`; non-UTF-8 goes to the CLI; exec errors use 126 vs 127. | `non_utf8_operands_go_to_the_cli`. |
+| F-094 | P2 | Tray | A same-session peer owning the predictable StatusNotifierItem bus name triggered an upstream assert; release builds abort. | Vendored ksni returns `NameTaken` as `Error::Dbus`; tray becomes unavailable. | Code review; vendor patch documented. |
 
 ## Remaining P2/P3 after G5
 

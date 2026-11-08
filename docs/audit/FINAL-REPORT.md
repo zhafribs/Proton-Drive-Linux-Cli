@@ -35,15 +35,16 @@ The audit was performed by four councils:
 | G3 Backend/contract | `v0.9.0-gui3.20.47` | CLI timeouts, state paths, service safety |
 | G4 Security/legal/release | `v0.9.0-gui3.20.48` | Advisory updates, 0600 config, action pins, threat model/licences |
 | G5 Consolidation | `v0.9.0-gui3.20.49` | Data-safety P0/P1 fixes, dead deps, final screenshots |
+| G5 patch | `v0.9.0-gui3.20.50` | Non-UTF-8 AppRun dispatch and tray name-collision safety |
 
-All seven releases have a signed `SHA256SUMS`, an Ed25519 signature, a smoke
+All eight releases have a signed `SHA256SUMS`, an Ed25519 signature, a smoke
 test and a verified GLIBC 2.28 floor. The releases page is never pruned.
 
 ## 3. Verification
 
 | Check | Result |
 |---|---|
-| `cargo test --workspace` | 279 passed, 4 ignored |
+| `cargo test --workspace` | 280 passed, 4 ignored |
 | `cargo clippy --release --workspace --all-targets -- -D warnings` | clean |
 | Release-gate fixtures | 12/12 |
 | `cargo audit` | 0 vulnerabilities; 3 unmaintained zbus-family warnings documented |

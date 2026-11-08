@@ -74,7 +74,7 @@ file.
 | 53 | `gui/src/util.rs` | 124 | L | Engineering | Read | n/a | Council read. |
 | 54 | `vendor/ksni/src/blocking.rs` | 240 | M | Engineering | Read | n/a | Council read. |
 | 55 | `vendor/ksni/src/compat.rs` | 314 | M | Engineering | Read | n/a | Council read. |
-| 56 | `vendor/ksni/src/dbus_interface.rs` | 501 | H | Trust | Read | n/a | Council read. |
+| 56 | `vendor/ksni/src/dbus_interface.rs` | 501 | H | Trust | Double-read | Done | Council read + maintainer read. |
 | 57 | `vendor/ksni/src/lib.rs` | 630 | M | Engineering | Read | n/a | Council read. |
 | 58 | `vendor/ksni/src/menu.rs` | 1130 | M | Engineering | Read | n/a | Council read. |
 | 59 | `vendor/ksni/src/service.rs` | 1843 | M | Engineering | Read | n/a | Council read. |
@@ -145,9 +145,9 @@ display it, and at 720x540, 1024x720, 1280x800, 1440x900 and 1920x1080.
 | crates/engine | 20 | 20 | 9 | 0 P0/P1 |
 | gui | 27 | 27 | 11 | 0 P0/P1 |
 | vendor/ksni | 7 | 7 | 0 | 0 P0/P1 |
-| **Total** | **60** | **60** | **22** | **0 P0/P1** |
+| **Total** | **60** | **60** | **23** | **0 P0/P1** |
 
-All 60 Rust files have a council read. Twenty-two high-risk files have an
+All 60 Rust files have a council read. Twenty-three high-risk files have an
 independent second read. `vendor/ksni` is vendored upstream code; the local
 patch (`PATCH.md`) was reviewed line by line and the crate was scanned for
 unsafe/DBus hazards. `docs/audit/FINDINGS.md` records the remaining P2/P3
