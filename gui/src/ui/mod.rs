@@ -7,6 +7,7 @@ pub mod activity;
 pub mod cloud;
 pub mod home;
 pub mod photos;
+pub mod recovery;
 pub mod settings;
 pub mod widgets;
 
@@ -30,6 +31,7 @@ pub enum Page {
     Activity,
     Settings,
     About,
+    Recovery,
 }
 
 /// Messages from the poller/worker threads to the UI.
@@ -107,6 +109,10 @@ pub enum Back {
     CloudPicked(Option<Picked>),
     /// Cloud browser: no native dialog could be started.
     CloudPickFailed(String),
+    /// Recovery: the local-trash listing finished.
+    RecoveryLoaded(Result<Vec<proton_core::local_trash::Entry>, String>),
+    /// Recovery: a restore or permanent delete finished.
+    RecoveryResult { ok: bool, message: String },
     /// Cloud browser: the move-to picker's folder listing landed.
     PickerFolders {
         parent: String,
@@ -281,6 +287,7 @@ pub struct App {
     pub act: activity::ActivityState,
     pub cloud: cloud::CloudState,
     pub photos: photos::PhotoState,
+    pub recovery: recovery::RecoveryState,
     /// Buffer of the open text-input dialog (rename / new folder).
     pub input_buf: String,
     pub input_focus: bool,
@@ -817,6 +824,7 @@ impl App {
             act: activity::ActivityState::default(),
             cloud: cloud::CloudState::default(),
             photos: photos::PhotoState::default(),
+            recovery: recovery::RecoveryState::default(),
             input_buf: String::new(),
             input_focus: false,
             search_focus: false,
@@ -1372,6 +1380,10 @@ impl App {
                 }
                 Back::CloudPicked(p) => cloud::on_picked(self, p),
                 Back::CloudPickFailed(msg) => self.toast_error(msg),
+                Back::RecoveryLoaded(result) => recovery::on_loaded(self, result),
+                Back::RecoveryResult { ok, message } => {
+                    recovery::on_result(self, ok, message)
+                }
                 Back::PickerFolders { parent, folders } => {
                     cloud::on_picker_folders(self, parent, folders)
                 }
@@ -1976,6 +1988,7 @@ impl App {
                 Page::Activity => activity::draw(self, ui, "Activity"),
                 Page::Settings => settings::draw(self, ui),
                 Page::About => about::draw(self, ui),
+                Page::Recovery => recovery::draw(self, ui),
             });
     }
 

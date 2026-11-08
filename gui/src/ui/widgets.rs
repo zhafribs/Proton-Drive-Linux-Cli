@@ -643,6 +643,7 @@ pub enum NavIcon {
     Activity,
     Settings,
     Trash,
+    Recovery,
     About,
 }
 
@@ -754,6 +755,14 @@ pub fn nav_icon(painter: &egui::Painter, r: egui::Rect, kind: NavIcon, c: egui::
             ));
             painter.add(egui::Shape::line(
                 vec![p(0.56, 0.48), p(0.54, 0.76)],
+                stroke,
+            ));
+        }
+        NavIcon::Recovery => {
+            // Circular restore arrow.
+            painter.circle_stroke(p(0.5, 0.5), 0.36 * r.width(), stroke);
+            painter.add(egui::Shape::line(
+                vec![p(0.70, 0.16), p(0.90, 0.22), p(0.82, 0.42)],
                 stroke,
             ));
         }
