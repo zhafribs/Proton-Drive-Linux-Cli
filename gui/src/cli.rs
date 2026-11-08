@@ -84,7 +84,11 @@ fn run_cli_wait(
     timeout: Duration,
     wait: Duration,
 ) -> Result<exec::Output, String> {
-    let _lock = crate::clilock::CliLock::acquire(&lock_path(), wait);
+    let Some(_lock) = crate::clilock::CliLock::acquire(&lock_path(), wait) else {
+        return Err(
+            "the official CLI is busy; try again in a moment".to_string(),
+        );
+    };
     exec::run(&cli.to_string_lossy(), args, timeout)
 }
 
@@ -182,8 +186,19 @@ fn fetch_identity_with_wait(cli: &Path, wait: Duration) -> Identity {
     out
 }
 
-pub fn logout(cli: &Path) {
-    let _ = run_cli(cli, &["auth", "logout"], Duration::from_secs(120));
+pub fn logout(cli: &Path) -> Result<(), String> {
+    match run_cli(cli, &["auth", "logout"], Duration::from_secs(120)) {
+        Ok(o) if o.ok() => Ok(()),
+        Ok(o) => {
+            let msg = o.stderr.trim();
+            Err(if msg.is_empty() {
+                format!("proton-drive exited with code {}", o.code)
+            } else {
+                msg.to_string()
+            })
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Proton's trash markers as the PyQt app filtered them: `.Trash-<id>`.
@@ -231,7 +246,7 @@ fn parse_folder_list(json: &str, rel_path: &str) -> Vec<(String, String)> {
             .and_then(|n| n.get("value"))
             .and_then(Value::as_str)
             .unwrap_or("");
-        if !ok || name.is_empty() || is_trash_marker(name) {
+        if !ok || !valid_remote_name(name) || is_trash_marker(name) {
             continue;
         }
         let rel = if rel_path.is_empty() {
@@ -251,6 +266,10 @@ fn parse_folder_list(json: &str, rel_path: &str) -> Vec<(String, String)> {
 pub struct RemoteEntry {
     pub name: String,
     pub rel: String,
+    /// Cloud node UID; used for trash rows where duplicate names would
+    /// otherwise share one selection key.
+    #[serde(default)]
+    pub uid: String,
     pub dir: bool,
     #[serde(default)]
     pub size: u64,
@@ -293,7 +312,7 @@ fn parse_entries(json: &str, rel_path: &str, trash: bool) -> Result<Vec<RemoteEn
             .and_then(|n| n.get("value"))
             .and_then(Value::as_str)
             .unwrap_or("");
-        if !ok || name.is_empty() || is_trash_marker(name) {
+        if !ok || !valid_remote_name(name) || is_trash_marker(name) {
             continue;
         }
         let is_dir = e.get("type").and_then(Value::as_str) == Some("folder");
@@ -315,7 +334,20 @@ fn parse_entries(json: &str, rel_path: &str, trash: bool) -> Result<Vec<RemoteEn
             .chars()
             .take(16)
             .collect();
-        let rel = if trash || rel_path.is_empty() {
+        let uid = e
+            .get("uid")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        // The CLI accepts a node UID in place of a name, which keeps two
+        // trashed files with the same name distinct.
+        let rel = if trash {
+            if uid.is_empty() {
+                name.to_string()
+            } else {
+                uid.clone()
+            }
+        } else if rel_path.is_empty() {
             name.to_string()
         } else {
             format!("{rel_path}/{name}")
@@ -323,6 +355,7 @@ fn parse_entries(json: &str, rel_path: &str, trash: bool) -> Result<Vec<RemoteEn
         out.push(RemoteEntry {
             name: name.to_string(),
             rel,
+            uid,
             dir: is_dir,
             size,
             mtime,
@@ -421,6 +454,24 @@ fn parse_photos(json: &str) -> Result<Vec<PhotoEntry>, String> {
     // The timeline is "newest capture first"; the CLI makes no promise.
     out.sort_by(|a, b| b.capture.cmp(&a.capture));
     Ok(out)
+}
+
+/// Run an owned argv slice through the shared CLI lock. The Cloud browser
+/// used to call `exec::run` directly, bypassing the lock the engine and the
+/// rest of the GUI rely on for the keyring session.
+pub fn run_owned(args: &[String], timeout: Duration) -> Result<String, String> {
+    let cli = resolve_cli().ok_or_else(|| "proton-drive CLI not found".to_string())?;
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let o = run_cli(&cli, &refs, timeout)?;
+    if !o.ok() {
+        return Err(cli_err(&o));
+    }
+    Ok(o.stdout.trim().chars().take(200).collect())
+}
+
+/// A remote component that may safely be joined to a path.
+pub fn valid_remote_name(name: &str) -> bool {
+    valid_photo_name(name)
 }
 
 /// The account's photo timeline (My Photos), with names and sizes.

@@ -76,27 +76,35 @@ pub fn refresh_entries(paths: &Paths) {
             continue;
         }
         if autostart {
-            set_autostart(paths, true);
+            let _ = set_autostart(paths, true);
         } else {
-            set_menu(paths, true);
+            let _ = set_menu(paths, true);
         }
     }
 }
 
-pub fn set_autostart(paths: &Paths, on: bool) {
+pub fn set_autostart(paths: &Paths, on: bool) -> bool {
     if on {
-        let _ = std::fs::create_dir_all(
+        if std::fs::create_dir_all(
             paths.autostart_file.parent().unwrap_or(Path::new(".")),
-        );
+        )
+        .is_err()
+        {
+            return false;
+        }
         let content = format!(
             "[Desktop Entry]\nType=Application\nName=Proton Drive\n\
              Comment=Keep your Proton Drive folder in sync\n\
              Exec={}\nX-GNOME-Autostart-enabled=true\n",
             desktop_exec(&launch_command(paths))
         );
-        let _ = std::fs::write(&paths.autostart_file, content);
+        std::fs::write(&paths.autostart_file, content).is_ok()
     } else {
-        let _ = std::fs::remove_file(&paths.autostart_file);
+        match std::fs::remove_file(&paths.autostart_file) {
+            Ok(()) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+            Err(_) => false,
+        }
     }
 }
 
@@ -104,38 +112,54 @@ pub fn menu_installed(paths: &Paths) -> bool {
     paths.menu_desktop_file.is_file()
 }
 
-pub fn set_menu(paths: &Paths, on: bool) {
-    if on {
-        let _ = std::fs::create_dir_all(
+pub fn set_menu(paths: &Paths, on: bool) -> bool {
+    let ok = if on {
+        if std::fs::create_dir_all(
             paths.menu_desktop_file.parent().unwrap_or(Path::new(".")),
-        );
-        let content = format!(
-            "[Desktop Entry]\nType=Application\nName=Proton Drive\n\
-             Comment=Keep your Proton Drive folder in sync\n\
-             Exec={}\nIcon={}\nCategories=Utility;Network;\n\
-             Terminal=false\nStartupNotify=true\n",
-            desktop_exec(&launch_command(paths)),
-            paths.menu_icon_file.display()
-        );
-        let _ = std::fs::write(&paths.menu_desktop_file, content);
-        if let Some(icon) = crate::paths::find_icon_svg() {
-            let _ = std::fs::create_dir_all(
-                paths.menu_icon_file.parent().unwrap_or(Path::new(".")),
+        )
+        .is_err()
+        {
+            false
+        } else {
+            let content = format!(
+                "[Desktop Entry]\nType=Application\nName=Proton Drive\n\
+                 Comment=Keep your Proton Drive folder in sync\n\
+                 Exec={}\nIcon={}\nCategories=Utility;Network;\n\
+                 Terminal=false\nStartupNotify=true\n",
+                desktop_exec(&launch_command(paths)),
+                paths.menu_icon_file.display()
             );
-            let _ = std::fs::copy(icon, &paths.menu_icon_file);
+            let written = std::fs::write(&paths.menu_desktop_file, content).is_ok();
+            if let Some(icon) = crate::paths::find_icon_svg()
+                && icon != paths.menu_icon_file
+            {
+                let _ = std::fs::create_dir_all(
+                    paths.menu_icon_file.parent().unwrap_or(Path::new(".")),
+                );
+                let _ = std::fs::copy(icon, &paths.menu_icon_file);
+            }
+            written
         }
     } else {
-        let _ = std::fs::remove_file(&paths.menu_desktop_file);
+        let removed = match std::fs::remove_file(&paths.menu_desktop_file) {
+            Ok(()) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+            Err(_) => false,
+        };
         let _ = std::fs::remove_file(&paths.menu_icon_file);
+        removed
+    };
+    if ok
+        && let Some(exe) = which("update-desktop-database")
+        && let Some(dir) = paths.menu_desktop_file.parent()
+    {
+        let _ = exec::run_ok(
+            &exe,
+            &[&dir.to_string_lossy()],
+            std::time::Duration::from_secs(15),
+        );
     }
-    if let Some(exe) = which("update-desktop-database")
-        && let Some(dir) = paths.menu_desktop_file.parent() {
-            let _ = exec::run_ok(
-                &exe,
-                &[&dir.to_string_lossy()],
-                std::time::Duration::from_secs(15),
-            );
-        }
+    ok
 }
 
 /// Ask Hyprland to float the window after it is shown from the tray.

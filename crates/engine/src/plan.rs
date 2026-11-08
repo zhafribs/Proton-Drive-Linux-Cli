@@ -163,14 +163,17 @@ fn candidate_cloud(
         let Some(entry) = state.get(rel) else {
             continue;
         };
+        if node.kind == "dir" {
+            // The plan trashes the whole folder recursively. Count every
+            // descendant, including files without their own state row, so the
+            // approval cannot say "0 files" while the CLI removes a subtree.
+            out.extend(remote_files_under(remote, rel));
+            continue;
+        }
         if entry.l_mtime_ns.is_none() {
             continue;
         }
-        if node.kind == "file" {
-            out.insert(rel.clone());
-        } else {
-            out.extend(remote_files_under(remote, rel));
-        }
+        out.insert(rel.clone());
     }
     out
 }
@@ -227,6 +230,29 @@ pub fn remote_changed(remote: &RemoteEntry, state: &StateEntry) -> bool {
 /// A rename as `(old_rel, new_rel)`.
 pub type MovePair = (String, String);
 
+/// True when every local path the state knows under `rel` still matches its
+/// recorded fingerprint. A cloud rename must not be paired with a local edit:
+/// the rename would stamp the edited bytes as synced and never upload them.
+fn local_survivor_unchanged(
+    local: &LocalTree,
+    state: &State,
+    rel: &str,
+    entry: &StateEntry,
+) -> bool {
+    match local.get(rel) {
+        Some(l) if l.is_file() => !local_changed(l, entry),
+        Some(LocalEntry::Dir) => state
+            .iter()
+            .filter(|(r, e)| under(r, rel) && is_state_file(e))
+            .all(|(r, e)| {
+                local
+                    .get(r)
+                    .is_some_and(|l| l.is_file() && !local_changed(l, e))
+            }),
+        _ => false,
+    }
+}
+
 /// rclone `--track-renames` equivalent. Returns `(local_moves, remote_moves)`,
 /// each a list of `(old_rel, new_rel)`.
 ///
@@ -258,6 +284,7 @@ pub fn detect_moves(
             s.r_uid.is_some()
                 && !remote.contains_key(rel.as_str())
                 && local.contains_key(rel.as_str())
+                && local_survivor_unchanged(local, state, rel, s)
         })
         .map(|(rel, _)| rel)
         .collect();
@@ -457,8 +484,10 @@ pub fn plan_cycle(
         .count();
     let local_has_file = local.values().any(LocalEntry::is_file);
     let remote_has_file = remote.values().any(|n| n.kind == "file");
-    let local_dead = !local_has_file && state_local >= config.wipe_min && remote_has_file;
-    let remote_dead = !remote_has_file && state_remote >= config.wipe_min && local_has_file;
+    // Any non-empty history with zero files on one side is a wipe, even for a
+    // 1-4 file library. `wipe_min` still governs the mass/whole-folder holds.
+    let local_dead = !local_has_file && state_local > 0 && remote_has_file;
+    let remote_dead = !remote_has_file && state_remote > 0 && local_has_file;
     let wipe_guard = if local_dead {
         vec![WipeSide::Local]
     } else if remote_dead {
@@ -510,7 +539,15 @@ pub fn plan_cycle(
                             node: r.clone(),
                         });
                         trashed.insert(rel.to_string());
-                    } else if config.propagate_deletes && !local_dead && s.l_mtime_ns.is_some() {
+                    } else if config.propagate_deletes
+                        && !local_dead
+                        && s.l_mtime_ns.is_some()
+                        && !remote_changed(r, s)
+                    {
+                        // The local copy is gone, but the cloud copy changed
+                        // since the last sync: a deletion here would destroy
+                        // another device's edit. Restore the cloud revision
+                        // instead (the fall-through Dl).
                         actions.push(Action::TrashRemote {
                             rel: rel.to_string(),
                             node: r.clone(),
@@ -539,7 +576,10 @@ pub fn plan_cycle(
                     if config.propagate_deletes
                         && !remote_dead
                         && s.r_mtime.as_deref().is_some_and(|m| !m.is_empty())
+                        && !(l.is_file() && local_changed(l, s))
                     {
+                        // A local edit after the cloud deletion is the only
+                        // surviving copy; upload it instead of trashing it.
                         actions.push(Action::TrashLocal {
                             rel: rel.to_string(),
                             node: l.clone(),
@@ -840,6 +880,21 @@ mod tests {
         );
         assert!(out.actions.is_empty());
         assert_eq!(out.holds, 1);
+    }
+
+    #[test]
+    fn wipe_guard_protects_a_small_library_too() {
+        let r = BTreeMap::from([(
+            "only.txt".into(),
+            remote_file("u1", 1, "2026-01-01T00:00:00Z"),
+        )]);
+        let st = BTreeMap::from([(
+            "only.txt".into(),
+            st_entry(Some((1, 1)), Some(("2026-01-01T00:00:00Z", "u1"))),
+        )]);
+        let out = plan(r, LocalTree::new(), st);
+        assert_eq!(out.wipe_guard, vec![WipeSide::Local]);
+        assert!(out.actions.is_empty());
     }
 
     #[test]

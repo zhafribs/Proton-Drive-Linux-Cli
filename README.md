@@ -41,11 +41,11 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
 
 | Home | My files |
 |:---:|:---:|
-| ![Home](docs/screenshots/home-3.20.44.png) | ![My files](docs/screenshots/files-3.20.png) |
+| ![Home](docs/screenshots/home-3.20.49.png) | ![My files](docs/screenshots/files-3.20.49.png) |
 
 **Interface size** — five presets plus a custom 50%-200% slider:
 
-![Appearance](docs/screenshots/appearance-3.20.44.png)
+![Appearance](docs/screenshots/appearance-3.20.49.png)
 
 *Dark theme shown; light and system themes are built in.*
 
@@ -55,7 +55,7 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
 
 **About** — versions, updates, diagnostics and credits:
 
-![About](docs/screenshots/about-3.20.42.png)
+![About](docs/screenshots/about-3.20.49.png)
 
 ## Features
 

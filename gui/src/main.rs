@@ -27,7 +27,7 @@ use eframe::egui;
 use std::path::{Path, PathBuf};
 
 /// The GUI's own version (the release tag is `v<CLI>-gui<GUI>`).
-pub const GUI_VERSION: &str = "3.20.48";
+pub const GUI_VERSION: &str = "3.20.49";
 
 /// The systemd user unit path (shared with `service.rs`).
 pub fn service_unit_path() -> PathBuf {
@@ -53,21 +53,6 @@ fn main() -> eframe::Result<()> {
     let p = paths::resolve();
     let _ = std::fs::create_dir_all(&p.state_dir);
 
-    // Update recovery: the marker decides whether this start is the freshly
-    // swapped-in version (health is confirmed once its window is up) or a
-    // version that never came up (its .old backup is restored and started).
-    // The APPIMAGE env is authoritative even when its file is missing - that
-    // is exactly the interrupted-swap case recovery exists for.
-    if p.appimage.is_some() || std::env::var_os("APPIMAGE").is_some() {
-        let (state, relaunch) = release::update_recovery_check(&p);
-        if state == "rolled-back" {
-            if let Some(target) = relaunch {
-                spawn_detached(&target);
-            }
-            return Ok(());
-        }
-    }
-
     // Single instance: the QLockFile equivalent. A second launch pokes the
     // running window to the front instead of opening a duplicate.
     use fs2::FileExt;
@@ -88,6 +73,21 @@ fn main() -> eframe::Result<()> {
         let _ = std::fs::write(p.state_dir.join("show-request"), b"1");
         eprintln!("Proton Drive is already running - bringing it to the front.");
         return Ok(());
+    }
+
+    // Update recovery: the marker decides whether this start is the freshly
+    // swapped-in version (health is confirmed once its window is up) or a
+    // version that never came up (its .old backup is restored and started).
+    // The APPIMAGE env is authoritative even when its file is missing - that
+    // is exactly the interrupted-swap case recovery exists for.
+    if p.appimage.is_some() || std::env::var_os("APPIMAGE").is_some() {
+        let (state, relaunch) = release::update_recovery_check(&p);
+        if state == "rolled-back" {
+            if let Some(target) = relaunch {
+                spawn_detached(&target);
+            }
+            return Ok(());
+        }
     }
 
     let prefs = prefs::Prefs::load(&p.prefs_file);

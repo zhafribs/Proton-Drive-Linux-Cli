@@ -272,7 +272,7 @@ impl ksni::Tray for AppTray {
         let tx = &self.tx;
         let mut m: Vec<ksni::MenuItem<Self>> = Vec::new();
 
-        m.push(item("Open Proton Drive", tx, Back::TrayToggle).into());
+        m.push(item("Open Proton Drive", tx, Back::ShowWindow).into());
         m.push(ksni::MenuItem::Separator);
 
         let mut sync = item("Sync now", tx, Back::TraySyncNow);

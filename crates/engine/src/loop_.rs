@@ -260,6 +260,45 @@ pub fn run_loop() -> Result<()> {
     }
 }
 
+/// State and snapshot history belong to one (local root, remote root) pair.
+/// Changing either root with the old history intact makes every path look
+/// deleted on the other side; archive the history first and start clean.
+fn ensure_sync_roots_at(dir: &std::path::Path, local_root: &str, remote_root: &str) -> Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let path = dir.join("sync-roots");
+    let want = format!("{local_root}\n{remote_root}\n");
+    match std::fs::read_to_string(&path) {
+        Ok(old) if old == want => Ok(()),
+        Ok(_) => {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            for name in [
+                "state.json",
+                "remote-snapshot.json",
+                "deletes-approval.json",
+                "photos-state.json",
+                "photos-sync.json",
+                "timeline.json",
+            ] {
+                let src = dir.join(name);
+                if src.is_file() {
+                    let _ = std::fs::rename(&src, dir.join(format!("{name}.old-{stamp}")));
+                }
+            }
+            std::fs::write(&path, want)?;
+            eprintln!("sync roots changed; archived the previous state history");
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::write(&path, want)?;
+            Ok(())
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 pub fn run_once_cycle(
     cli: &Cli,
     local_root: &str,
@@ -284,7 +323,8 @@ pub fn run_once_cycle(
         ..Default::default()
     });
 
-    let mut local = scan_local(Path::new(local_root), filter);
+    ensure_sync_roots_at(&state_dir(), local_root, remote_root)?;
+    let mut local = scan_local(Path::new(local_root), filter)?;
     let state_path = state_dir().join("state.json");
     // Fail closed: a corrupt history would make every path look new and
     // disable the wipe/mass-delete guards. Stop before scanning or deleting.
@@ -304,7 +344,7 @@ pub fn run_once_cycle(
         failed.extend(out.failed);
         downloaded.extend(out.downloaded);
         // the tree on disk changed: plan against what actually landed
-        local = scan_local(Path::new(local_root), filter);
+        local = scan_local(Path::new(local_root), filter)?;
         crate::scan::RemoteScan {
             tree: out.tree,
             full: true,
@@ -374,7 +414,7 @@ pub fn run_once_cycle(
     let local2 = if result.actions.is_empty() && !first {
         local.clone()
     } else {
-        scan_local(Path::new(local_root), filter)
+        scan_local(Path::new(local_root), filter)?
     };
     // Re-list only the folders this cycle changed (uploads, trashes, moves)
     // instead of re-walking the whole cloud after every upload. This is the
@@ -443,6 +483,10 @@ pub fn run_once_cycle(
     let secs = t0.elapsed().unwrap_or_default().as_secs_f64();
     let status = if result.deletes_wipe_guard || result.deletes_held > 0 {
         "deletes_held"
+    } else if !failed.is_empty() {
+        // Partial transfer failures are not "up to date". The GUI maps this
+        // to the error orb instead of telling the user everything synced.
+        "error"
     } else {
         "ok"
     };
@@ -500,189 +544,18 @@ fn scoped_remote(
     if unknown > 0 || groups.is_empty() {
         return Ok(None);
     }
-    let state_path = state_dir().join("state.json");
-    let mut state = proton_core::state::read_checked(&state_path)
-        .map_err(|e| anyhow::anyhow!("reading {}: {e}", state_path.display()))?
-        .unwrap_or_default();
-    let mut state_dirty = false;
-    let fast = FastEdit {
-        cli,
-        remote_root,
-        local_root,
-    };
+    // The old FastEdit path wrote the downloaded file and state directly,
+    // without the planner's conflict checks or a post-download fingerprint.
+    // Use the normal scoped listing + planner for every event instead; it is
+    // slower by one listing but cannot stamp an edit as synced.
+    let _ = local_root;
     crate::cli::with_cli_lock(|| -> Result<()> {
-        for (rel, events) in &groups {
-            // A single content update of a file we already know can be
-            // downloaded straight by UID: no parent listing, one CLI call.
-            let handled =
-                events.len() == 1 && fast.download(&mut state, &mut tree, &events[0], push.volume);
-            if handled {
-                state_dirty = true;
-            } else {
-                crate::scan::apply_scope(cli, remote_root, filter, &mut tree, rel)?;
-            }
+        for (rel, _events) in &groups {
+            crate::scan::apply_scope(cli, remote_root, filter, &mut tree, rel)?;
         }
         Ok(())
     })?;
-    if state_dirty
-        && let Err(e) = proton_core::state::write(&state_path, &state)
-    {
-        eprintln!("state: fast-edit write failed: {e}");
-    }
     Ok(Some(crate::scan::RemoteScan { tree, full: false }))
-}
-
-/// Safely fast-path one cloud update of a known file:
-/// - its UID is in the snapshot and is a file;
-/// - the local file still matches its saved state (no local edit);
-/// - the downloaded name is unchanged (not a rename/move).
-///
-/// Anything else falls back to the normal scoped list + planner, which keeps
-/// both sides on conflicts.
-struct FastEdit<'a> {
-    cli: &'a Cli,
-    remote_root: &'a str,
-    local_root: &'a str,
-}
-
-impl FastEdit<'_> {
-    fn download(
-        &self,
-        state: &mut proton_core::state::State,
-        tree: &mut proton_core::snapshot::RemoteTree,
-        event: &crate::events::PendingEvent,
-        volume: &str,
-    ) -> bool {
-        if event.event_type != 2 || event.trashed {
-            return false;
-        }
-        if !crate::filter::valid_remote_name(&event.child) {
-            return false;
-        }
-        let child_uid = format!("{volume}~{}", event.child);
-        let Some((rel, node)) = tree
-            .iter()
-            .find(|(_, node)| node.uid.as_deref() == Some(child_uid.as_str()))
-            .map(|(rel, node)| (rel.clone(), node.clone()))
-        else {
-            return false;
-        };
-        if !crate::execute::safe_rel(&rel) {
-            return false;
-        }
-        if node.kind != "file" {
-            return false;
-        }
-        let local = Path::new(self.local_root).join(&rel);
-        let Ok(meta) = fs::metadata(&local) else {
-            return false;
-        };
-        if !meta.is_file() {
-            return false;
-        }
-        let Some(entry) = state.get(&rel) else {
-            return false;
-        };
-        if entry.l_size != Some(meta.len())
-            || entry.l_mtime_ns != Some(crate::scan::mtime_ns(&meta))
-        {
-            return false;
-        }
-        let parent_rel = rel.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
-        let parent_dir = Path::new(self.local_root).join(parent_rel);
-        if !parent_dir.is_dir() {
-            return false;
-        }
-        let parent_rpath = crate::cli::remote_path(self.remote_root, parent_rel);
-        let rpath = format!("{parent_rpath}/{child_uid}");
-        let temp = state_dir().join(format!(
-            ".incoming-edit-{}-{}",
-            std::process::id(),
-            event.child
-        ));
-        let _ = fs::remove_dir_all(&temp);
-        if fs::create_dir_all(&temp).is_err() {
-            return false;
-        }
-        let downloaded = self.cli.run(
-            &[
-                "fs",
-                "download",
-                &rpath,
-                &temp.to_string_lossy(),
-                "-f",
-                "remove",
-                "-d",
-                "merge",
-            ],
-            false,
-            Some(3600),
-            false,
-        );
-        if downloaded.is_err() {
-            let _ = fs::remove_dir_all(&temp);
-            return false;
-        }
-        let files: Vec<_> = fs::read_dir(&temp)
-            .ok()
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
-            .collect();
-        if files.len() != 1 {
-            let _ = fs::remove_dir_all(&temp);
-            return false;
-        }
-        let src = files[0].path();
-        let name = files[0].file_name().to_string_lossy().into_owned();
-        let expected = rel.rsplit('/').next().unwrap_or(&rel);
-        if name != expected {
-            // Rename/move: needs the parent listing so the local tree can be
-            // rebased safely.
-            let _ = fs::remove_dir_all(&temp);
-            return false;
-        }
-        // Never fast-path an unknown or short download over the local file.
-        let short = fs::metadata(&src)
-            .map(|m| node.size != Some(m.len()))
-            .unwrap_or(true);
-        if short {
-            let _ = fs::remove_dir_all(&temp);
-            return false;
-        }
-        let part = parent_dir.join(format!(
-            ".proton-edit-{}-{}.part",
-            std::process::id(),
-            event.child
-        ));
-        let copied = fs::copy(&src, &part)
-            .and_then(|_| fs::File::open(&part)?.sync_all())
-            .and_then(|_| fs::rename(&part, &local));
-        let _ = fs::remove_dir_all(&temp);
-        if copied.is_err() {
-            let _ = fs::remove_file(&part);
-            return false;
-        }
-        let Ok(new_meta) = fs::metadata(&local) else {
-            return false;
-        };
-        let new_size = new_meta.len();
-        state.insert(
-            rel.clone(),
-            proton_core::state::StateEntry {
-                l_mtime_ns: Some(crate::scan::mtime_ns(&new_meta)),
-                l_size: Some(new_size),
-                r_mtime: None,
-                r_uid: Some(child_uid),
-            },
-        );
-        if let Some(node) = tree.get_mut(&rel) {
-            node.size = Some(new_size);
-            node.mtime = None;
-        }
-        true
-    }
 }
 
 fn publish_snapshot(
@@ -695,7 +568,7 @@ fn publish_snapshot(
         return;
     }
     let fp = cli
-        .run_json(&["fs", "size", remote_root], false)
+        .run_json(&["fs", "size", remote_root], true)
         .ok()
         .map(|v| {
             vec![
@@ -1099,64 +972,6 @@ mod tests {
         assert!(started.elapsed() < Duration::from_millis(200));
     }
 
-    #[test]
-    fn known_file_update_fast_downloads_by_uid() {
-        use std::os::unix::fs::PermissionsExt;
-        let root = std::env::temp_dir().join(format!(
-            "pd-fastedt-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let docs = root.join("Docs");
-        std::fs::create_dir_all(&docs).unwrap();
-        let local = docs.join("a.txt");
-        std::fs::write(&local, b"old").unwrap();
-        let meta = std::fs::metadata(&local).unwrap();
-        let mut state = proton_core::state::State::new();
-        state.insert(
-            "Docs/a.txt".into(),
-            proton_core::state::StateEntry {
-                l_mtime_ns: Some(crate::scan::mtime_ns(&meta)),
-                l_size: Some(meta.len()),
-                r_mtime: None,
-                r_uid: Some("vol~child".into()),
-            },
-        );
-        let script = root.join("proton-drive");
-        std::fs::write(&script, "#!/bin/sh\nprintf 'new' > \"$4/a.txt\"\n").unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let cli = Cli::for_test(script);
-        let fast = FastEdit {
-            cli: &cli,
-            remote_root: "/my-files",
-            local_root: &root.to_string_lossy(),
-        };
-        let mut tree = proton_core::snapshot::RemoteTree::new();
-        tree.insert(
-            "Docs/a.txt".into(),
-            proton_core::snapshot::RemoteEntry {
-                uid: Some("vol~child".into()),
-                kind: "file".into(),
-                size: Some(3),
-                ..Default::default()
-            },
-        );
-        let event = crate::events::PendingEvent {
-            parent: "parent".into(),
-            child: "child".into(),
-            event_type: 2,
-            trashed: false,
-        };
-        assert!(fast.download(&mut state, &mut tree, &event, "vol"));
-        assert_eq!(std::fs::read_to_string(&local).unwrap(), "new");
-        assert_eq!(state["Docs/a.txt"].l_size, Some(3));
-        assert_eq!(tree["Docs/a.txt"].size, Some(3));
-        std::fs::remove_dir_all(&root).ok();
-    }
-
     /// With an interval set, a quiet wait still ends at the deadline rather
     /// than sleeping forever or until a wake.
     #[test]
@@ -1181,6 +996,35 @@ mod tests {
     /// "Run full check now" is only a file drop, so the engine has to consume
     /// it - otherwise the request sits there forever and the button does
     /// nothing (3.16.90 and earlier).
+    #[test]
+    fn changing_sync_roots_archives_old_state() {
+        let dir = std::env::temp_dir().join(format!(
+            "pd-roots-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("state.json"), b"old-state").unwrap();
+        std::fs::write(dir.join("remote-snapshot.json"), b"old-snap").unwrap();
+        std::fs::write(dir.join("sync-roots"), b"/old\n/my-files\n").unwrap();
+        ensure_sync_roots_at(&dir, "/new", "/my-files").unwrap();
+        assert!(!dir.join("state.json").exists());
+        assert!(!dir.join("remote-snapshot.json").exists());
+        assert!(std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with("state.json.old-")));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("sync-roots")).unwrap(),
+            "/new\n/my-files\n"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn a_gui_request_is_consumed_exactly_once() {
         let dir = std::env::temp_dir().join(format!("pd-engine-request-{}", std::process::id()));

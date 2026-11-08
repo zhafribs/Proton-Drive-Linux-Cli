@@ -300,8 +300,8 @@ fn run(
 }
 
 fn events_file() -> PathBuf {
-    let data = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
+    let data = dirs::data_dir()
+        .filter(|p| p.is_absolute())
         .or_else(|| dirs::home_dir().map(|h| h.join(".local/share")))
         .unwrap_or_else(|| PathBuf::from(".local/share"));
     data.join("proton-drive-cli/events.json")

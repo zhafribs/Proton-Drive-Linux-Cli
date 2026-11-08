@@ -59,6 +59,11 @@ pub fn detect() -> Theme {
     let desktop = desktop_env();
     let kde_first = desktop.contains("kde") || desktop.contains("plasma");
     let xfce_first = desktop.contains("xfce");
+    let gnome_like = desktop.contains("gnome")
+        || desktop.contains("unity")
+        || desktop.contains("cinnamon")
+        || desktop.contains("mate")
+        || desktop.contains("budgie");
     let mut candidates: Vec<fn() -> Option<Theme>> = vec![portal];
     if kde_first {
         candidates.push(kde);
@@ -66,14 +71,20 @@ pub fn detect() -> Theme {
     if xfce_first {
         candidates.push(xfce);
     }
-    candidates.extend([
-        gsettings,
-        dconf,
-        env_gtk_theme,
-        kde,
-        xfce,
-        gtk_settings,
-    ]);
+    if !gnome_like {
+        // A default Adwaita in the installed GNOME schema must not answer
+        // before the user's explicit GTK_THEME on Hyprland/LXQt/other.
+        candidates.push(env_gtk_theme);
+        candidates.push(gtk_settings);
+    }
+    candidates.push(gsettings);
+    candidates.push(dconf);
+    if gnome_like {
+        candidates.push(env_gtk_theme);
+        candidates.push(gtk_settings);
+    }
+    candidates.push(kde);
+    candidates.push(xfce);
     candidates.into_iter().find_map(|read| read()).unwrap_or(Theme::Light)
 }
 

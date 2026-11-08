@@ -14,13 +14,24 @@ fn change_re() -> &'static Regex {
 fn iso_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2})").unwrap()
+        Regex::new(
+            r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?([+-])(\d{2}):?(\d{2})",
+        )
+        .unwrap()
     })
 }
 
-/// Timestamp at the head of a `short-iso` journal line.
+/// Timestamp at the head of a journal line. systemd < 255 emits `+0200`;
+/// newer versions emit `+02:00` (and `short-iso-precise` adds a fraction).
+/// Normalize the offset before using the RFC 3339 parser.
 pub fn ts(line: &str) -> Option<DateTime<FixedOffset>> {
-    iso_re().captures(line).and_then(|c| parse_iso(&c[1]))
+    let caps = iso_re().captures(line)?;
+    let frac = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+    let normalized = format!(
+        "{}{}{}{}:{}",
+        &caps[1], frac, &caps[3], &caps[4], &caps[5]
+    );
+    parse_iso(&normalized)
 }
 
 /// Basename of the change path inside a body (`CONFLICT a/b.md (kept)` ->
@@ -121,10 +132,23 @@ pub fn parse_changes(lines: &[String]) -> Vec<ChangeRow> {
 /// "personel/x.md (kept both)" -> "personel/x.md" (Qt did the same before
 /// rendering rows).
 fn strip_trailing_annotation(rest: &str) -> String {
-    match rest.rfind(" (") {
-        Some(i) if rest.ends_with(')') => rest[..i].to_string(),
-        _ => rest.to_string(),
+    // Only the engine's own suffixes. A blanket rfind(" (") cut inside a
+    // conflict copy name such as "photo (conflict 123).jpg" and stripped
+    // legitimate names like "Photos (2024)".
+    for suffix in [
+        " (kept remote copy as ",
+        " (kept local copy as ",
+        " (kept both)",
+        " (kept local)",
+        " (kept remote)",
+        " (kept)",
+        " (whole subtree)",
+    ] {
+        if let Some(i) = rest.find(suffix) {
+            return rest[..i].to_string();
+        }
     }
+    rest.to_string()
 }
 
 /// Reduce an engine change body to the plain path. The engine logs extra
@@ -215,6 +239,32 @@ mod tests {
         assert_eq!(change_name("CONFLICT a/b.md (kept)"), "b.md");
         // no verb at all
         assert_eq!(change_name("cycle complete, no changes"), "");
+    }
+
+    #[test]
+    fn parses_short_iso_without_a_colon_in_the_offset() {
+        let dt = ts("2026-11-08T10:42:11+0800 host app[1]: UPLOAD x").unwrap();
+        assert_eq!(dt.offset().local_minus_utc(), 8 * 3600);
+        let precise = ts("2026-11-08T10:42:11.123456+08:00 host app[1]: UPLOAD x").unwrap();
+        assert_eq!(precise.timestamp_subsec_micros(), 123456);
+    }
+
+    #[test]
+    fn conflict_copy_names_keep_their_parentheses() {
+        assert_eq!(
+            strip_trailing_annotation("dir/photo (conflict 2026-01-01 00-00-00).jpg"),
+            "dir/photo (conflict 2026-01-01 00-00-00).jpg"
+        );
+        assert_eq!(
+            strip_trailing_annotation("Photos (2024)/a.jpg"),
+            "Photos (2024)/a.jpg"
+        );
+        assert_eq!(
+            strip_trailing_annotation(
+                "dir/photo.jpg (kept remote copy as dir/photo (conflict 1).jpg)"
+            ),
+            "dir/photo.jpg"
+        );
     }
 
     #[test]

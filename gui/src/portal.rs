@@ -115,19 +115,34 @@ fn portal(
     }
 }
 
-fn run_dialog(exe: &str, args: Vec<String>) -> Vec<PathBuf> {
+enum DialogResult {
+    Done(Vec<PathBuf>),
+    Cancel,
+    Unavailable,
+}
+
+fn run_dialog(exe: &str, args: Vec<String>) -> DialogResult {
     let Ok(out) = Command::new(exe).args(args).output() else {
-        return Vec::new();
+        return DialogResult::Unavailable;
     };
     if !out.status.success() {
-        return Vec::new(); // cancel / closed
+        return DialogResult::Cancel;
     }
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .map(PathBuf::from)
-        .collect()
+    DialogResult::Done(
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(PathBuf::from)
+            .collect(),
+    )
+}
+
+fn empty_on_cancel(result: DialogResult) -> Vec<PathBuf> {
+    match result {
+        DialogResult::Done(paths) => paths,
+        DialogResult::Cancel | DialogResult::Unavailable => Vec::new(),
+    }
 }
 
 /// Pick several files ("Upload files..."). Empty = cancelled.
@@ -139,20 +154,25 @@ pub fn open_files() -> Vec<PathBuf> {
     ) {
         Portal::Done(p) => p,
         Portal::Cancel => Vec::new(),
-        Portal::Unavailable => run_dialog(
+        Portal::Unavailable => match run_dialog(
             "zenity",
             vec![
                 "--file-selection".into(),
                 "--multiple".into(),
                 "--separator=\n".into(),
             ],
-        )
-        .if_empty_then(|| {
-            run_dialog(
+        ) {
+            DialogResult::Unavailable => empty_on_cancel(run_dialog(
                 "kdialog",
-                vec!["--getopenfilename".into(), ".".into(), "--multiple".into(), "--separate-output".into()],
-            )
-        }),
+                vec![
+                    "--getopenfilename".into(),
+                    ".".into(),
+                    "--multiple".into(),
+                    "--separate-output".into(),
+                ],
+            )),
+            other => empty_on_cancel(other),
+        },
     }
 }
 
@@ -161,14 +181,20 @@ pub fn open_dir(title: &str) -> Option<PathBuf> {
     match portal("OpenFile", title, vec![("directory", Value::from(true))]) {
         Portal::Done(p) => p.into_iter().next(),
         Portal::Cancel => None,
-        Portal::Unavailable => run_dialog("zenity", vec!["--file-selection".into(), "--directory".into()])
-            .into_iter()
-            .next()
-            .or_else(|| {
-                run_dialog("kdialog", vec!["--getexistingdirectory".into(), ".".into()])
-                    .into_iter()
-                    .next()
-            }),
+        Portal::Unavailable => match run_dialog(
+            "zenity",
+            vec!["--file-selection".into(), "--directory".into()],
+        ) {
+            DialogResult::Done(paths) => paths.into_iter().next(),
+            DialogResult::Cancel => None,
+            DialogResult::Unavailable => match run_dialog(
+                "kdialog",
+                vec!["--getexistingdirectory".into(), ".".into()],
+            ) {
+                DialogResult::Done(paths) => paths.into_iter().next(),
+                _ => None,
+            },
+        },
     }
 }
 
@@ -181,30 +207,25 @@ pub fn save_file(name: &str) -> Option<PathBuf> {
     ) {
         Portal::Done(p) => p.into_iter().next(),
         Portal::Cancel => None,
-        Portal::Unavailable => run_dialog(
+        Portal::Unavailable => match run_dialog(
             "zenity",
-            vec!["--file-selection".into(), "--save".into(), "--confirm-overwrite".into(), format!("--filename={name}")],
-        )
-        .into_iter()
-        .next()
-        .or_else(|| {
-            run_dialog(
+            vec![
+                "--file-selection".into(),
+                "--save".into(),
+                "--confirm-overwrite".into(),
+                format!("--filename={name}"),
+            ],
+        ) {
+            DialogResult::Done(paths) => paths.into_iter().next(),
+            DialogResult::Cancel => None,
+            DialogResult::Unavailable => match run_dialog(
                 "kdialog",
                 vec!["--getsavefilename".into(), format!("Downloads/{name}")],
-            )
-            .into_iter()
-            .next()
-        }),
-    }
-}
-
-trait IfEmptyThen: Sized {
-    fn if_empty_then(self, f: impl FnOnce() -> Self) -> Self;
-}
-
-impl<T> IfEmptyThen for Vec<T> {
-    fn if_empty_then(self, f: impl FnOnce() -> Self) -> Self {
-        if self.is_empty() { f() } else { self }
+            ) {
+                DialogResult::Done(paths) => paths.into_iter().next(),
+                _ => None,
+            },
+        },
     }
 }
 

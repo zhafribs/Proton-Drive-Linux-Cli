@@ -1,3 +1,38 @@
+## 3.20.49 — 2026-11-08
+
+- **A download can no longer overwrite an edit made after the scan.** The
+  planner's local fingerprint is re-checked immediately before the atomic
+  place, with a backup/restore for the replace window. New destinations use
+  no-replace hard links; local moves refuse an appeared destination.
+- **Deletes are propagated only when the surviving side is unchanged.** A
+  cloud edit paired with a local delete (or the reverse) is restored or
+  uploaded instead of destroyed. Folder trashes count every descendant in the
+  approval set, and the wipe guard now protects libraries of any size.
+- **Unreadable or symlinked folders no longer look like deletions.** Local
+  scans fail closed on read errors, links, special files and malformed remote
+  listings. Changing the local or remote sync root archives the old state
+  history before starting fresh.
+- **The CLI lock fails closed.** Cloud mutations and downloads use the shared
+  lock, and a busy lock returns an error instead of running unprotected during
+  sign-in. Signing out clears the old account's state and cloud caches.
+- **The fast-edit path is gone.** Event-driven updates use the normal scoped
+  listing and planner, so an edit can never be stamped as synced by the
+  shortcut.
+- **Journal timestamps work on older systemd.** `+0800` offsets and precise
+  fractions are accepted, conflict copy names keep their parentheses, and
+  notifications match the leading verb rather than a file name.
+- **Partial failures show as errors.** The engine writes `error` when a cycle
+  had failed transfers, instead of claiming everything is up to date.
+- **Trash rows have stable identities.** Trash entries use the node UID for
+  selection/actions, and switching views clears stale rows and selections.
+- **Download temp directories are private** (0700, unique), cleanup runs on
+  every path, collisions get a new name, and folder downloads move
+  recursively.
+- **Smaller audit fixes:** theme detection prefers an explicit GTK theme on
+  non-GNOME desktops, the tray's “Open Proton Drive” always shows the window,
+  update recovery runs only after the single-instance lock, and starting in
+  the tray no longer spends the first-close notification.
+
 ## 3.20.48 — 2026-11-08
 
 - **Security dependencies updated.** `rustls-webpki` and `webpki-roots` are

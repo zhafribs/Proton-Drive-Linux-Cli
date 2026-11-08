@@ -292,7 +292,7 @@ pub fn journal_lines(n: usize) -> Vec<String> {
     let n_arg = n.to_string();
     match exec::run(
         &exe,
-        &["--user", "-u", JOURNAL_UNIT, "--no-pager", "-n", &n_arg, "-o", "short-iso"],
+        &["--user", "-u", JOURNAL_UNIT, "--no-pager", "-n", &n_arg, "-o", "short-iso-precise"],
         Duration::from_secs(10),
     ) {
         Ok(o) if o.ok() => o.stdout.lines().map(str::to_string).collect(),

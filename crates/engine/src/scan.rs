@@ -1,28 +1,29 @@
 //! Local tree scan: `{relpath: {type, mtime_ns, size}}`, like `scan_local`.
 //!
-//! Classification mirrors `os.walk(followlinks=False)`:
-//! * a symlink to a directory is listed as a directory but not descended;
-//! * a symlink to a file is skipped, because the Python code `lstat`s files
-//!   and only accepts regular files;
-//! * unreadable directories are skipped (Python's default `onerror`).
+//! A symlink or an unreadable directory inside the sync root fails the whole
+//! scan instead of silently disappearing from the tree. The planner treats a
+//! missing local path as a propagated deletion, so a skipped path would put
+//! the cloud copy at risk.
 
 use crate::action::{LocalEntry, LocalTree};
 use crate::filter::Filter;
+use anyhow::{anyhow, bail};
 use std::fs;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
-pub fn scan_local(root: &Path, filter: &Filter) -> LocalTree {
+pub fn scan_local(root: &Path, filter: &Filter) -> Result<LocalTree> {
     let mut tree = LocalTree::new();
-    walk(root, "", filter, &mut tree);
-    tree
+    walk(root, "", filter, &mut tree)?;
+    Ok(tree)
 }
 
-fn walk(dir: &Path, rel_base: &str, filter: &Filter, tree: &mut LocalTree) {
-    let Ok(read) = fs::read_dir(dir) else {
-        return;
-    };
-    let mut entries: Vec<_> = read.filter_map(Result::ok).collect();
+fn walk(dir: &Path, rel_base: &str, filter: &Filter, tree: &mut LocalTree) -> Result<()> {
+    let read = fs::read_dir(dir)
+        .map_err(|e| anyhow!("reading {}: {e}", dir.display()))?;
+    let mut entries: Vec<_> = read
+        .collect::<std::io::Result<Vec<_>>>()
+        .map_err(|e| anyhow!("reading {}: {e}", dir.display()))?;
     entries.sort_by_key(|e| e.file_name());
 
     for entry in entries {
@@ -33,38 +34,64 @@ fn walk(dir: &Path, rel_base: &str, filter: &Filter, tree: &mut LocalTree) {
             format!("{rel_base}/{name}")
         };
         let path = entry.path();
-        let file_type = entry.file_type().ok();
-        let followed = fs::metadata(&path).ok();
-        let is_dir = followed.as_ref().is_some_and(|m| m.is_dir());
+        let meta = fs::symlink_metadata(&path)
+            .map_err(|e| anyhow!("reading {}: {e}", path.display()))?;
+        let kind = meta.file_type();
 
-        if is_dir {
-            if Filter::skip_name(&name) || filter.excluded(&rel) || !filter.allowed_dir(&rel) {
+        if Filter::skip_name(&name) || filter.excluded(&rel) {
+            continue;
+        }
+        // A symlink cannot be synced, and treating it as missing would make
+        // the planner propagate a deletion for the real target or for files
+        // that used to live here. Fail the cycle instead; the user can remove
+        // the link or exclude it.
+        if kind.is_symlink() {
+            // Excluded/unselected branches may contain links without
+            // interrupting the sync; a link the planner would see must fail
+            // the cycle instead of looking like a deletion.
+            let followed = fs::metadata(&path).ok();
+            let allowed = match followed {
+                Some(m) if m.is_dir() => filter.allowed_dir(&rel),
+                Some(m) if m.is_file() => filter.allowed_file(&rel),
+                _ => true,
+            };
+            if allowed {
+                bail!(
+                    "symlink inside the sync folder: {} (remove it or exclude it)",
+                    path.display()
+                );
+            }
+            continue;
+        }
+        if kind.is_dir() {
+            if !filter.allowed_dir(&rel) {
                 continue;
             }
             tree.insert(rel.clone(), LocalEntry::Dir);
-            if !file_type.is_some_and(|t| t.is_symlink()) {
-                walk(&path, &rel, filter, tree);
+            walk(&path, &rel, filter, tree)?;
+            continue;
+        }
+        if kind.is_file() {
+            if !filter.allowed_file(&rel) {
+                continue;
             }
+            tree.insert(
+                rel,
+                LocalEntry::File {
+                    mtime_ns: mtime_ns(&meta),
+                    size: meta.len(),
+                },
+            );
             continue;
         }
-
-        if Filter::skip_name(&name) || filter.excluded(&rel) || !filter.allowed_file(&rel) {
-            continue;
-        }
-        let Ok(meta) = fs::symlink_metadata(&path) else {
-            continue;
-        };
-        if !meta.file_type().is_file() {
-            continue; // socket, fifo, symlink, ...
-        }
-        tree.insert(
-            rel,
-            LocalEntry::File {
-                mtime_ns: mtime_ns(&meta),
-                size: meta.len(),
-            },
+        // Sockets, FIFOs and devices are not syncable; silently dropping one
+        // that replaced a regular file would look like a deletion.
+        bail!(
+            "unsupported file type inside the sync folder: {}",
+            path.display()
         );
     }
+    Ok(())
 }
 
 pub fn mtime_ns(meta: &fs::Metadata) -> i64 {
@@ -146,27 +173,45 @@ fn parse_listing(
     value: &serde_json::Value,
     rel: &str,
     filter: &Filter,
-) -> Vec<(String, RemoteEntry)> {
+) -> Result<Vec<(String, RemoteEntry)>> {
     let serde_json::Value::Array(arr) = value else {
-        return Vec::new();
+        bail!(
+            "proton-drive returned a non-array listing for {}: {}",
+            if rel.is_empty() { "/" } else { rel },
+            value
+        );
     };
     let mut out = Vec::new();
     for e in arr {
-        let Some(obj) = e.as_object() else { continue };
+        let Some(obj) = e.as_object() else {
+            bail!("proton-drive returned a non-object listing entry for {rel}");
+        };
+        // Pseudo-sections such as "/" have no type and are not nodes.
         if !obj.contains_key("type") {
             continue;
         }
-        let typ = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        let name_obj = obj.get("name");
+        let typ = obj
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| anyhow!("listing entry in {rel} has no string type"))?;
+        let name_obj = obj
+            .get("name")
+            .ok_or_else(|| anyhow!("listing entry in {rel} has no name"))?;
         let ok = name_obj
-            .and_then(|n| n.get("ok"))
-            .and_then(|v| v.as_bool())
+            .get("ok")
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(true);
         let name = name_obj
-            .and_then(|n| n.get("value"))
-            .and_then(|v| v.as_str())
+            .get("value")
+            .and_then(serde_json::Value::as_str)
             .unwrap_or("");
-        if !ok || !crate::filter::valid_remote_name(name) || Filter::skip_name(name) {
+        if !ok {
+            // A typed node we cannot decrypt is not an empty folder. Failing
+            // the walk is safer than letting the planner treat every local
+            // copy under it as deleted.
+            bail!("proton-drive could not decrypt a name in {rel}");
+        }
+        if !crate::filter::valid_remote_name(name) || Filter::skip_name(name) {
             continue;
         }
         let child_rel = if rel.is_empty() {
@@ -177,16 +222,23 @@ fn parse_listing(
         if filter.excluded(&child_rel) {
             continue;
         }
-        let media = obj.get("mediaType").and_then(|v| v.as_str()).unwrap_or("");
+        let media = obj
+            .get("mediaType")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
         let size = obj
             .get("activeRevision")
             .and_then(|r| r.get("claimedSize"))
-            .and_then(|v| v.as_u64())
+            .and_then(serde_json::Value::as_u64)
             .unwrap_or(0);
-        let uid = obj.get("uid").and_then(|v| v.as_str()).map(str::to_string);
+        let uid = obj
+            .get("uid")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| anyhow!("listing entry {child_rel} has no uid"))?;
         let mtime = obj
             .get("modificationTime")
-            .and_then(|v| v.as_str())
+            .and_then(serde_json::Value::as_str)
             .map(str::to_string);
         if typ == "folder" {
             if !filter.allowed_dir(&child_rel) {
@@ -194,7 +246,13 @@ fn parse_listing(
             }
             out.push((
                 child_rel,
-                RemoteEntry { uid, kind: "dir".to_string(), mtime, size: Some(0), doc: false },
+                RemoteEntry {
+                    uid: Some(uid),
+                    kind: "dir".to_string(),
+                    mtime,
+                    size: Some(0),
+                    doc: false,
+                },
             ));
         } else if typ == "file" {
             if !filter.allowed_file(&child_rel) {
@@ -203,16 +261,18 @@ fn parse_listing(
             out.push((
                 child_rel,
                 RemoteEntry {
-                    uid,
+                    uid: Some(uid),
                     kind: "file".to_string(),
                     mtime,
                     size: Some(size),
                     doc: media.starts_with("application/vnd.proton"),
                 },
             ));
+        } else {
+            bail!("proton-drive returned an unknown node type {typ:?} in {rel}");
         }
     }
-    out
+    Ok(out)
 }
 
 /// Direct children of one remote folder, already filtered and sorted by the
@@ -226,7 +286,7 @@ pub fn list_children(
     let rpath = cli::remote_path(remote_root, rel);
     // Caller holds the app-wide CLI lock (see `scoped_remote`).
     let value = cli.run_json(&["fs", "list", &rpath], false)?;
-    Ok(parse_listing(&value, rel, filter))
+    parse_listing(&value, rel, filter)
 }
 
 /// Recursively list a folder subtree (used for a folder that just appeared or
@@ -421,7 +481,7 @@ pub fn scan_remote(
             let mut next: Vec<String> = Vec::new();
             for (rpath, rel, entries) in listed {
                 let entries = entries?;
-                for (child_rel, entry) in parse_listing(&entries, &rel, filter) {
+                for (child_rel, entry) in parse_listing(&entries, &rel, filter)? {
                     let is_dir = entry.kind == "dir";
                     let name = child_rel.rsplit('/').next().unwrap_or(&child_rel).to_string();
                     tree.insert(child_rel.clone(), entry);
@@ -460,14 +520,14 @@ mod tests {
         fs::write(root.join("Videos/c.mp4"), b"x").unwrap();
         fs::write(root.join(".DS_Store"), b"x").unwrap();
 
-        let all = scan_local(&root, &Filter::new("", ""));
+        let all = scan_local(&root, &Filter::new("", "")).unwrap();
         assert_eq!(all["Docs"], LocalEntry::Dir);
         assert_eq!(all["Docs/Sub"], LocalEntry::Dir);
         assert_eq!(all["Docs/a.txt"].size(), Some(3));
         assert!(all.contains_key("Videos/c.mp4"));
         assert!(!all.contains_key(".DS_Store"));
 
-        let filtered = scan_local(&root, &Filter::new("Docs", "*.tmp"));
+        let filtered = scan_local(&root, &Filter::new("Docs", "*.tmp")).unwrap();
         assert!(filtered.contains_key("Docs/a.txt"));
         assert!(!filtered.contains_key("Docs/Sub/b.tmp"));
         assert!(!filtered.contains_key("Videos"));
@@ -476,17 +536,15 @@ mod tests {
     }
 
     #[test]
-    fn symlinked_dirs_are_listed_but_not_descended_and_file_links_skipped() {
+    fn symlinks_fail_the_scan_instead_of_looking_like_deletions() {
         let root = tmp("links");
         let outside = tmp("outside");
         fs::write(outside.join("inside.txt"), b"x").unwrap();
         symlink(&outside, root.join("linked-dir")).unwrap();
         symlink(outside.join("inside.txt"), root.join("linked-file")).unwrap();
 
-        let tree = scan_local(&root, &Filter::new("", ""));
-        assert_eq!(tree["linked-dir"], LocalEntry::Dir);
-        assert!(!tree.contains_key("linked-dir/inside.txt"));
-        assert!(!tree.contains_key("linked-file"));
+        let err = scan_local(&root, &Filter::new("", "")).unwrap_err().to_string();
+        assert!(err.contains("symlink inside the sync folder"), "{err}");
         fs::remove_dir_all(&root).ok();
         fs::remove_dir_all(&outside).ok();
     }

@@ -46,7 +46,6 @@ async-io = [
     "dep:async-io",
     "dep:async-lock",
     "dep:async-executor",
-    "dep:futures-lite",
     "dep:futures-channel",
     "dep:task-local",
     "zbus/async-io",
@@ -127,10 +126,6 @@ optional = true
 
 [dependencies.futures-channel]
 version = "0.3"
-optional = true
-
-[dependencies.futures-lite]
-version = "2"
 optional = true
 
 [dependencies.futures-util]

@@ -1,7 +1,7 @@
 //! Execute planned actions via the official CLI.
 //! Mirrors Python's execute() behavior closely.
 
-use crate::action::{Action, LocalTree};
+use crate::action::{Action, LocalEntry, LocalTree};
 use crate::cli::{self, Cli};
 use crate::filter::Filter;
 use anyhow::{Context, Result};
@@ -134,6 +134,122 @@ fn new_stage(local_root: &Path, parent: &str) -> Result<std::path::PathBuf> {
     Ok(path)
 }
 
+/// Create the parent chain for `dest` one component at a time, refusing any
+/// existing symlink. The scanner already rejects links, but a link planted
+/// between the scan and the write must not redirect the file outside the root.
+fn ensure_local_parent(local_root: &Path, dest: &Path) -> Result<()> {
+    let parent = dest.parent().unwrap_or(local_root);
+    let rel = parent
+        .strip_prefix(local_root)
+        .map_err(|_| anyhow::anyhow!("destination outside the sync root: {}", dest.display()))?;
+    let mut cur = local_root.to_path_buf();
+    for comp in rel.components() {
+        cur.push(comp);
+        match fs::symlink_metadata(&cur) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                anyhow::bail!("refusing symlinked path component: {}", cur.display())
+            }
+            Ok(meta) if meta.is_dir() => {}
+            Ok(_) => anyhow::bail!("path component is not a directory: {}", cur.display()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                fs::create_dir(&cur)
+                    .with_context(|| format!("creating {}", cur.display()))?;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(())
+}
+
+fn ensure_local_dir(local_root: &Path, rel: &str) -> Result<()> {
+    let dest = local_root.join(rel);
+    ensure_local_parent(local_root, &dest.join(".proton-dir-probe"))
+}
+
+/// A planned local file should still have the fingerprint that was scanned
+/// before a destructive local action.
+fn planned_file_matches(local_root: &Path, rel: &str, planned: Option<&LocalEntry>) -> bool {
+    let Some(LocalEntry::File { mtime_ns, size }) = planned else {
+        return true; // directories are judged by their plan-time children
+    };
+    fs::symlink_metadata(local_root.join(rel))
+        .map(|m| m.is_file() && crate::scan::mtime_ns(&m) == *mtime_ns && m.len() == *size)
+        .unwrap_or(false)
+}
+
+/// Place a verified download without replacing content that appeared after
+/// the plan was made. `None` means the path did not exist at plan time.
+fn place_download(
+    source: &Path,
+    dest: &Path,
+    planned: Option<&LocalEntry>,
+    backup_dir: &Path,
+) -> Result<()> {
+    match planned {
+        Some(LocalEntry::File { mtime_ns, size }) => {
+            let before = fs::symlink_metadata(dest)
+                .with_context(|| format!("reading {}", dest.display()))?;
+            if !before.is_file()
+                || crate::scan::mtime_ns(&before) != *mtime_ns
+                || before.len() != *size
+            {
+                anyhow::bail!("local file changed during the download: {}", dest.display());
+            }
+            // Copy the old bytes aside, replace atomically, then verify the
+            // file we moved aside is still the planned one. A user edit in
+            // the tiny window is restored instead of being lost.
+            let backup = backup_dir.join(format!(".backup-{}", name_of(&dest.to_string_lossy())));
+            // A hard link preserves the old inode's mtime/size, so a user edit
+            // in the replace window is detectable after the atomic rename.
+            let linked = fs::hard_link(dest, &backup).is_ok();
+            if !linked {
+                fs::copy(dest, &backup)
+                    .with_context(|| format!("backing up {}", dest.display()))?;
+            }
+            if let Err(e) = fs::rename(source, dest) {
+                let _ = fs::remove_file(&backup);
+                return Err(e.into());
+            }
+            let old = fs::symlink_metadata(&backup)?;
+            let matches = old.is_file()
+                && old.len() == *size
+                && (!linked || crate::scan::mtime_ns(&old) == *mtime_ns);
+            if matches {
+                let _ = fs::remove_file(&backup);
+                Ok(())
+            } else {
+                let _ = fs::remove_file(dest);
+                let _ = fs::rename(&backup, dest);
+                anyhow::bail!("local file changed during the download: {}", dest.display());
+            }
+        }
+        _ => {
+            if fs::symlink_metadata(dest).is_ok() {
+                anyhow::bail!("destination appeared during the download: {}", dest.display());
+            }
+            match fs::hard_link(source, dest) {
+                Ok(()) => {
+                    let _ = fs::remove_file(source);
+                    Ok(())
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    anyhow::bail!("destination appeared during the download: {}", dest.display())
+                }
+                Err(_) => {
+                    // Filesystems without hard links: check once and rename.
+                    if fs::symlink_metadata(dest).is_ok() {
+                        anyhow::bail!(
+                            "destination appeared during the download: {}",
+                            dest.display()
+                        );
+                    }
+                    fs::rename(source, dest).map_err(Into::into)
+                }
+            }
+        }
+    }
+}
+
 /// Download `rels` into a private staging directory, verify each file's size,
 /// then move only the verified files into place. A missing or short download
 /// never touches the final path, so it cannot become the local truth.
@@ -143,6 +259,7 @@ pub(crate) fn staged_download(
     cli: &Cli,
     remote_root: &str,
     local_root: &Path,
+    planned_local: &LocalTree,
     parent: &str,
     rels: &[(String, u64)],
     retries: usize,
@@ -206,15 +323,18 @@ pub(crate) fn staged_download(
                     continue;
                 }
                 let dest = local_root.join(rel);
-                if let Some(dir) = dest.parent()
-                    && let Err(e) = fs::create_dir_all(dir)
-                {
-                    eprintln!("FAILED prepare {}: {e}", rel);
+                if let Err(e) = ensure_local_parent(local_root, &dest) {
+                    eprintln!("FAILED prepare {}: {e:#}", rel);
                     failed.insert(rel.clone());
                     continue;
                 }
-                if let Err(e) = fs::rename(&source, &dest) {
-                    eprintln!("FAILED place {}: {e}", rel);
+                if let Err(e) = place_download(
+                    &source,
+                    &dest,
+                    planned_local.get(rel),
+                    &stage,
+                ) {
+                    eprintln!("FAILED place {}: {e:#}", rel);
                     failed.insert(rel.clone());
                 }
             }
@@ -269,10 +389,8 @@ fn staged_download_one(
             );
         }
         fs::File::open(&source)?.sync_all()?;
-        if let Some(dir) = dest.parent() {
-            fs::create_dir_all(dir)?;
-        }
-        fs::rename(&source, dest)?;
+        ensure_local_parent(local_root, dest)?;
+        place_download(&source, dest, None, &stage)?;
         Ok(())
     })();
     let _ = fs::remove_dir_all(&stage);
@@ -310,7 +428,7 @@ fn conflict_rel(rel: &str, ts: &str, local_root: &Path) -> String {
 pub fn execute(
     actions: &[Action],
     remote: &RemoteTree,
-    _local: &LocalTree,
+    local: &LocalTree,
     remote_root: &str,
     local_root: &Path,
     _filter: &Filter,
@@ -358,15 +476,18 @@ pub fn execute(
                     // Only the folder itself: its files are planned and
                     // downloaded one by one, so a subtree download here would
                     // fetch every file again for each folder above it.
-                    if let Err(e) = fs::create_dir_all(local_root.join(rel)) {
-                        eprintln!("FAILED folder {}: {}", rel, e);
+                    if let Err(e) = ensure_local_dir(local_root, rel) {
+                        eprintln!("FAILED folder {}: {e:#}", rel);
                         failed.insert(rel.clone());
                     }
                     continue;
                 }
             }
             Action::TrashLocal { rel, .. } => {
-                if let Err(e) = trash_local_path(rel, local_root, &trash_dir) {
+                if !planned_file_matches(local_root, rel, local.get(rel)) {
+                    eprintln!("FAILED trash {}: local file changed after the scan", rel);
+                    failed.insert(rel.clone());
+                } else if let Err(e) = trash_local_path(rel, local_root, &trash_dir) {
                     eprintln!("FAILED trash {}: {e:#}", rel);
                     failed.insert(rel.clone());
                 }
@@ -400,10 +521,24 @@ pub fn execute(
             Action::MvLocal { old, new } => {
                 let old_full = local_root.join(old);
                 let new_full = local_root.join(new);
-                if let Some(p) = new_full.parent() {
-                    let _ = fs::create_dir_all(p);
+                if !planned_file_matches(local_root, old, local.get(old)) {
+                    eprintln!("FAILED move {}: local file changed after the scan", old);
+                    failed.insert(old.clone());
+                    failed.insert(new.clone());
+                    continue;
                 }
-                let res = fs::rename(&old_full, &new_full);
+                let res = ensure_local_parent(local_root, &new_full)
+                    .and_then(|()| {
+                        if fs::symlink_metadata(&new_full).is_ok() {
+                            anyhow::bail!(
+                                "destination appeared before the move: {}",
+                                new_full.display()
+                            );
+                        }
+                        fs::rename(&old_full, &new_full).with_context(|| {
+                            format!("moving {} to {}", old_full.display(), new_full.display())
+                        })
+                    });
                 if res.is_err() {
                     failed.insert(old.clone());
                     failed.insert(new.clone());
@@ -533,6 +668,7 @@ pub fn execute(
                     &cli,
                     remote_root,
                     local_root,
+                    local,
                     &b.parent,
                     &pairs,
                     retries,
@@ -693,12 +829,78 @@ mod tests {
             &cli,
             "/my-files",
             &root,
+            &LocalTree::new(),
             "",
             &[("a.txt".to_string(), 5)],
             1,
         );
         assert!(failed.is_empty());
         assert_eq!(fs::read(root.join("a.txt")).unwrap(), b"hello");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn staged_download_does_not_overwrite_a_file_edited_after_the_plan() {
+        let root = temp("stage-edit-race");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let cli = fake_cli(&root, DOWNLOAD_SCRIPT);
+        let path = root.join("a.txt");
+        fs::write(&path, b"old").unwrap();
+        let meta = fs::symlink_metadata(&path).unwrap();
+        let mut plan = LocalTree::new();
+        plan.insert(
+            "a.txt".into(),
+            LocalEntry::File {
+                mtime_ns: crate::scan::mtime_ns(&meta),
+                size: meta.len(),
+            },
+        );
+        // The user edits after the scan but before the bytes land.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&path, b"user-edit").unwrap();
+        let failed = staged_download(
+            &cli,
+            "/my-files",
+            &root,
+            &plan,
+            "",
+            &[("a.txt".to_string(), 5)],
+            1,
+        );
+        assert!(failed.contains("a.txt"));
+        assert_eq!(fs::read(&path).unwrap(), b"user-edit");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn staged_download_replaces_an_unchanged_file() {
+        let root = temp("stage-unchanged");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let cli = fake_cli(&root, DOWNLOAD_SCRIPT);
+        let path = root.join("a.txt");
+        fs::write(&path, b"old").unwrap();
+        let meta = fs::symlink_metadata(&path).unwrap();
+        let mut plan = LocalTree::new();
+        plan.insert(
+            "a.txt".into(),
+            LocalEntry::File {
+                mtime_ns: crate::scan::mtime_ns(&meta),
+                size: meta.len(),
+            },
+        );
+        let failed = staged_download(
+            &cli,
+            "/my-files",
+            &root,
+            &plan,
+            "",
+            &[("a.txt".to_string(), 5)],
+            1,
+        );
+        assert!(failed.is_empty());
+        assert_eq!(fs::read(&path).unwrap(), b"hello");
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -713,6 +915,7 @@ mod tests {
             &cli,
             "/my-files",
             &root,
+            &LocalTree::new(),
             "",
             &[("a.txt".to_string(), 9)],
             1,
@@ -732,6 +935,7 @@ mod tests {
             &cli,
             "/my-files",
             &root,
+            &LocalTree::new(),
             "",
             &[("../escape.txt".to_string(), 5), ("a.txt".to_string(), 5)],
             1,

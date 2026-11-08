@@ -789,7 +789,13 @@ fn photo_actions(app: &mut App, ui: &mut egui::Ui) {
             .map(|p| p.uid.clone())
             .collect();
         if missing.is_empty() {
-            app.photos.status = "Every photo is already on this computer.".to_string();
+            app.photos.status = if app.photos.shared.is_empty() {
+                "Every photo is already on this computer.".to_string()
+            } else {
+                "Some photos share a file name with another photo and were skipped. \
+                 Download them individually or rename the local copy."
+                    .to_string()
+            };
         } else {
             download(app, missing);
         }
@@ -1102,8 +1108,18 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                         .map(|p| p.uid.clone())
                         .collect();
                     if missing.is_empty() {
-                        app.photos.status =
-                            "The selected photos are already on this computer.".to_string();
+                        let skipped = app
+                            .photos
+                            .items
+                            .iter()
+                            .any(|p| sel.contains(&p.uid) && app.photos.shared.contains(&p.name));
+                        app.photos.status = if skipped {
+                            "Some selected photos share a file name with another photo and \
+                             were skipped. Download them individually or rename the local copy."
+                                .to_string()
+                        } else {
+                            "The selected photos are already on this computer.".to_string()
+                        };
                     } else {
                         download(app, missing);
                     }

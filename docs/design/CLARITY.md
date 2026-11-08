@@ -1,6 +1,6 @@
 # Proton Drive Linux — Project Clarity
 
-**Status:** Phase 5 shipped in 3.20.33; Photos header polished in 3.20.39 — shell, Home, Activity, Files, Photos, Settings  
+**Status:** Phase 5 shipped; interface-size, keyboard-focus, contrast and selection audit shipped across 3.20.44–3.20.49
 **Scope:** whole application, not a theme refresh  
 **Foundation:** GNOME / libadwaita behavior, Proton brand, Material and Fluent discipline
 
@@ -76,7 +76,7 @@ Three levels, used consistently:
 
 | Level | Role | Light | Dark |
 |---|---|---|---|
-| Page | app background | `#F7F7FB` | `#0E0E16` |
+| Page | app background | `#F6F6FA` | `#0E0E16` |
 | Surface | cards, tables, panels | `#FFFFFF` | `#171722` |
 | Raised | menus, dialogs, popovers | `#FFFFFF` | `#1F1F2E` |
 
@@ -87,7 +87,7 @@ paragraph.
 ### 3.2 Brand
 Proton violet is the single accent:
 
-- accent: `#6D4AFF` (light) / `#A78BFF` (dark)
+- accent: `#7051F0` (light) / `#A78BFF` (dark)
 - accent soft: `#EEE9FF` / `#2A2350`
 - accent text: `#5B3FD0` / `#C4B5FF`
 
@@ -95,13 +95,17 @@ Accent is reserved for primary actions, selection, focus, and active navigation.
 It is not a background wash.
 
 ### 3.3 Semantic color
-Success `#16803C`, warning `#B25E00`, danger `#C62828`, info `#2563EB`.
+Success `#16A34A` (text `#0B7A38`), warning `#D97706` (text `#9A5B00`),
+danger `#DC2626` (text `#C81E1E`), info `#1D4ED8`.
 Status is always paired with a label or icon, never color alone.
 
 ### 3.4 Typography
-- UI: Inter / system UI. Bundle Inter for cross-distro consistency.
-- Mono: JetBrains Mono / system mono, only for logs and technical values.
-- Scale: 12 / 13 / 14 / 16 / 20 / 28 / 34.
+- UI: egui's bundled proportional sans. Bundling Inter remains a design
+  option; the current AppImage keeps egui's font to stay small.
+- Mono: egui's bundled monospace, only for logs and technical values.
+- Scale: the implementation uses 10.5–24 pt; the target scale below is the
+  design intent.
+- Target scale: 12 / 13 / 14 / 16 / 20 / 28 / 34.
 - Body line height 1.45–1.55. Headings 1.2.
 - Weights: 400 regular, 500 medium, 600 semibold. No light weights for UI.
 

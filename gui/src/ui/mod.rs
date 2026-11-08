@@ -61,6 +61,10 @@ pub enum Back {
     UnitEnabled(bool),
     /// "Restart syncing now" finished; `false` = systemctl refused.
     ServiceRestarted(bool),
+    /// A background action finished with a user-visible message.
+    Toast { msg: String, error: bool },
+    /// Sign-out succeeded: the old account's caches are gone.
+    AccountCleared,
     /// Photo timeline for the Photos page.
     Photos(Result<Vec<cli::PhotoEntry>, String>),
     /// Photo download finished; Ok is how many were asked for.
@@ -82,6 +86,7 @@ pub enum Back {
     /// A sidebar tree listing (never touches the visible folder).
     TreeEntries {
         key: String,
+        at: f64,
         result: Result<Vec<cli::RemoteEntry>, String>,
     },
     /// Cloud browser: a CLI mutation finished (refresh follows).
@@ -1062,9 +1067,33 @@ impl App {
         self.login_started = None;
         let _ = std::fs::remove_file(self.paths.state_dir.join("last-email"));
         let tx = self.tx.clone();
+        let state_dir = self.paths.state_dir.clone();
         std::thread::spawn(move || {
             if let Some(c) = cli::resolve_cli() {
-                cli::logout(&c);
+                match cli::logout(&c) {
+                    Ok(()) => {
+                        for name in [
+                            "state.json",
+                            "remote-snapshot.json",
+                            "deletes-approval.json",
+                            "sync-roots",
+                            "quota.json",
+                            "photos-state.json",
+                            "photos-sync.json",
+                            "timeline.json",
+                            "last-email",
+                        ] {
+                            let _ = std::fs::remove_file(state_dir.join(name));
+                        }
+                        let _ = tx.send(Back::AccountCleared);
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Back::Toast {
+                            msg: format!("Could not sign out: {e}"),
+                            error: true,
+                        });
+                    }
+                }
                 let _ = tx.send(Back::Identity(cli::fetch_identity(&c)));
             }
         });
@@ -1255,6 +1284,23 @@ impl App {
                         );
                     }
                 }
+                Back::Toast { msg, error } => {
+                    if error {
+                        self.toast_error(msg);
+                    } else {
+                        self.toast(msg);
+                    }
+                }
+                Back::AccountCleared => {
+                    cloud::reset(self);
+                    self.draft.initial_selection.clear();
+                    self.draft.children.clear();
+                    self.draft.expanded.clear();
+                    self.draft.loading.clear();
+                    self.draft.nodes.clear();
+                    self.draft.nodes.insert(String::new(), true);
+                    self.toast("Signed out. The next account starts with a fresh cache.");
+                }
                 Back::Photos(r) => photos::on_fetched(self, r),
                 Back::PhotosDownloaded(r) => photos::on_downloaded(self, r),
                 Back::PhotosDeleted(r) => photos::on_deleted(self, r),
@@ -1302,7 +1348,9 @@ impl App {
                     serial,
                     result,
                 } => cloud::on_entries(self, key, serial, result),
-                Back::TreeEntries { key, result } => cloud::on_tree_entries(self, key, result),
+                Back::TreeEntries { key, at, result } => {
+                    cloud::on_tree_entries(self, key, at, result)
+                }
                 Back::CloudMutated {
                     ok,
                     err,
@@ -1483,7 +1531,8 @@ impl App {
             self.last_seen = Some(ts);
             let body = journal::body(ln);
             let name = journal::change_name(body);
-            if body.contains("CONFLICT")
+            let verb = body.split_whitespace().next().unwrap_or("");
+            if verb == "CONFLICT"
                 && self.prefs.notify_conflicts()
                 && self.cool.cool_ok("conflict", 30)
             {
@@ -1491,7 +1540,7 @@ impl App {
                     "Two versions were kept",
                     &format!("'{name}' changed in two places - both copies are safe."),
                 );
-            } else if (body.contains("ERROR") || body.contains("FAILED"))
+            } else if matches!(verb, "ERROR" | "FAILED" | "REFUSE")
                 && self.prefs.notify_errors()
                 && self.cool.cool_ok("error", 30)
             {
@@ -1528,10 +1577,10 @@ impl App {
         }
     }
 
-    fn hide_window(&mut self, ctx: &egui::Context) {
+    fn hide_window(&mut self, ctx: &egui::Context, warn: bool) {
         self.hidden = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-        if !self.tray_warned {
+        if warn && !self.tray_warned {
             self.tray_warned = true;
             let message = if self.tray.is_some() {
                 "Still running - syncing continues in the background. Right-click the tray \
@@ -1552,7 +1601,7 @@ impl App {
         if self.wayland_fallback {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
         }
-        self.hide_window(ctx);
+        self.hide_window(ctx, true);
     }
 
     /// Bring the window back from the tray (also used by notification clicks).
@@ -1590,6 +1639,13 @@ impl App {
             return;
         }
         if ctx.text_edit_focused() {
+            return;
+        }
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::A))
+            && self.page == Page::Cloud
+            && !self.cloud.trash_view
+        {
+            cloud::select_all_visible(self);
             return;
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
@@ -2722,7 +2778,9 @@ impl eframe::App for App {
         if self.hide_on_start {
             self.hide_on_start = false;
             if hides_to_tray(true, self.tray.is_some()) {
-                self.hide_window(ctx);
+                // Starting quietly is not a user close; save the tray hint
+                // for the first real close.
+                self.hide_window(ctx, false);
             } else {
                 // main.rs starts the viewport hidden when start-in-tray is
                 // set. With no tray there is no way back, so show it now.

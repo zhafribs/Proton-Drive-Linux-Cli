@@ -1031,25 +1031,25 @@ pub fn install_update_and_restart(
             .unwrap_or(0),
     });
     let mark_file = crate::paths::resolve().update_mark_file;
-    // The marker must exist before the target is moved: if it cannot be
-    // written, abort the update while the running file is still intact.
+    // Keep a copy of the running build before touching the target. A crash
+    // between the backup and the rename leaves the original launchable, and
+    // the rename itself atomically replaces the target (no missing-file
+    // window).
+    if let Err(e) = std::fs::copy(&target, &old) {
+        let _ = std::fs::remove_file(&stage);
+        return Err(format!("could not back up the AppImage ({e})"));
+    }
+    // The marker must exist before the target is replaced: if it cannot be
+    // written, abort while the running file is still intact.
     if let Err(e) = std::fs::write(&mark_file, serde_json::to_vec(&mark).unwrap_or_default()) {
         let _ = std::fs::remove_file(&stage);
+        let _ = std::fs::remove_file(&old);
         return Err(format!("could not record the update for recovery ({e})"));
     }
-    if let Err(e) = std::fs::rename(&target, &old) {
-        let _ = std::fs::remove_file(&mark_file);
-        let _ = std::fs::remove_file(&stage);
-        return Err(format!("could not replace the AppImage ({e})"));
-    }
     if let Err(e) = std::fs::rename(&stage, &target) {
-        // Put the old build back immediately. If that restore fails, keep the
-        // marker so the next launch can recover from `<app>.old`.
-        let restored = std::fs::rename(&old, &target).is_ok();
         let _ = std::fs::remove_file(&stage);
-        if restored {
-            let _ = std::fs::remove_file(&mark_file);
-        }
+        let _ = std::fs::remove_file(&old);
+        let _ = std::fs::remove_file(&mark_file);
         return Err(format!("could not replace the AppImage ({e})"));
     }
     Ok(target)

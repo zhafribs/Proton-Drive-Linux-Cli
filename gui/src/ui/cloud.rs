@@ -7,7 +7,7 @@
 //! nothing ever waits on the network to be visible.
 
 use super::{widgets, App, Back};
-use crate::{cli, exec, notify, portal, theme};
+use crate::{cli, notify, portal, theme};
 use eframe::egui;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -69,6 +69,8 @@ pub struct CloudState {
     /// sidebar tree: expanded nodes and in-flight on-demand listings
     pub tree_open: HashSet<String>,
     pub tree_loading: HashSet<String>,
+    /// Last failed tree listing and when it failed, to avoid a spawn per frame.
+    pub tree_failed: HashMap<String, f64>,
     /// the user has explicitly collapsed/expanded the root section
     pub tree_root_touched: bool,
 }
@@ -78,6 +80,15 @@ pub fn remote_root(conf: &std::collections::BTreeMap<String, String>) -> String 
         Some(r) if !r.is_empty() => r.to_string(),
         _ => "/my-files".to_string(),
     }
+}
+
+/// Drop every account/root-scoped listing and selection. Used on sign-out and
+/// when the sync roots change, so a new account never sees the old filenames
+/// or acts on stale rows.
+pub fn reset(app: &mut App) {
+    app.cloud = CloudState::default();
+    app.cloud.opened = false;
+    let _ = std::fs::remove_file(&app.paths.cloud_cache_file);
 }
 
 // ------------------------------------------------------------------ navigation
@@ -122,6 +133,14 @@ fn load_inner(app: &mut App, rel: String, push: bool, announce: bool, paint: boo
     }
     {
         let c = &mut app.cloud;
+        // Never paint the previous folder's rows under this folder (or under
+        // the Trash header). The cache/listing below replaces them.
+        if rel != c.rel || c.trash_view {
+            c.entries.clear();
+            c.sel.clear();
+            c.anchor = None;
+            c.query.clear();
+        }
         if push && rel != c.rel {
             c.hist.push(std::mem::replace(&mut c.rel, rel.clone()));
             c.fwd.clear();
@@ -200,6 +219,12 @@ fn load_inner(app: &mut App, rel: String, push: bool, announce: bool, paint: boo
 pub fn load_trash(app: &mut App, announce: bool) {
     {
         let c = &mut app.cloud;
+        if !c.trash_view {
+            c.entries.clear();
+            c.sel.clear();
+            c.anchor = None;
+            c.query.clear();
+        }
         c.trash_view = true;
         c.serial += 1;
         if announce {
@@ -319,38 +344,35 @@ pub fn on_entries(
 pub fn on_tree_entries(
     app: &mut App,
     key: String,
+    at: f64,
     result: Result<Vec<cli::RemoteEntry>, String>,
 ) {
     app.cloud.tree_loading.remove(&key);
-    if let Ok(entries) = result {
-        app.cloud.session.insert(key.clone(), entries.clone());
-        app.cloud.fetched.insert(key.clone(), epoch_now());
-        app.cloud.disk.insert(
-            key,
-            DiskEntry { ts: epoch_now(), entries: entries.clone() },
-        );
-        persist_cache(app);
+    match result {
+        Ok(entries) => {
+            app.cloud.tree_failed.remove(&key);
+            // Do not let a tree request started before a newer folder fetch
+            // overwrite the newer listing.
+            if app.cloud.fetched.get(&key).is_none_or(|t| *t <= at) {
+                app.cloud.session.insert(key.clone(), entries.clone());
+                app.cloud.fetched.insert(key.clone(), at);
+                app.cloud.disk.insert(
+                    key,
+                    DiskEntry { ts: at, entries: entries.clone() },
+                );
+                persist_cache(app);
+            }
+        }
+        Err(_) => {
+            app.cloud.tree_failed.insert(key, epoch_now());
+        }
     }
 }
 
 // ------------------------------------------------------------------ mutations
 
 fn run_cli(args: &[String], timeout_secs: u64) -> Result<String, String> {
-    let Some(cli) = cli::resolve_cli() else {
-        return Err("proton-drive CLI not found".to_string());
-    };
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let o = exec::run(
-        &cli.to_string_lossy(),
-        &refs,
-        Duration::from_secs(timeout_secs),
-    )?;
-    if !o.ok() {
-        let src = if o.stderr.trim().is_empty() { &o.stdout } else { &o.stderr };
-        let s: String = src.trim().chars().take(200).collect();
-        return Err(if s.is_empty() { "command failed".to_string() } else { s });
-    }
-    Ok(o.stdout.trim().chars().take(200).collect())
+    cli::run_owned(args, Duration::from_secs(timeout_secs))
 }
 
 /// Run a CLI mutation on a worker (Qt `_cloud_run`): status "..." while it
@@ -432,12 +454,34 @@ fn epoch_now() -> f64 {
         .unwrap_or(0.0)
 }
 
+/// A relative remote path whose every component is safe to join.
+fn safe_rel(rel: &str) -> bool {
+    !rel.is_empty() && rel.split('/').all(cli::valid_remote_name)
+}
+
+fn selection_safe(app: &App) -> bool {
+    app.cloud.sel.iter().all(|s| safe_rel(s))
+}
+
+fn refuse_unsafe(app: &mut App) -> bool {
+    if selection_safe(app) {
+        false
+    } else {
+        app.toast_error("Refusing an unsafe remote path.");
+        true
+    }
+}
+
 // ------------------------------------------------------------- single actions
 
 pub fn action_rename(app: &mut App, old_rel: String, name: String) {
     let name = name.trim().to_string();
     let old_name = old_rel.rsplit('/').next().unwrap_or(&old_rel).to_string();
     if name.is_empty() || name == old_name || name.contains('/') {
+        return;
+    }
+    if !safe_rel(&old_rel) {
+        app.toast_error("Refusing an unsafe remote path.");
         return;
     }
     let root = remote_root(&app.conf);
@@ -472,7 +516,11 @@ pub fn action_new_folder(app: &mut App, name: String) {
 
 pub fn action_move(app: &mut App, target_rel: String) {
     let n = app.cloud.sel.len();
-    if n == 0 {
+    if n == 0 || refuse_unsafe(app) {
+        return;
+    }
+    if !safe_rel(&target_rel) {
+        app.toast_error("Refusing an unsafe destination path.");
         return;
     }
     let root = remote_root(&app.conf);
@@ -486,7 +534,7 @@ pub fn action_move(app: &mut App, target_rel: String) {
 
 pub fn action_trash(app: &mut App) {
     let n = app.cloud.sel.len();
-    if n == 0 {
+    if n == 0 || refuse_unsafe(app) {
         return;
     }
     let root = remote_root(&app.conf);
@@ -505,7 +553,7 @@ pub fn action_trash(app: &mut App) {
 
 pub fn action_restore(app: &mut App) {
     let n = app.cloud.sel.len();
-    if n == 0 {
+    if n == 0 || refuse_unsafe(app) {
         return;
     }
     let mut args = vec!["fs".to_string(), "restore".to_string()];
@@ -517,7 +565,7 @@ pub fn action_restore(app: &mut App) {
 
 pub fn action_delete_permanent(app: &mut App) {
     let n = app.cloud.sel.len();
-    if n == 0 {
+    if n == 0 || refuse_unsafe(app) {
         return;
     }
     let mut args = vec!["fs".to_string(), "delete".to_string()];
@@ -740,89 +788,176 @@ pub fn on_downloaded(app: &mut App, ok: bool, err: String, name: String, n: usiz
     }
 }
 
-fn make_tmp_dir() -> std::io::Result<PathBuf> {
-    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let dir = std::env::temp_dir().join(format!(
-        "proton-cloud-{}-{}",
-        std::process::id(),
-        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
-    std::fs::create_dir_all(&dir)?;
-    Ok(dir)
+/// A private temp directory for one download. Created with mode 0700 and a
+/// unique name, and removed on every exit path (including errors).
+struct TempDir {
+    path: PathBuf,
 }
 
-/// Move without following symlinks; fall back to copy when tmp and the
-/// destination are on different filesystems (Qt used shutil.move).
-fn move_or_copy(from: &Path, to: &Path) -> std::io::Result<()> {
-    match std::fs::rename(from, to) {
-        Ok(()) => Ok(()),
-        Err(_) => {
-            std::fs::copy(from, to)?;
-            std::fs::remove_file(from)?;
-            Ok(())
+impl TempDir {
+    fn new() -> std::io::Result<Self> {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let nanos = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        for _ in 0..32 {
+            let path = std::env::temp_dir().join(format!(
+                "proton-cloud-{}-{}-{}",
+                std::process::id(),
+                nanos,
+                N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
+            let mut builder = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                builder.mode(0o700);
+            }
+            match builder.create(&path) {
+                Ok(()) => return Ok(Self { path }),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
         }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "could not create a private download directory",
+        ))
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+/// A destination that does not overwrite an existing file or folder.
+fn unique_dest(dir: &Path, name: &std::ffi::OsStr) -> PathBuf {
+    let first = dir.join(name);
+    if !first.exists() {
+        return first;
+    }
+    let text = name.to_string_lossy();
+    let (stem, ext) = match text.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
+        _ => (text.into_owned(), String::new()),
+    };
+    for i in 2..1000 {
+        let candidate = dir.join(format!("{stem} ({i}){ext}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    dir.join(format!("{stem} (copy){ext}"))
+}
+
+/// Copy a file to `to` through a temp file in the same directory, so a
+/// planted symlink is replaced rather than followed and a cross-filesystem
+/// source still lands atomically.
+fn place_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    if let Ok(meta) = std::fs::symlink_metadata(to)
+        && (meta.file_type().is_symlink() || meta.is_dir())
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("destination is not a regular file: {}", to.display()),
+        ));
+    }
+    let parent = to.parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let nanos = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = parent.join(format!(
+        ".proton-place-{}-{nanos}",
+        std::process::id()
+    ));
+    std::fs::copy(from, &tmp)?;
+    if let Err(e) = std::fs::rename(&tmp, to) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    let _ = std::fs::remove_file(from);
+    Ok(())
+}
+
+fn place_item(from: &Path, to: &Path) -> std::io::Result<()> {
+    if from.is_dir() {
+        std::fs::create_dir(to)?;
+        for child in std::fs::read_dir(from)?.flatten() {
+            place_item(&child.path(), &to.join(child.file_name()))?;
+        }
+        let _ = std::fs::remove_dir(from);
+        Ok(())
+    } else {
+        place_file(from, to)
     }
 }
 
 /// `fs download` to a temp dir, then place the item at `dest`
 /// (Qt `_cloud_fetch`).
 fn fetch_one(rpath: &str, dest: &Path) -> Result<(), String> {
-    let tmp = make_tmp_dir().map_err(|e| e.to_string())?;
+    let tmp = TempDir::new().map_err(|e| e.to_string())?;
     run_cli(
-        &["fs".into(), "download".into(), rpath.into(), tmp.to_string_lossy().into_owned()],
+        &["fs".into(), "download".into(), rpath.into(), tmp.path().to_string_lossy().into_owned()],
         600,
     )?;
-    let mut produced = tmp.join(dest.file_name().unwrap_or_default());
+    let mut produced = tmp.path().join(dest.file_name().unwrap_or_default());
     if !produced.exists() {
-        let files: Vec<PathBuf> = std::fs::read_dir(&tmp)
-            .map(|it| {
-                it.flatten()
-                    .map(|e| e.path())
-                    .filter(|p| p.is_file())
-                    .collect()
-            })
+        let files: Vec<PathBuf> = std::fs::read_dir(tmp.path())
+            .map(|it| it.flatten().map(|e| e.path()).collect())
             .unwrap_or_default();
         if files.len() != 1 {
-            let _ = std::fs::remove_dir_all(&tmp);
             return Err("downloaded file not found".to_string());
         }
         produced = files[0].clone();
     }
-    if let Some(parent) = dest.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let res = move_or_copy(&produced, dest);
-    let _ = std::fs::remove_dir_all(&tmp);
-    res.map_err(|e| e.to_string())
+    let dest = if dest.exists() {
+        unique_dest(dest.parent().unwrap_or(Path::new(".")), dest.file_name().unwrap_or_default())
+    } else {
+        dest.to_path_buf()
+    };
+    place_item(&produced, &dest).map_err(|e| e.to_string())
 }
 
 /// `fs download` of several items into a temp dir, then into `dest_dir`
 /// (Qt `_cloud_fetch_all`). Returns the item count.
 fn fetch_all(rpaths: &[String], dest_dir: &Path) -> Result<usize, String> {
-    let tmp = make_tmp_dir().map_err(|e| e.to_string())?;
+    let tmp = TempDir::new().map_err(|e| e.to_string())?;
     let mut args = vec!["fs".to_string(), "download".to_string()];
     args.extend(rpaths.iter().cloned());
-    args.push(tmp.to_string_lossy().into_owned());
-    if let Err(e) = run_cli(&args, 3600) {
-        let _ = std::fs::remove_dir_all(&tmp);
-        return Err(e);
-    }
-    let produced: Vec<PathBuf> = std::fs::read_dir(&tmp)
+    args.push(tmp.path().to_string_lossy().into_owned());
+    run_cli(&args, 3600)?;
+    let produced: Vec<PathBuf> = std::fs::read_dir(tmp.path())
         .map(|it| it.flatten().map(|e| e.path()).collect())
         .unwrap_or_default();
     if produced.is_empty() {
-        let _ = std::fs::remove_dir_all(&tmp);
         return Err("nothing was downloaded".to_string());
     }
-    let _ = std::fs::create_dir_all(dest_dir);
+    std::fs::create_dir_all(dest_dir).map_err(|e| e.to_string())?;
     let mut ok = 0;
+    let mut failed = 0;
     for p in &produced {
         let name = p.file_name().unwrap_or_default();
-        if move_or_copy(p, &dest_dir.join(name)).is_ok() {
-            ok += 1;
+        let dest = unique_dest(dest_dir, name);
+        match place_item(p, &dest) {
+            Ok(()) => ok += 1,
+            Err(_) => failed += 1,
         }
     }
-    let _ = std::fs::remove_dir_all(&tmp);
+    if failed > 0 {
+        return Err(format!(
+            "{failed} of {} downloaded item(s) could not be saved",
+            produced.len()
+        ));
+    }
     Ok(ok)
 }
 
@@ -981,6 +1116,11 @@ pub fn seed_entries(snapshot: &Path, rel: &str) -> Option<Vec<cli::RemoteEntry>>
         out.push(cli::RemoteEntry {
             name: rest.to_string(),
             rel: r.clone(),
+            uid: n
+                .get("uid")
+                .and_then(|u| u.as_str())
+                .unwrap_or("")
+                .to_string(),
             dir: is_dir,
             size: n.get("size").and_then(|s| s.as_u64()).unwrap_or(0),
             mtime,
@@ -997,10 +1137,22 @@ pub fn seed_entries(snapshot: &Path, rel: &str) -> Option<Vec<cli::RemoteEntry>>
 // -------------------------------------------------------------- disk cache
 
 pub fn load_disk_cache(path: &Path) -> HashMap<String, DiskEntry> {
-    std::fs::read_to_string(path)
+    let mut cache = std::fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str::<HashMap<String, DiskEntry>>(&s).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // The cache is a local file; never feed an unsafe path back into an
+    // action or a join just because it predates the parser validation.
+    for entry in cache.values_mut() {
+        entry.entries.retain(|e| {
+            cli::valid_remote_name(&e.name)
+                && safe_rel(&e.rel)
+                && (e.rel == e.name
+                    || e.rel.ends_with(&format!("/{}", e.name))
+                    || (!e.uid.is_empty() && e.rel == e.uid))
+        });
+    }
+    cache
 }
 
 pub fn save_disk_cache(path: &Path, cache: &HashMap<String, DiskEntry>) {
@@ -2281,18 +2433,7 @@ fn apply_menu_item(app: &mut App, item: Option<&'static str>) {
             app.dialog = Some(super::Dialog::ConfirmEmptyTrash);
         }
         Some("duplicate") => action_duplicate(app),
-        Some("selectall") => {
-            // Select only what the table is showing: a bulk trash/download
-            // must not silently include files hidden by the current search.
-            let query = app.cloud.query.trim().to_lowercase();
-            app.cloud.sel = app
-                .cloud
-                .entries
-                .iter()
-                .filter(|e| query.is_empty() || e.name.to_lowercase().contains(&query))
-                .map(|e| e.rel.clone())
-                .collect();
-        }
+        Some("selectall") => select_all_visible(app),
         Some("details") => {
             let rel = app.cloud.sel.first().cloned();
             let it = rel.and_then(|r| app.cloud.entries.iter().find(|e| e.rel == r).cloned());
@@ -2315,6 +2456,19 @@ fn apply_menu_item(app: &mut App, item: Option<&'static str>) {
         Some("refresh") => reload(app),
         _ => {}
     }
+}
+
+/// Select every row the table currently shows, not the files hidden by a
+/// search. Shared by the context menu and Ctrl+A.
+pub fn select_all_visible(app: &mut App) {
+    let query = app.cloud.query.trim().to_lowercase();
+    app.cloud.sel = app
+        .cloud
+        .entries
+        .iter()
+        .filter(|e| query.is_empty() || e.name.to_lowercase().contains(&query))
+        .map(|e| e.rel.clone())
+        .collect();
 }
 
 fn bottom_row(app: &mut App, ui: &mut egui::Ui) {
@@ -2436,13 +2590,20 @@ fn ensure_children(app: &mut App, rel: &str) {
     if app.cloud.tree_loading.contains(rel) || children(app, rel).is_some() {
         return;
     }
+    if let Some(at) = app.cloud.tree_failed.get(rel) {
+        if epoch_now() - *at < 30.0 {
+            return;
+        }
+        app.cloud.tree_failed.remove(rel);
+    }
     app.cloud.tree_loading.insert(rel.to_string());
     let root = remote_root(&app.conf);
     let key = rel.to_string();
+    let at = epoch_now();
     let tx = app.tx.clone();
     std::thread::spawn(move || {
         let result = cli::fetch_remote_entries(&root, &key);
-        let _ = tx.send(Back::TreeEntries { key, result });
+        let _ = tx.send(Back::TreeEntries { key, at, result });
     });
 }
 
@@ -2650,10 +2811,15 @@ fn my_files_row(app: &mut App, ui: &mut egui::Ui, root_open: bool) {
 /// folder wears the accent pill (Proton highlights where you are).
 fn tree_rows(app: &mut App, ui: &mut egui::Ui, parent: &str, depth: usize) {
     let Some(kids) = children(app, parent) else {
+        let indent = 16.0 + depth as f32 * 14.0;
         if app.cloud.tree_loading.contains(parent) {
-            let indent = 16.0 + depth as f32 * 14.0;
             ui.add_space(indent);
             ui.label(egui::RichText::new("Loading...").size(12.0).weak());
+        } else if let Some(at) = app.cloud.tree_failed.get(parent)
+            && epoch_now() - *at < 30.0
+        {
+            ui.add_space(indent);
+            ui.label(egui::RichText::new("Couldn't load. Try again.").size(11.5).weak());
         }
         return;
     };

@@ -154,6 +154,10 @@ impl Draft {
 
     /// Click: flip, cascade down through loaded children, reflect up.
     pub fn toggle_node(&mut self, rel: &str) {
+        // From the first explicit toggle, the visible parent state is the
+        // source of truth for newly expanded branches; the load-time saved
+        // selection must not re-check them behind the user's back.
+        self.initial_selection.clear();
         let new_val = !self.nodes.get(rel).copied().unwrap_or(false);
         self.set_recursive(rel, new_val);
         let segs: Vec<&str> = rel.split('/').collect();
@@ -485,7 +489,20 @@ pub fn do_save(app: &mut App, ctx: &egui::Context) {
 
     let conf_changed = values.iter().any(|(k, v)| app.conf.get(k) != Some(v))
         || extras != app.conf_extras;
+    let root_changed = app.conf.get("PROTON_SYNC_LOCAL") != Some(&d.local)
+        || app.conf.get("PROTON_SYNC_REMOTE") != Some(&d.remote);
     conf::write(&app.paths.conf_file, &values, &extras);
+    if root_changed {
+        // The engine archives state.json on its next start; drop the GUI's
+        // cloud cache and old-account rows now.
+        super::cloud::reset(app);
+        app.draft.initial_selection.clear();
+        app.draft.children.clear();
+        app.draft.expanded.clear();
+        app.draft.loading.clear();
+        app.draft.nodes.clear();
+        app.draft.nodes.insert(String::new(), true);
+    }
 
     // Apply the staged preferences now. Nothing on the Settings page writes
     // these directly; Save and Discard are the only exit paths.
@@ -527,7 +544,7 @@ pub fn do_save(app: &mut App, ctx: &egui::Context) {
         egui::WindowLevel::Normal
     }));
     if appstart_touched {
-        desktop::set_autostart(&app.paths, appstart);
+        let _ = desktop::set_autostart(&app.paths, appstart);
     }
     app.prefs_baseline = Some(app.prefs.clone());
     app.conf = conf::read(&app.paths.conf_file);
@@ -1118,12 +1135,18 @@ fn install_card(app: &mut App, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
             if ui.button("Add to my app menu").clicked() {
-                desktop::set_menu(&app.paths, true);
-                app.toast("Added to your app menu.");
+                if desktop::set_menu(&app.paths, true) {
+                    app.toast("Added to your app menu.");
+                } else {
+                    app.toast_error("Could not add the app-menu entry.");
+                }
             }
             if ui.button("Remove from app menu").clicked() {
-                desktop::set_menu(&app.paths, false);
-                app.toast("Removed from your app menu.");
+                if desktop::set_menu(&app.paths, false) {
+                    app.toast("Removed from your app menu.");
+                } else {
+                    app.toast_error("Could not remove the app-menu entry.");
+                }
             }
         });
     });

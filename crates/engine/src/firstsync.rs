@@ -79,6 +79,7 @@ pub fn download_all(
                         cli,
                         remote_root,
                         local_root,
+                        &crate::action::LocalTree::new(),
                         &batch.parent,
                         &batch.rels,
                         retries,

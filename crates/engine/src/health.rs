@@ -4,11 +4,12 @@ use proton_core::health::Health;
 use std::fs;
 
 pub fn state_dir() -> std::path::PathBuf {
-    if let Some(xdg) = std::env::var_os("XDG_STATE_HOME") {
-        std::path::PathBuf::from(xdg).join("proton-sync")
-    } else {
-        dirs::home_dir().unwrap_or_else(|| std::path::Path::new("/").to_path_buf()).join(".local/state/proton-sync")
-    }
+    let home = dirs::home_dir().unwrap_or_else(|| std::path::Path::new("/").to_path_buf());
+    std::env::var_os("XDG_STATE_HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| home.join(".local/state"))
+        .join("proton-sync")
 }
 
 pub fn health_path() -> std::path::PathBuf {

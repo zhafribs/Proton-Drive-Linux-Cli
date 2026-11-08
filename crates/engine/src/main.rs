@@ -33,15 +33,7 @@ fn run() -> Result<()> {
         Some("dry-run") => dry_run_cmd(&args[1..]),
         Some("--once") | Some("once") => {
             // run single cycle
-            let sd = {
-                if let Some(xdg) = std::env::var_os("XDG_STATE_HOME") {
-                    std::path::PathBuf::from(xdg).join("proton-sync")
-                } else {
-                    dirs::home_dir()
-                        .unwrap_or_else(|| std::path::Path::new("/").to_path_buf())
-                        .join(".local/state/proton-sync")
-                }
-            };
+            let sd = proton_engine::health::state_dir();
             let _lock = {
                 std::fs::create_dir_all(&sd)?;
                 let lock_path = sd.join("sync.lock");
@@ -119,7 +111,7 @@ fn scan_local_cmd(args: &[String]) -> Result<()> {
     let subfolders = arg_value(args, "--subfolders").unwrap_or_default();
     let exclude = arg_value(args, "--exclude").unwrap_or_default();
     let filter = Filter::new(&subfolders, &exclude);
-    let tree = scan_local(Path::new(&root), &filter);
+    let tree = scan_local(Path::new(&root), &filter)?;
     println!("{}", serde_json::to_string_pretty(&tree)?);
     Ok(())
 }
@@ -149,11 +141,10 @@ fn refresh_cmd(args: &[String]) -> Result<()> {
 
 fn dry_run_cmd(_args: &[String]) -> Result<()> {
     let home = dirs::home_dir().unwrap_or_else(|| Path::new("/").to_path_buf());
-    let config_dir = dirs::config_dir().unwrap_or_else(|| home.join(".config"));
-    let state_home = std::env::var_os("XDG_STATE_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| home.join(".local/state"));
-    let state_dir = state_home.join("proton-sync");
+    let config_dir = dirs::config_dir()
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| home.join(".config"));
+    let state_dir = proton_engine::health::state_dir();
 
     let cfg_path = config_dir.join("proton-sync.conf");
     let values = conf::read(&cfg_path);
@@ -181,7 +172,7 @@ fn dry_run_cmd(_args: &[String]) -> Result<()> {
     let cli = Cli::new().context("locating official proton-drive CLI")?;
     let filter = Filter::new(&subfolders, &exclude);
 
-    let local = scan_local(Path::new(&local_root), &filter);
+    let local = scan_local(Path::new(&local_root), &filter)?;
     // A pending "Run full check now" applies to a one-shot run too: it forces
     // the walk and consumes the request.
     let force_full = proton_engine::loop_::take_request(&state_dir.join("audit-request"));
