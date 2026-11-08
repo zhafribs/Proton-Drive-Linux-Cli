@@ -1090,11 +1090,7 @@ fn page_head(app: &mut App, ui: &mut egui::Ui) {
     let (trash_view, busy, can_transfer) =
         (app.cloud.trash_view, app.cloud.busy, app.can_transfer());
     ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new(if trash_view { "Trash" } else { "Files" })
-                .strong()
-                .size(24.0),
-        );
+        widgets::page_title(ui, if trash_view { "Trash" } else { "Files" });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if trash_view {
                 if can_transfer
@@ -1846,6 +1842,17 @@ fn row(
         egui::Sense::click_and_drag(),
     );
     let selected = app.cloud.sel.contains(&e.rel);
+    // Qt selects the item under the pointer on a right-click. Without this,
+    // a cell context menu was built from whatever was selected before, so
+    // Rename/Trash could target a different file (or show the empty-space
+    // menu when nothing was selected).
+    let pointer_over_row = ui.rect_contains_pointer(rect);
+    let secondary_click = resp.secondary_clicked()
+        || (pointer_over_row && ui.input(|i| i.pointer.secondary_clicked()));
+    if app.dialog.is_none() && secondary_click && !selected {
+        app.cloud.sel = vec![e.rel.clone()];
+        app.cloud.anchor = Some(e.rel.clone());
+    }
     resp.widget_info(|| {
         egui::WidgetInfo::labeled(egui::Role::ListItem, ui.is_enabled(), e.name.as_str())
     });
@@ -1976,7 +1983,6 @@ fn row(
     // to the topmost widget - the label - so a click on the text never reached
     // the row. Detect a raw primary click over the row so clicking a name
     // selects the item, while drag-to-select-text still works.
-    let pointer_over_row = ui.rect_contains_pointer(rect);
     let raw_click = pointer_over_row && ui.input(|i| i.pointer.primary_clicked());
     let raw_double = pointer_over_row
         && ui.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary));
@@ -2003,21 +2009,24 @@ fn row(
             app.cloud.anchor = Some(e.rel.clone());
         } else if mods.shift {
             if let Some(anchor) = app.cloud.anchor.clone() {
-                let a = rows_pos(&app.cloud.entries, &anchor);
-                let b = rows_pos(&app.cloud.entries, &e.rel);
+                // The table draws sorted(entries) filtered by the search
+                // query. The old range used raw-entry indices against the
+                // sorted list, so it selected the wrong rows under any sort
+                // or search.
+                let rows = sorted(&app.cloud.entries, app.cloud.sort_col, app.cloud.sort_desc);
+                let query = app.cloud.query.trim().to_lowercase();
+                let visible: Vec<&cli::RemoteEntry> = rows
+                    .iter()
+                    .filter(|r| query.is_empty() || r.name.to_lowercase().contains(&query))
+                    .collect();
+                let a = visible.iter().position(|r| r.rel == anchor);
+                let b = visible.iter().position(|r| r.rel == e.rel);
                 if let (Some(a), Some(b)) = (a, b) {
                     let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
-                    let ordered: Vec<String> = sorted(
-                        &app.cloud.entries,
-                        app.cloud.sort_col,
-                        app.cloud.sort_desc,
-                    )
-                    .iter()
-                    .skip(lo)
-                    .take(hi - lo + 1)
-                    .map(|x| x.rel.clone())
-                    .collect();
-                    *sel = ordered;
+                    *sel = visible[lo..=hi].iter().map(|r| r.rel.clone()).collect();
+                } else {
+                    *sel = vec![e.rel.clone()];
+                    app.cloud.anchor = Some(e.rel.clone());
                 }
             } else {
                 sel.push(e.rel.clone());
@@ -2208,10 +2217,6 @@ fn row_menu_body(app: &mut App, ui: &mut egui::Ui, menu_item: &mut Option<&'stat
     }
 }
 
-fn rows_pos(rows: &[cli::RemoteEntry], rel: &str) -> Option<usize> {
-    rows.iter().position(|e| e.rel == rel)
-}
-
 fn open_item(app: &mut App, rel: &str) {
     if app.cloud.trash_view {
         return; // Qt: opening items in Trash does nothing
@@ -2277,10 +2282,14 @@ fn apply_menu_item(app: &mut App, item: Option<&'static str>) {
         }
         Some("duplicate") => action_duplicate(app),
         Some("selectall") => {
+            // Select only what the table is showing: a bulk trash/download
+            // must not silently include files hidden by the current search.
+            let query = app.cloud.query.trim().to_lowercase();
             app.cloud.sel = app
                 .cloud
                 .entries
                 .iter()
+                .filter(|e| query.is_empty() || e.name.to_lowercase().contains(&query))
                 .map(|e| e.rel.clone())
                 .collect();
         }
@@ -2562,6 +2571,9 @@ fn my_files_row(app: &mut App, ui: &mut egui::Ui, root_open: bool) {
     });
     if fill != egui::Color32::TRANSPARENT {
         ui.painter().rect_filled(rect, egui::CornerRadius::same(9), fill);
+    }
+    if resp.gained_focus() {
+        resp.scroll_to_me(Some(egui::Align::Center));
     }
     if resp.has_focus() {
         ui.painter().rect_stroke(

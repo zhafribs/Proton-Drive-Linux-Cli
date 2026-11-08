@@ -1047,7 +1047,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
     let narrow = ui.available_width() < 420.0;
     if sel.is_empty() && !narrow {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Photos").strong().size(24.0));
+            widgets::page_title(ui, "Photos");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.allocate_ui_with_layout(
                     egui::vec2(325.0, 30.0),
@@ -1058,20 +1058,27 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
         });
     } else {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Photos").strong().size(24.0));
+            widgets::page_title(ui, "Photos");
         });
         if sel.is_empty() {
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| photo_actions(app, ui));
         }
     }
-    ui.add_space(14.0);
-    photo_hero(app, ui);
-    if !signed_out {
+    // With a selection, the selection toolbar is the primary context. At the
+    // 720x400 floor the hero and three metric cards otherwise leave almost no
+    // height for the grid, so hide them until the selection is cleared.
+    if sel.is_empty() {
+        ui.add_space(14.0);
+        photo_hero(app, ui);
+        if !signed_out {
+            ui.add_space(12.0);
+            photo_metrics(app, ui);
+        }
         ui.add_space(12.0);
-        photo_metrics(app, ui);
+    } else {
+        ui.add_space(8.0);
     }
-    ui.add_space(12.0);
 
     if !sel.is_empty() {
         ui.add_space(8.0);
@@ -1261,6 +1268,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                     ui.visuals().strong_text_color(),
                 );
             }
+            widgets::scroll_focused_into_view(ui);
         });
 }
 
@@ -1290,6 +1298,11 @@ fn grid_metrics(avail: f32) -> (usize, f32) {
             continue;
         }
         if t > MAX_TILE && cols < 64 {
+            // One column cannot shrink; stop instead of bouncing between
+            // one and two columns when avail is just over MAX_TILE.
+            if cols == 1 {
+                return (1, MAX_TILE);
+            }
             cols += 1;
             continue;
         }
@@ -1558,6 +1571,17 @@ fn tile(ui: &mut egui::Ui, app: &mut App, p: &cli::PhotoEntry, dir: &std::path::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grid_metrics_does_not_oscillate_at_the_tile_edges() {
+        // 221..227 used to bounce 1 -> 2 -> 1 forever and hang the UI.
+        for avail in [220.0, 221.0, 224.0, 227.0, 228.0, 260.0] {
+            let (cols, size) = grid_metrics(avail);
+            assert!(cols >= 1, "avail={avail}");
+            assert!(size <= MAX_TILE + 0.01, "avail={avail} size={size}");
+        }
+        assert_eq!(grid_metrics(224.0), (1, MAX_TILE));
+    }
 
     #[test]
     fn clear_summary_drops_stale_header_state() {

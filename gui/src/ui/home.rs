@@ -9,7 +9,10 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
     egui::ScrollArea::vertical()
         .id_salt("home-scroll")
         .auto_shrink([false, false])
-        .show(ui, |ui| draw_inner(app, ui));
+        .show(ui, |ui| {
+            draw_inner(app, ui);
+            widgets::scroll_focused_into_view(ui);
+        });
 }
 
 fn draw_inner(app: &mut App, ui: &mut egui::Ui) {
@@ -96,7 +99,8 @@ fn draw_inner(app: &mut App, ui: &mut egui::Ui) {
                     };
                     ui.label(egui::RichText::new(note).size(11.5).weak());
                 }
-                if status == health::UiStatus::DeletesHeld {                    if app.health.deletes_wipe_guard {
+                if status == health::UiStatus::DeletesHeld {
+                    if app.health.deletes_wipe_guard {
                         ui.label(
                             egui::RichText::new(
                                 "Nothing will be deleted while one side looks empty. Restore the \
@@ -201,7 +205,7 @@ fn page_head(
     signing_in: bool,
 ) {
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("Home").strong().size(24.0));
+        widgets::page_title(ui, "Home");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if signing_in {
                 ui.label(egui::RichText::new("Signing in\u{2026}").weak());

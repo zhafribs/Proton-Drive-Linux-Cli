@@ -1,3 +1,29 @@
+## 3.20.46 — 2026-11-08
+
+- **Keyboard navigation reaches every page and control.** Sidebar rows and
+  long pages scroll the focused control into view, Space works like Enter on
+  nav rows and custom buttons, page titles and section labels are headings,
+  and the account menu names the signed-in account.
+- **Form controls are visible.** Checkbox, input and button borders now meet
+  the 3:1 non-text contrast bar in both themes instead of using the decorative
+  card hairline.
+- **Right-click selects the row under the pointer.** Rename, Duplicate, Move
+  and Trash now act on the file you right-clicked instead of the previous
+  selection. Shift-range selection follows the visible sorted list, and
+  **Select all** ignores files hidden by the search.
+- **Selecting photos no longer hides the grid.** The hero and metric cards
+  collapse while a selection is active, and the tile-size calculation can no
+  longer bounce between one and two columns on narrow cards.
+- **One owner for the worker limit.** The duplicate “Parallel connections”
+  control is gone; **Scan workers** in Performance is the only control for
+  `PROTON_SYNC_WORKERS`.
+- **The Small preset is 95%.** Every preset now lands on the 5% slider grid,
+  so choosing Small and then dragging does not snap to a different value.
+- **Selective-sync rows are easier to toggle.** Clicking a folder name toggles
+  its checkbox, not just the small glyph.
+- **Saving while paused stays paused.** A settings save updates the service
+  unit but no longer restarts an engine the user paused.
+
 ## 3.20.45 — 2026-11-08
 
 - **The interface-size slider no longer jumps to the ends.** The percentage

@@ -51,6 +51,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
             credits(ui);
             ui.add_space(12.0);
             legal(ui);
+            widgets::scroll_focused_into_view(ui);
         });
 }
 
@@ -62,7 +63,7 @@ fn page_head(app: &mut App, ui: &mut egui::Ui) {
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.allocate_ui_with_layout(
-                egui::vec2(270.0, 30.0),
+                egui::vec2(300.0, 30.0),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
                     if widgets::secondary_button_hint(
@@ -526,7 +527,6 @@ fn credits(ui: &mut egui::Ui) {
         let licence = format!("{REPO_URL}/blob/main/LICENSE");
         let notices = format!("{REPO_URL}/blob/main/THIRD_PARTY_NOTICES.md");
         ui.horizontal_wrapped(|ui| {
-            link(ui, "Project repository", REPO_URL);
             link(ui, "Licence (MIT)", &licence);
             link(ui, "Third-party notices", &notices);
             link(ui, "Proton Drive CLI", "https://github.com/ProtonDriveApps/sdk");

@@ -26,9 +26,28 @@ pub fn card(ui: &mut egui::Ui, title: Option<&str>, add: impl FnOnce(&mut egui::
 
 /// Uppercase muted section label ("NEVER SYNC FILES MATCHING").
 pub fn section_label(ui: &mut egui::Ui, text: &str) {
-    ui.label(egui::RichText::new(text.to_uppercase()).size(11.0).weak());
+    let resp = ui.label(egui::RichText::new(text.to_uppercase()).size(11.0).weak());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Heading, ui.is_enabled(), text));
     ui.add_space(4.0);
 }
+/// The 24 pt page title, exposed as a heading for screen readers.
+pub fn page_title(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let resp = ui.label(egui::RichText::new(text).strong().size(24.0));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Heading, ui.is_enabled(), text));
+    resp
+}
+/// Keep keyboard focus visible inside a ScrollArea. egui 0.37 does not
+/// scroll a focused widget into view by itself, so a Tab into an off-screen
+/// control leaves the focus ring (and the control) invisible.
+pub fn scroll_focused_into_view(ui: &egui::Ui) {
+    if let Some(id) = ui.ctx().memory(|m| m.focused())
+        && let Some(resp) = ui.ctx().read_response(id)
+        && resp.gained_focus()
+    {
+        resp.scroll_to_me(Some(egui::Align::Center));
+    }
+}
+
 
 /// One compact metric card (label, large value, context line). Shared by
 /// Home and Photos so their summary rows look identical.
@@ -43,7 +62,11 @@ pub fn metric(ui: &mut egui::Ui, label: &str, value: &str, sub: &str) {
         } else {
             23.0
         };
-        ui.label(egui::RichText::new(value).strong().size(value_size));
+        ui.add(
+            egui::Label::new(egui::RichText::new(value).strong().size(value_size))
+                .truncate(),
+        )
+        .on_hover_text(value);
         ui.label(egui::RichText::new(sub).size(11.0).weak());
     });
 }
@@ -166,7 +189,11 @@ pub fn primary_button_full(ui: &mut egui::Ui, text: &str) -> bool {
             egui::StrokeKind::Inside,
         );
     }
-    response.clicked() || (response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+    response.clicked()
+        || (response.has_focus()
+            && ui.input(|i| {
+                i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space)
+            }))
 }
 
 /// Round identity avatar: accent disc, cyan cap and the initial.
@@ -769,6 +796,9 @@ pub fn nav_row(ui: &mut egui::Ui, icon: NavIcon, label: &str, selected: bool) ->
     });
     ui.ctx()
         .accesskit_node_builder(resp.id, |n| n.set_selected(selected));
+    if resp.gained_focus() {
+        resp.scroll_to_me(Some(egui::Align::Center));
+    }
     if resp.has_focus() {
         ui.painter().rect_stroke(
             rect,
@@ -811,7 +841,11 @@ pub fn nav_row(ui: &mut egui::Ui, icon: NavIcon, label: &str, selected: bool) ->
         egui::FontId::proportional(14.5),
         color,
     );
-    resp.clicked() || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+    resp.clicked()
+        || (resp.has_focus()
+            && ui.input(|i| {
+                i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space)
+            }))
 }
 
 /// Toolbar glyphs for the files view (refresh ring + the two arrows),

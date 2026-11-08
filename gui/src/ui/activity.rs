@@ -43,7 +43,7 @@ pub fn draw_preview(app: &mut App, ui: &mut egui::Ui, title: &str, max: usize) {
 
 pub fn draw(app: &mut App, ui: &mut egui::Ui, title: &str) {
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(title).strong().size(24.0));
+        widgets::page_title(ui, title);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // Pill track with a solid purple active segment (Proton's
             // segmented control).

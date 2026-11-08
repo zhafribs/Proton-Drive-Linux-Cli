@@ -303,7 +303,12 @@ fn tab_bar(app: &mut App, ui: &mut egui::Ui) {
             });
             ui.ctx()
                 .accesskit_node_builder(resp.id, |n| n.set_selected(selected));
-            if resp.clicked() || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+            if resp.clicked()
+                || (resp.has_focus()
+                    && ui.input(|i| {
+                        i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space)
+                    }))
+            {
                 app.settings_tab = i;
             }
         }
@@ -352,7 +357,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                 ui.add_space(pad);
                 ui.vertical(|ui| {
                     ui.set_width(width);
-                    ui.label(egui::RichText::new("Settings").strong().size(24.0));
+                    widgets::page_title(ui, "Settings");
                     ui.add_space(16.0);
                     tab_bar(app, ui);
                     ui.add_space(10.0);
@@ -367,6 +372,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                     ui.add_space(20.0);
                 });
             });
+            widgets::scroll_focused_into_view(ui);
         });
 }
 
@@ -539,6 +545,10 @@ pub fn do_save(app: &mut App, ctx: &egui::Context) {
 
     let appimage = app.paths.appimage.clone();
     let tx = app.tx.clone();
+    // `systemctl restart` also starts an inactive unit. Saving while paused
+    // must update the unit and conf but leave the engine stopped; otherwise a
+    // settings save silently resumes the deletions the user paused.
+    let paused = app.paused_by_user || app.paths.state_dir.join("paused").exists();
     std::thread::spawn(move || {
         let r = service::ensure_service_unit(appimage.as_deref(), false);
         let autostart_ok = if autostart_touched {
@@ -558,6 +568,8 @@ pub fn do_save(app: &mut App, ctx: &egui::Context) {
             "Saved. Your install is from an older version - run \
              scripts/install-sync.sh once to update it."
                 .to_string()
+        } else if paused {
+            "Saved. Syncing stays paused.".to_string()
         } else if service::restart() {
             if r == "written" {
                 "Saved. Sync service now points at this app copy.".to_string()
@@ -984,7 +996,7 @@ fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
             ui.vertical(|ui| {
                 const PRESETS: [(&str, u16); 5] = [
                     ("Compact", 85),
-                    ("Small", 93),
+                    ("Small", 95),
                     ("Default", 100),
                     ("Large", 110),
                     ("Extra large", 120),
@@ -1119,17 +1131,9 @@ fn install_card(app: &mut App, ui: &mut egui::Ui) {
 
 fn fine_tuning_card(app: &mut App, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Fine-tuning"), |ui| {
-        labeled_control(ui, "Parallel connections", |ui| {
-            number_combo(
-                ui,
-                "parallel-connections",
-                &mut app.draft.workers,
-                WORKERS_RANGE,
-                "Upper limit for parallel CLI calls. Adaptive scans may use fewer \
-                 automatically when memory is tight.",
-            );
-        });
-        ui.add_space(8.0);
+        // "Scan workers" in Performance owns PROTON_SYNC_WORKERS. Keeping a
+        // second control here with a different label made the same setting
+        // appear to have two owners.
         labeled_control(ui, "Retries per folder", |ui| {
             number_combo(
                 ui,
@@ -1316,7 +1320,14 @@ fn sel_row(app: &mut App, ui: &mut egui::Ui, rel: &str, label: &str) {
         {
             app.draft.toggle_node(rel);
         }
-        ui.label(label);
+        // The whole row is the target, not just the small checkbox glyph.
+        let name = ui.add(egui::Label::new(label).sense(egui::Sense::click()));
+        if name.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if name.clicked() {
+            app.draft.toggle_node(rel);
+        }
     });
 }
 

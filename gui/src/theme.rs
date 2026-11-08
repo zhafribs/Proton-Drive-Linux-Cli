@@ -45,8 +45,12 @@ pub const NAVY: egui::Color32 = egui::Color32::from_rgb(0x1B, 0x19, 0x30);
 pub const INK: egui::Color32 = egui::Color32::from_rgb(0x33, 0x30, 0x4D);
 /// Secondary text.
 pub const SECONDARY: egui::Color32 = egui::Color32::from_rgb(0x6E, 0x6B, 0x84);
-/// Hairline border for cards, inputs and buttons.
+/// Hairline border for cards and panels.
 pub const BORDER: egui::Color32 = egui::Color32::from_rgb(0xE4, 0xE2, 0xEE);
+/// Stronger border for interactive controls (checkboxes, inputs, buttons):
+/// the decorative hairline is only 1.28:1 on white, below the 3:1 non-text
+/// contrast bar, so form controls need their own shade.
+pub const CONTROL_BORDER: egui::Color32 = egui::Color32::from_rgb(0x8B, 0x88, 0x99);
 /// Soft purple: active nav pill / pressed controls.
 pub const ACCENT_SOFT: egui::Color32 = egui::Color32::from_rgb(0xEE, 0xE9, 0xFF);
 /// Darker violet for accent *text* on the light accent-soft pill (AA).
@@ -64,6 +68,8 @@ pub const DARK_INK: egui::Color32 = egui::Color32::from_rgb(0xF2, 0xF1, 0xFA);
 pub const DARK_STRONG: egui::Color32 = egui::Color32::from_rgb(0xF6, 0xF4, 0xFF);
 pub const DARK_SECONDARY: egui::Color32 = egui::Color32::from_rgb(0xA6, 0xA3, 0xBC);
 pub const DARK_BORDER: egui::Color32 = egui::Color32::from_rgb(0x2C, 0x2C, 0x3F);
+/// Interactive-control border for the dark theme (3:1 on DARK_SURFACE).
+pub const DARK_CONTROL_BORDER: egui::Color32 = egui::Color32::from_rgb(0x6B, 0x6A, 0x82);
 
 /// Solid surface fill. The old glass/aurora layer is gone: cards and panels
 /// are opaque so hierarchy comes from borders and spacing, not glow.
@@ -280,11 +286,11 @@ pub fn apply(ctx: &egui::Context, _theme: &Theme, animate: bool) {
     dark.widgets.noninteractive.corner_radius = round12;
     dark.widgets.inactive.weak_bg_fill = DARK_SURFACE; // buttons
     dark.widgets.inactive.bg_fill = DARK_SURFACE; // checkbox box
-    dark.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, DARK_BORDER);
+    dark.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, DARK_CONTROL_BORDER);
     dark.widgets.inactive.corner_radius = pill;
     dark.widgets.hovered.bg_fill = DARK_HOVER;
     dark.widgets.hovered.weak_bg_fill = DARK_HOVER;
-    dark.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, DARK_BORDER);
+    dark.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, DARK_CONTROL_BORDER);
     dark.widgets.hovered.fg_stroke = egui::Stroke::new(1.5, DARK_STRONG);
     dark.widgets.hovered.corner_radius = pill;
     dark.widgets.active.bg_fill = ACCENT.gamma_multiply(0.6);
@@ -294,7 +300,7 @@ pub fn apply(ctx: &egui::Context, _theme: &Theme, animate: bool) {
     dark.widgets.active.corner_radius = pill;
     dark.widgets.open.bg_fill = DARK_HOVER;
     dark.widgets.open.weak_bg_fill = DARK_HOVER;
-    dark.widgets.open.bg_stroke = egui::Stroke::new(1.0, DARK_BORDER);
+    dark.widgets.open.bg_stroke = egui::Stroke::new(1.0, DARK_CONTROL_BORDER);
     dark.widgets.open.fg_stroke = egui::Stroke::new(1.0, DARK_STRONG);
     dark.widgets.open.corner_radius = pill;
 
@@ -319,11 +325,11 @@ pub fn apply(ctx: &egui::Context, _theme: &Theme, animate: bool) {
     light.widgets.noninteractive.corner_radius = round12;
     light.widgets.inactive.weak_bg_fill = SURFACE; // buttons
     light.widgets.inactive.bg_fill = SURFACE; // checkbox box
-    light.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, BORDER);
+    light.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, CONTROL_BORDER);
     light.widgets.inactive.corner_radius = pill;
     light.widgets.hovered.bg_fill = ACCENT_HOVER;
     light.widgets.hovered.weak_bg_fill = ACCENT_HOVER;
-    light.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, BORDER);
+    light.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, CONTROL_BORDER);
     light.widgets.hovered.fg_stroke = egui::Stroke::new(1.5, NAVY);
     light.widgets.hovered.corner_radius = pill;
     light.widgets.active.bg_fill = ACCENT_SOFT;
@@ -333,7 +339,7 @@ pub fn apply(ctx: &egui::Context, _theme: &Theme, animate: bool) {
     light.widgets.active.corner_radius = pill;
     light.widgets.open.bg_fill = ACCENT_HOVER;
     light.widgets.open.weak_bg_fill = ACCENT_HOVER;
-    light.widgets.open.bg_stroke = egui::Stroke::new(1.0, BORDER);
+    light.widgets.open.bg_stroke = egui::Stroke::new(1.0, CONTROL_BORDER);
     light.widgets.open.fg_stroke = egui::Stroke::new(1.0, NAVY);
     light.widgets.open.corner_radius = pill;
 
@@ -423,6 +429,8 @@ mod tests {
             (DARK_SECONDARY, DARK_PAGE, 4.5),
             (MUTED, SURFACE, 3.0),
             (MUTED, DARK_PAGE, 3.0),
+            (CONTROL_BORDER, SURFACE, 3.0),
+            (DARK_CONTROL_BORDER, DARK_SURFACE, 3.0),
             (SUCCESS, SURFACE, 3.0),
             (SUCCESS, DARK_SURFACE, 3.0),
             (WARNING, SURFACE, 3.0),

@@ -1751,9 +1751,18 @@ impl App {
         };
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 46.0), egui::Sense::click());
-        let response = response.on_hover_text(hint);
+        let account_name = label.to_string();
+        let hover = match email.as_deref() {
+            Some(e) => format!("{e}\n{hint}"),
+            None => hint.to_string(),
+        };
+        let response = response.on_hover_text(hover);
         response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Account menu")
+            egui::WidgetInfo::labeled(
+                egui::Role::Button,
+                ui.is_enabled(),
+                format!("Account menu - {account_name}"),
+            )
         });
         // Glass pill: accent-glow edge on hover/focus, presence dot on the
         // avatar, chevron hinting the menu.
