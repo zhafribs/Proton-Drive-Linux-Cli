@@ -345,10 +345,24 @@ pub fn restore(state_dir: &Path, snapshot: &SnapshotInfo) -> Result<(), String> 
         return Err("snapshot belongs to a different sync root; refusing to restore it".into());
     }
     // Keep the current state as a pre-restore snapshot before replacing it.
-    if let Err(e) = create(state_dir, "pre-restore") {
-        return Err(format!("could not snapshot the current state: {e}"));
+    // A corrupt state cannot be snapshotted, so preserve its raw bytes under
+    // a dated name instead of silently discarding the evidence.
+    let current = state_path(state_dir);
+    if current.exists()
+        && let Err(e) = create(state_dir, "pre-restore")
+    {
+        let backup = state_dir.join(format!("state.json.corrupt-{}", now_secs()));
+        fs::copy(&current, &backup).map_err(|copy| {
+            format!(
+                "could not preserve the current state before restoring ({e}); copy also failed: {copy}"
+            )
+        })?;
+        eprintln!(
+            "WARN current state could not be snapshotted ({e}); preserved {}",
+            backup.display()
+        );
     }
-    state::write(&state_path(state_dir), &state)
+    state::write(&current, &state)
         .map_err(|e| format!("writing {}: {e}", state_path(state_dir).display()))
 }
 

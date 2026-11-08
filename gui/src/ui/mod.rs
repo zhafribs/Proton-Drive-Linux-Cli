@@ -121,6 +121,8 @@ pub enum Back {
     ConflictResult { ok: bool, message: String },
     /// Recovery: a snapshot create/restore finished.
     SnapshotResult { ok: bool, message: String },
+    /// Recovery: the read-only recovery check finished.
+    RecoveryCheckDone(Result<recovery::CheckResult, String>),
     /// Cloud browser: the move-to picker's folder listing landed.
     PickerFolders {
         parent: String,
@@ -1400,6 +1402,7 @@ impl App {
                 Back::SnapshotResult { ok, message } => {
                     recovery::on_snapshot_result(self, ok, message)
                 }
+                Back::RecoveryCheckDone(result) => recovery::on_check_done(self, result),
                 Back::PickerFolders { parent, folders } => {
                     cloud::on_picker_folders(self, parent, folders)
                 }

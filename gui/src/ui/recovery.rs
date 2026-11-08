@@ -11,12 +11,21 @@ use proton_core::conflict::{self, Conflict};
 use proton_core::local_trash::{self, Entry};
 use proton_core::state;
 use proton_core::state_snapshot::{self, SnapshotInfo};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ConflictChoice {
     KeepCurrent,
     UseConflict,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CheckResult {
+    pub ts: u64,
+    pub ok: bool,
+    pub summary: String,
+    pub details: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -53,6 +62,10 @@ pub struct RecoveryState {
     pub snapshot_error: Option<String>,
     pub snapshot_status: String,
     pub confirm_snapshot: Option<PathBuf>,
+    // Last read-only recovery check.
+    pub last_check: Option<CheckResult>,
+    pub check_loaded: bool,
+    pub check_busy: bool,
 }
 
 pub fn draw(app: &mut App, ui: &mut egui::Ui) {
@@ -388,6 +401,18 @@ fn draw_snapshots(app: &mut App, ui: &mut egui::Ui) {
         if ui.button("Open snapshot folder").clicked() {
             open_snapshot_folder(app);
         }
+        if ui
+            .add_enabled(
+                !app.recovery.check_busy,
+                egui::Button::new("Run recovery check"),
+            )
+            .on_hover_text(
+                "Read the sync history, snapshots, local trash and conflict copies; write the result to the state folder.",
+            )
+            .clicked()
+        {
+            start_check(app);
+        }
         let count = app.recovery.snapshots.len();
         ui.label(
             egui::RichText::new(if count == 1 {
@@ -708,6 +733,117 @@ fn entry_card(app: &mut App, ui: &mut egui::Ui, entry: &Entry) {
                 }
             });
         });
+}
+
+fn check_path(state_dir: &std::path::Path) -> PathBuf {
+    state_dir.join("recovery-drill.json")
+}
+
+pub fn load_check(state_dir: &std::path::Path) -> Option<CheckResult> {
+    let bytes = std::fs::read(check_path(state_dir)).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn run_check(state_dir: &std::path::Path, root: Option<&std::path::Path>) -> CheckResult {
+    let mut details = Vec::new();
+    let mut problems = 0u32;
+    let state_file = state_dir.join("state.json");
+    match proton_core::state::read_checked(&state_file) {
+        Ok(Some(_)) => details.push("sync history: readable".into()),
+        Ok(None) => details.push("sync history: not created yet".into()),
+        Err(e) => {
+            problems += 1;
+            details.push(format!("sync history: unreadable ({e})"));
+        }
+    }
+    let roots = std::fs::read_to_string(state_dir.join("sync-roots")).unwrap_or_default();
+    if state_file.exists() && roots.is_empty() {
+        problems += 1;
+        details.push("sync roots: not recorded".into());
+    } else if !roots.is_empty() {
+        details.push("sync roots: recorded".into());
+    }
+    let snapshots = state_snapshot::list(state_dir);
+    let usable = snapshots
+        .iter()
+        .filter(|s| s.valid && s.roots_match)
+        .count();
+    if state_file.exists() && snapshots.is_empty() {
+        details.push("snapshots: none yet".into());
+    } else {
+        details.push(format!(
+            "snapshots: {} total, {usable} restorable",
+            snapshots.len()
+        ));
+    }
+    match local_trash::entries(state_dir) {
+        Ok(entries) => details.push(format!("local trash: {} entries", entries.len())),
+        Err(e) => {
+            problems += 1;
+            details.push(format!("local trash: unreadable ({e})"));
+        }
+    }
+    if let Some(root) = root {
+        match conflict::scan(root) {
+            Ok(conflicts) => {
+                details.push(format!("conflict copies: {} found", conflicts.len()))
+            }
+            Err(e) => {
+                problems += 1;
+                details.push(format!("conflict scan: failed ({e})"));
+            }
+        }
+    } else {
+        details.push("conflict scan: no sync folder".into());
+    }
+    let ok = problems == 0;
+    CheckResult {
+        ts: local_trash::now_secs(),
+        ok,
+        summary: if ok {
+            "All recovery checks passed.".into()
+        } else {
+            format!("{problems} recovery check(s) need attention.")
+        },
+        details,
+    }
+}
+
+pub(crate) fn start_check(app: &mut App) {
+    let state_dir = app.paths.state_dir.clone();
+    let root = sync_root(app);
+    let tx = app.tx.clone();
+    app.recovery.check_busy = true;
+    std::thread::spawn(move || {
+        let result = run_check(&state_dir, root.as_deref());
+        let path = check_path(&state_dir);
+        let save = serde_json::to_vec_pretty(&result)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| std::fs::write(&path, bytes).map_err(|e| e.to_string()));
+        match save {
+            Ok(()) => {
+                let _ = tx.send(Back::RecoveryCheckDone(Ok(result)));
+            }
+            Err(e) => {
+                let _ = tx.send(Back::RecoveryCheckDone(Err(format!(
+                    "recovery check ran but could not be saved: {e}"
+                ))));
+            }
+        }
+    });
+}
+
+pub fn on_check_done(app: &mut App, result: Result<CheckResult, String>) {
+    app.recovery.check_busy = false;
+    app.recovery.check_loaded = true;
+    match result {
+        Ok(result) => {
+            let summary = result.summary.clone();
+            app.recovery.last_check = Some(result);
+            app.toast(summary);
+        }
+        Err(e) => app.toast_error(e),
+    }
 }
 
 fn refresh_snapshots(app: &mut App) {
