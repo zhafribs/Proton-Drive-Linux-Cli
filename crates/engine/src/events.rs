@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Type, Value};
 
-const API: &str = "https://drive-api.proton.me";
+pub(crate) const API: &str = "https://drive-api.proton.me";
 const SECRET_LABEL: &str = "ch.proton.drive/drive-sdk-cli/auth-session";
 const IDLE_POLL: f64 = 1.0;
 
@@ -50,9 +50,9 @@ impl EventWatch {
 }
 
 #[derive(Debug, Clone)]
-struct Session {
-    access_token: String,
-    uid: String,
+pub(crate) struct Session {
+    pub(crate) access_token: String,
+    pub(crate) uid: String,
 }
 
 #[allow(dead_code)] // D-Bus tuple layout; only the value bytes are read
@@ -350,7 +350,7 @@ fn cursor_write(volume: &str, id: &str) -> bool {
 
 /// The official CLI's session from the Secret Service. Tokens are kept in
 /// memory only and never logged.
-fn read_cli_session() -> Option<Session> {
+pub(crate) fn read_cli_session() -> Option<Session> {
     let conn = Connection::session().ok()?;
     let service = Proxy::new(
         &conn,

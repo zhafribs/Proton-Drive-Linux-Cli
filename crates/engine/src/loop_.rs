@@ -140,6 +140,10 @@ pub fn run_loop() -> Result<()> {
         }
     });
 
+    // Read-only account quota for Home; the CLI has no quota command, so
+    // this uses the same CLI session the event stream already reads.
+    crate::quota::start();
+
     // Primary: Proton's real event stream with the CLI's own keyring
     // session. If that is unavailable, fall back to the 3 s fingerprint
     // watcher; the interval remains the final fallback.

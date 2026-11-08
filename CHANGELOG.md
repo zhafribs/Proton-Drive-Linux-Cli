@@ -1,3 +1,12 @@
+## 3.20.43 — 2026-11-08
+
+- **Home shows your cloud storage.** A new **Cloud storage** card reports
+  used and free space from your account quota, with a usage bar. The engine
+  reads the quota through the CLI's existing session; the official CLI has no
+  quota command. The third summary card returns to **Last check**, and Sync
+  details add **Cloud walk** so the age of the remote view is explicit. The
+  card fills in when the background sync service runs.
+
 ## 3.20.42 — 2026-11-07
 
 - **About tags stay intact at the minimum window width.** Rust, egui,

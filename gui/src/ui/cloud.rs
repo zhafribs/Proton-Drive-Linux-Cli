@@ -860,6 +860,62 @@ pub fn on_picker_folders(app: &mut App, parent: String, folders: Vec<(String, St
 static SNAP: Mutex<(Option<SystemTime>, Option<Arc<serde_json::Value>>)> =
     Mutex::new((None, None));
 
+type CacheKey = (SystemTime, std::path::PathBuf);
+type SnapshotUsage = (u64, u64, f64);
+
+static USAGE: Mutex<(Option<CacheKey>, Option<SnapshotUsage>)> =
+    Mutex::new((None, None));
+
+/// Cloud storage used + entry count from the engine's `fs size` fingerprint,
+/// cached until the snapshot file changes. `fp` is `[size, descendants]`.
+pub fn snapshot_usage(path: &Path) -> Option<(u64, u64, f64)> {
+    let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok()?;
+    let key = (mtime, path.to_path_buf());
+    let mut guard = USAGE.lock().unwrap();
+    if guard.0.as_ref() == Some(&key) {
+        return guard.1;
+    }
+    let usage = proton_core::snapshot::read(path).and_then(|snapshot| {
+        let size = snapshot.fp.first().copied().filter(|v| *v >= 0)? as u64;
+        let entries = snapshot
+            .fp
+            .get(1)
+            .copied()
+            .filter(|v| *v >= 0)
+            .unwrap_or(0) as u64;
+        Some((size, entries, snapshot.ts))
+    });
+    *guard = (Some(key), usage);
+    usage
+}
+
+#[derive(Clone, serde::Deserialize)]
+struct QuotaFile {
+    used: u64,
+    total: u64,
+    drive_used: u64,
+    fetched_at: String,
+}
+
+static QUOTA: Mutex<(Option<CacheKey>, Option<QuotaFile>)> = Mutex::new((None, None));
+
+/// Account storage quota written by the engine, cached until the file changes.
+pub fn quota_usage(path: &Path) -> Option<(u64, u64, u64, String)> {
+    let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok()?;
+    let key = (mtime, path.to_path_buf());
+    let mut guard = QUOTA.lock().unwrap();
+    if guard.0.as_ref() != Some(&key) {
+        let quota = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<QuotaFile>(&text).ok());
+        *guard = (Some(key), quota);
+    }
+    guard
+        .1
+        .as_ref()
+        .map(|q| (q.used, q.total, q.drive_used, q.fetched_at.clone()))
+}
+
 /// The engine's walk as the tree object, parsed once per file change. Returned
 /// behind an `Arc` so the (potentially large) tree is not deep-cloned for every
 /// folder lookup or sidebar node on every frame.

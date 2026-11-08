@@ -1,7 +1,7 @@
 //! Home: the status hero, three honest metrics, a compact activity preview,
 //! and the actions people actually use.
 
-use super::{App, Dialog, activity, widgets};
+use super::{App, Dialog, activity, cloud, widgets};
 use crate::{health, service, util};
 use eframe::egui;
 
@@ -164,6 +164,8 @@ fn draw_inner(app: &mut App, ui: &mut egui::Ui) {
     if logged_in {
         metrics(app, ui);
         ui.add_space(12.0);
+        cloud_storage(app, ui);
+        ui.add_space(12.0);
     }
 
     let full = ui.available_width();
@@ -277,12 +279,86 @@ fn metrics(app: &App, ui: &mut egui::Ui) {
     });
 }
 
+fn cloud_storage(app: &App, ui: &mut egui::Ui) {
+    let quota = cloud::quota_usage(&app.paths.state_dir.join("quota.json"));
+    widgets::card(ui, Some("Cloud storage"), |ui| {
+        let Some((used, total, drive, fetched)) = quota else {
+            ui.label(
+                egui::RichText::new(if app.active {
+                    "Waiting for the sync service to report your storage quota."
+                } else {
+                    "Start syncing to load your cloud storage quota."
+                })
+                .size(12.0)
+                .weak(),
+            );
+            if let Some((drive_bytes, _, _)) = cloud::snapshot_usage(&app.paths.snapshot_file) {
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Drive data seen by the last walk: {}",
+                        service::human_size(drive_bytes)
+                    ))
+                    .size(11.5)
+                    .weak(),
+                );
+            }
+            return;
+        };
+        let free = total.saturating_sub(used);
+        let ratio = if total == 0 {
+            0.0
+        } else {
+            (used as f32 / total as f32).clamp(0.0, 1.0)
+        };
+        ui.columns(2, |cols| {
+            storage_stat(&mut cols[0], "Used", &service::human_size(used), &format!("Drive {}", service::human_size(drive)));
+            storage_stat(&mut cols[1], "Free", &service::human_size(free), &format!("of {}", service::human_size(total)));
+        });
+        ui.add_space(8.0);
+        ui.add(
+            egui::ProgressBar::new(ratio)
+                .desired_width(ui.available_width())
+                .text(format!("{:.1}%", ratio * 100.0)),
+        );
+        ui.add_space(5.0);
+        let updated = chrono::DateTime::parse_from_rfc3339(&fetched)
+            .map(|dt| util::rel_time(Some(dt)))
+            .unwrap_or_default();
+        let detail = if updated.is_empty() {
+            format!(
+                "{} of {} used \u{b7} shared across Proton apps",
+                service::human_size(used),
+                service::human_size(total)
+            )
+        } else {
+            format!(
+                "{} of {} used \u{b7} shared across Proton apps \u{b7} updated {updated}",
+                service::human_size(used),
+                service::human_size(total)
+            )
+        };
+        ui.label(egui::RichText::new(detail).size(11.5).weak());
+    });
+}
+
+fn storage_stat(ui: &mut egui::Ui, label: &str, value: &str, sub: &str) {
+    ui.label(egui::RichText::new(label).size(11.5).weak());
+    ui.add_space(2.0);
+    ui.label(egui::RichText::new(value).strong().size(20.0));
+    ui.label(egui::RichText::new(sub).size(11.0).weak());
+}
+
 fn sync_details(app: &mut App, ui: &mut egui::Ui) {
     let next = app
         .health
         .next_poll_dt()
         .map(next_check_label)
         .unwrap_or_else(|| "Not scheduled".to_string());
+    let cloud_walk = cloud::snapshot_usage(&app.paths.snapshot_file)
+        .and_then(|(_, _, ts)| chrono::DateTime::from_timestamp(ts as i64, 0))
+        .map(|dt| util::rel_time(Some(dt.fixed_offset())))
+        .unwrap_or_else(|| "Not yet".to_string());
     let engine = app
         .health
         .build
@@ -302,6 +378,7 @@ fn sync_details(app: &mut App, ui: &mut egui::Ui) {
 
     widgets::card(ui, Some("Sync details"), |ui| {
         detail_row(ui, "Next check", &next);
+        detail_row(ui, "Cloud walk", &cloud_walk);
         detail_row(ui, "App build", &engine);
         detail_row(ui, "Remote folder", &remote);
         detail_row(ui, "Check interval", &interval);

@@ -16,5 +16,6 @@ pub mod photos;
 pub mod plan;
 pub mod policy;
 pub mod push;
+pub mod quota;
 pub mod scan;
 pub mod state_update;

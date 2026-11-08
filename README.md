@@ -41,7 +41,7 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
 
 | Home | My files |
 |:---:|:---:|
-| ![Home](docs/screenshots/home-3.20.png) | ![My files](docs/screenshots/files-3.20.png) |
+| ![Home](docs/screenshots/home-3.20.43.png) | ![My files](docs/screenshots/files-3.20.png) |
 
 *Dark theme shown; light and system themes are built in.*
 
