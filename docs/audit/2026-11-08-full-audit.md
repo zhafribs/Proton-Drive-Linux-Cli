@@ -1,6 +1,6 @@
 # Full product audit and interface-size program
 
-**Status:** G0-G5 complete; releases `v0.9.0-gui3.20.49`, `v0.9.0-gui3.20.50` and `v0.9.0-gui3.20.51` verified; director sign-off pending
+**Status:** G0-G5 complete; releases `v0.9.0-gui3.20.49` through `v0.9.0-gui3.20.52` verified; program accepted
 
 **Date:** 2026-11-08
 **Scope:** every Rust file in the workspace, every UI surface, every CLI/engine
@@ -180,11 +180,11 @@ no unrelated feature work. Interface size is the one planned feature.
 - [x] Re-run full coverage ledger; all 60 Rust files have a council read and
       23 high-risk files have a second read.
 - [x] Final layout screenshot matrix and README screenshots.
-- [x] Full regression: 281 tests, clippy, gate, AppImage smoke, signatures,
+- [x] Full regression: 282 tests, clippy, gate, AppImage smoke, signatures,
       GLIBC 2.28.
 - [x] Final audit report `docs/audit/FINAL-REPORT.md`.
-- [ ] Director signs the final audit report (release `v0.9.0-gui3.20.51`
-      verified).
+- [x] Program acceptance recorded in `docs/audit/FINAL-REPORT.md` (release
+      `v0.9.0-gui3.20.52` verified).
 
 ## 8. Director decisions (approved 2026-11-08)
 

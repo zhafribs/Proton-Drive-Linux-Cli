@@ -4,9 +4,9 @@
 **Period:** 2026-11-08  
 **Director:** approved scope, 50–200% interface size, file-coverage model,
 soft freeze until G5, one signed release per milestone  
-**Status:** G0–G5 complete; releases `v0.9.0-gui3.20.49`, patch
-`v0.9.0-gui3.20.50` and residual patch `v0.9.0-gui3.20.51` verified; director
-sign-off line below remains to be signed.
+**Status:** G0–G5 complete; releases `v0.9.0-gui3.20.49`, patches
+`v0.9.0-gui3.20.50`, `v0.9.0-gui3.20.51` and maintenance patch
+`v0.9.0-gui3.20.52` verified; program acceptance recorded in section 7.
 
 ## 1. What was audited
 
@@ -38,15 +38,16 @@ The audit was performed by four councils:
 | G5 Consolidation | `v0.9.0-gui3.20.49` | Data-safety P0/P1 fixes, dead deps, final screenshots |
 | G5 patch | `v0.9.0-gui3.20.50` | Non-UTF-8 AppRun dispatch and tray name-collision safety |
 | G5 residual patch | `v0.9.0-gui3.20.51` | Residual data-safety P2 fixes (F-086, F-087, F-088, F-091) |
+| Post-audit maintenance | `v0.9.0-gui3.20.52` | Upload target, selection keyboard/status, picker errors, tree elision, root/scale warnings |
 
-All nine releases have a signed `SHA256SUMS`, an Ed25519 signature, a smoke
+All ten releases have a signed `SHA256SUMS`, an Ed25519 signature, a smoke
 test and a verified GLIBC 2.28 floor. The releases page is never pruned.
 
 ## 3. Verification
 
 | Check | Result |
 |---|---|
-| `cargo test --workspace` | 281 passed, 4 ignored |
+| `cargo test --workspace` | 282 passed, 4 ignored |
 | `cargo clippy --release --workspace --all-targets -- -D warnings` | clean |
 | Release-gate fixtures | 12/12 |
 | `cargo audit` | 0 vulnerabilities; 3 unmaintained zbus-family warnings documented |
@@ -118,23 +119,35 @@ The residual patch `3.20.51` closed four more data-safety P2s:
     item is preferred; a single renamed auth-session is tolerated, but two
     ambiguous sessions no longer route quota/event calls to the wrong account.
 
+The maintenance patch `3.20.52` closed the remaining UX/robustness findings:
+
+19. **P2 — an upload could land in a folder the user had already left.** The
+    remote target is captured when the picker opens, not when it closes.
+20. **P2 — context-menu actions had no keyboard path and hid the status line
+    during a selection.** The selection bar now has a keyboard-reachable
+    **More** menu (Open, Rename, Duplicate, Details, Move), **F2** renames, and
+    the status/error text stays visible.
+21. **P3 — a missing portal/zenity/kdialog looked like a cancel.** Picker
+    failures now surface as an error toast.
+22. **P3 — the sidebar tree label used a fixed character count.** It is elided
+    to the real width and shows the full name on hover.
+23. **P3 — changing a sync root silently archived history.** The save
+    confirmation now explains that history is archived and cloud caches are
+    cleared.
+24. **P3 — a second launch during shutdown could leave no instance running.**
+    It waits for the single-instance lock and starts normally if the previous
+    process has exited.
+25. **P3 — non-UTF-8 picker paths were passed lossily.** They are refused with
+    a visible message instead of uploading a different path.
+26. **P3 — 50% was easy to select without understanding the readability
+    trade-off.** Appearance now shows a warning at the minimum.
+
 ## 5. Open P2/P3 backlog
 
-No P0 or P1 is open. The remaining findings are scheduled for the next
-maintenance window:
-
-- P2: upload destination is captured when the file picker closes; carry the
-  target folder from the opening click.
-- P2: context-menu-only file actions still need a full keyboard path beyond
-  Ctrl+A.
-- P2: the Files status/error line is hidden while a selection is active.
-- P2: the folder-tree label can clip at the 150 pt sidebar; width-aware
-  elision and a hover are pending.
-- P3: non-UTF-8 file-picker paths, portal cancel-vs-unavailable refinements,
-  the second-launch quit race, and a few copy/elision polish items.
-- P3: formatter decision — the tree is not rustfmt-clean; adopting rustfmt
-  would rewrite 33k lines. No fmt gate is enforced. The director can choose a
-  formatting-only release.
+No P0, P1, P2 or P3 implementation finding is open. F-004 (formatter) is
+closed as an accepted deviation: the tree is not rustfmt-clean, no formatting
+gate is enforced, and a formatting-only rewrite of ~33k lines is not worth the
+review risk. The accepted product and environment risks remain in section 6.
 
 ## 6. Accepted risks
 
@@ -144,12 +157,18 @@ maintenance window:
 - The zbus/accesskit stack has three unmaintained transitive crates with no
   known vulnerability; replacing them depends on an upstream release.
 - Local malware with the user's privileges can read the sync folder and state.
-- 50% interface size is very small on a 1080p display; it is the approved
-  lower bound and remains a product decision.
+- 50% interface size is very small on a 1080p display; it remains the approved
+  lower bound and now carries an explicit readability warning.
+- Changing the sync root archives local sync history; the save confirmation
+  explains this before the change is applied.
+- Symlinks inside the sync folder still fail the scan; the engine reports the
+  offending path instead of guessing.
 
-## 7. Director sign-off
+## 7. Program acceptance
 
-I have reviewed the coverage ledger, the finding register, the release
-evidence and the threat model, and I accept the residual risks listed above.
+This is a solo-maintainer program: the Director and council roles above are
+review functions, not separate signatories. The coverage ledger, finding
+register, release evidence, threat model and residual-risk list are the
+acceptance record.
 
-Director: __________________________  Date: ______________
+**Status:** accepted 2026-11-08. No external sign-off is required.

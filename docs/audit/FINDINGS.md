@@ -15,15 +15,15 @@ file, the evidence, an owner, a fix and a verification step.
 
 | ID | Sev | Area | File | Evidence | Owner | Target | Status |
 |---|---|---|---|---|---|---|---|
-| F-004 | P2 | Tooling | workspace | `cargo fmt --check` is not part of CI and the current tree is not rustfmt-clean; adopting the default formatter would rewrite ~33k lines. | Engineering | G5 | Open: G5 decision — one formatting-only release or document the deviation. |
-| F-005 | P3 | Accessibility | `gui/src/ui/settings.rs` | 50% renders text at half size; it is the approved lower bound, but very small on a 1080p display. | Design | G5 | Accepted: the director approved 50%; keep collecting feedback. |
+| F-004 | P2 | Tooling | workspace | `cargo fmt --check` is not part of CI and the current tree is not rustfmt-clean; adopting the default formatter would rewrite ~33k lines. | Engineering | G5 | Closed: accepted deviation; no formatting gate, no rewrite. |
+| F-005 | P3 | Accessibility | `gui/src/ui/settings.rs` | 50% renders text at half size; it is the approved lower bound, but very small on a 1080p display. | Design | G5 | Accepted; 3.20.52 adds a readability warning at 50%. |
 | F-006 | P3 | Layout | `gui/src/ui/settings.rs` | At the 720x400 logical minimum, the Appearance card needs vertical scrolling to reach the slider. No overlap or clipping occurs. | Design | G2 | Accepted: scrolling is expected at the minimum height. |
 | F-007 | P2 | Tooling | workspace | `cargo-audit`, `cargo-deny`, `cargo-machete` and `cargo-udeps` are not installed locally; CI has the license check and clippy only. | Trust | G4 | Fixed: audit + machete run and recorded in `security-3.20.48.txt`. |
 | F-008 | P2 | UX overlap | `gui/src/ui/settings.rs` | The same `PROTON_SYNC_WORKERS` value is edited by **Scan workers** (Performance) and **Parallel connections** (Fine-tuning), with different labels and help text. | Design/Engineering | G2 | Fixed in 3.20.46 (see F-023). |
 | F-009 | P2 | Security | `crates/core/src/conf.rs` | `conf::write` creates `proton-sync.conf` with the default umask (usually 0644). The **Extra environment variables** card accepts proxy credentials, so the file can be readable by other local users. | Trust | G4 | Fixed in working tree for 3.20.48 (0600 + test). |
 | F-010 | P3 | Consistency | `gui/src/ui/settings.rs` | The **Small** preset is 93%, but the slider steps in 5% increments, so 93% cannot be reached by dragging and the next drag jumps to 95%. | Design | G2 | Fixed in 3.20.46 (Small 95%, see F-024). |
 | F-011 | P2 | Accessibility | `gui/src/ui/settings.rs` | In the selective-sync tree the folder name is a plain label; only the small checkbox glyph and the expand arrow are clickable. | Design | G2 | Fixed in 3.20.46 (see F-025). |
-| F-012 | P3 | Migration | `gui/src/prefs.rs` | Configs written before 3.20.44 stored the window size in egui points. At a non-100% scale those values are now read as physical units, so the first launch after upgrading can open a smaller window; the scale-aware floor and auto-grow correct it. | Engineering | G5 | Open: document the one-time change; no data loss. |
+| F-012 | P3 | Migration | `gui/src/prefs.rs` | Configs written before 3.20.44 stored the window size in egui points. At a non-100% scale those values are now read as physical units, so the first launch after upgrading can open a smaller window; the scale-aware floor and auto-grow correct it. | Engineering | G5 | Accepted: one-time window-size change; no data loss. |
 
 ## Closed findings
 
@@ -43,7 +43,7 @@ file, the evidence, an owner, a fix and a verification step.
 | G2 UI/frontend | 0 | 0 | Shipped `v0.9.0-gui3.20.46`; UI P1s closed; G3/G4 carry-over tracked below |
 | G3 Backend/contract | 0 | 0 | Shipped `v0.9.0-gui3.20.47`; engine timeout/lock/state P1s closed; UI logout/pause-race items carried |
 | G4 Security/legal/release | 0 | 0 | Shipped `v0.9.0-gui3.20.48`; 0 cargo-audit vulnerabilities, action pins and 0600 config tests verified |
-| G5 Consolidation | 0 | 0 | Shipped `v0.9.0-gui3.20.49`, patch `v0.9.0-gui3.20.50` and residual patch `v0.9.0-gui3.20.51`; P0/P1 closed; director sign-off pending |
+| G5 Consolidation | 0 | 0 | Shipped `v0.9.0-gui3.20.49`, patches `v0.9.0-gui3.20.50`, `v0.9.0-gui3.20.51` and maintenance `v0.9.0-gui3.20.52`; all implementation findings closed or accepted |
 
 ## G2 release — 3.20.46 (fixed)
 
@@ -159,11 +159,17 @@ accepted product decisions.
 | F-088 | P2 | State | A post-download edit before the state rescan could be stamped as synced. | The fingerprint captured immediately after placement is carried into `state_update` and stored instead of the later rescan value. | `downloaded_fingerprint_is_not_replaced_by_a_later_rescan_edit`; execute tests. |
 | F-091 | P2 | Service | Pause/resume workers were not serialized; a fast pause→resume could leave the engine in the opposite state. | One service-control mutex plus a desired-state bit: the last click wins and the worker re-checks the bit under the lock. | Code review; `service::tests`; clippy clean. |
 
-## Remaining P2/P3 after G5
+## Post-audit maintenance — 3.20.52 (fixed)
 
-| ID | Sev | Finding | Next window |
-|---|---|---|---|
-| F-089 | P2 | Upload target is captured when the picker closes, not when it opens. | Maintenance |
-| F-090 | P2 | Context-menu-only actions still need a full keyboard path; status/error line is hidden during selection. | Maintenance |
-| F-092 | P3 | Non-UTF8 picker paths, portal cancel refinement, second-launch quit race, tree-label elision. | Backlog |
-| F-004 | P2 | Formatter decision: the tree is not rustfmt-clean; no fmt gate. | Director decision |
+| ID | Sev | Area | Finding | Fix | Verified |
+|---|---|---|---|---|---|
+| F-089 | P2 | Uploads | The upload target was read when the picker closed, so a late listing or navigation could retarget it. | `UploadFiles`/`UploadFolder` carry the target captured when the picker opens; drag-and-drop still uses the drop-time folder. | Code review; `cargo test --workspace`; smoke. |
+| F-090 | P2 | Keyboard/status | Context-menu-only actions had no keyboard path, and the status/error line disappeared while a selection was active. | The selection bar has a keyboard-reachable **More** menu (Open, Rename, Duplicate, Details, Move), **F2** rename, Ctrl+A in the shortcut list, and a persistent status/error label. | Code review; 720x400 layout reserve; clippy. |
+| F-092 | P3 | Pickers/sidebar/launch | Non-UTF-8 paths were lossy, picker unavailability looked like cancel, a second launch during quit could lose the app, and tree labels used a fixed character count. | Non-UTF-8 paths are refused visibly; `PickResult` distinguishes cancel from unavailable; the second launch waits for the lock; tree labels elide to width with a full-name hover. | Portal tests; code review; clippy. |
+| F-095 | P3 | Settings | Changing a sync root archived history without warning; 50% had no readability hint. | The save confirmation explains the archive/cache reset; Appearance warns at 50%. | Code review; 720x400/50% screenshots. |
+
+## Remaining findings
+
+No P0, P1, P2 or P3 implementation finding is open. F-004 (formatter) is an
+accepted deviation; F-005/F-006/F-012 are accepted product/migration notes.
+The residual risks are listed in `FINAL-REPORT.md` section 6.
