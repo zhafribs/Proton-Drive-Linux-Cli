@@ -123,3 +123,7 @@ After M1, a user can:
 - Recovery drill: corrupt `state.json`, leftover download staging, snapshot
   restore, no destructive plan; `crates/engine/tests/recovery_drill.rs`.
 - Evidence: `docs/audit/evidence/release-3.21.0.txt`.
+- Patch `v0.9.0-gui3.21.1` refreshes Recovery when the page is entered,
+  filters acknowledged conflicts from the check, adds local-trash usage to the
+  check, and confirms snapshot deletion. Evidence:
+  `docs/audit/evidence/release-3.21.1.txt`.
