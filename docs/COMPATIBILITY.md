@@ -36,6 +36,16 @@ The app is x86_64 Linux only.
 - **Non-systemd init systems** for background sync. The GUI can browse, but
   start/pause/enable-at-login and the engine service require a systemd user
   session. This is the largest remaining portability gap.
+- **Symlinks inside the sync folder** are not followed. A symlink, special
+  file, unreadable directory or malformed cloud listing stops the cycle with
+  an error instead of being mistaken for a deletion. Remove or exclude the
+  link to continue.
+- **Changing the local or remote sync root** archives the previous state
+  history (`state.json`, snapshot, approvals) and starts a fresh scan. Signing
+  out clears the account's state and cloud caches.
+- **Quota and event stream**: the official CLI has no quota command, so the
+  engine reads `UsedSpace`/`MaxSpace` and the event stream through the CLI's
+  own keyring session. Both are read-only; no token is written or logged.
 - A dark **wallpaper** does not imply a dark desktop theme. “Match my system”
   follows the desktop's color-scheme setting; the Appearance tab shows
   `System theme: Dark/Light` so this is visible.

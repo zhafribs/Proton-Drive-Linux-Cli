@@ -43,7 +43,7 @@ file, the evidence, an owner, a fix and a verification step.
 | G2 UI/frontend | 0 | 0 | Shipped `v0.9.0-gui3.20.46`; UI P1s closed; G3/G4 carry-over tracked below |
 | G3 Backend/contract | 0 | 0 | Shipped `v0.9.0-gui3.20.47`; engine timeout/lock/state P1s closed; UI logout/pause-race items carried |
 | G4 Security/legal/release | 0 | 0 | Shipped `v0.9.0-gui3.20.48`; 0 cargo-audit vulnerabilities, action pins and 0600 config tests verified |
-| G5 Consolidation | - | - | Not started |
+| G5 Consolidation | 0 | 0 | Shipped `v0.9.0-gui3.20.49`; P0/P1 closed; director sign-off pending |
 
 ## G2 release — 3.20.46 (fixed)
 
@@ -126,3 +126,37 @@ worker race), F-051 (autostart/menu errors, fixed in working tree), F-055
 partial), F-057 (duplicate-name photo copy), F-058 (non-UTF8 paths), F-060
 (selective-folder error). F-004 is the formatter decision; F-005/F-006 are
 accepted product decisions.
+
+## G5 release — 3.20.49 (fixed)
+
+| ID | Sev | Area | Finding | Fix | Verified |
+|---|---|---|---|---|---|
+| F-070 | P0 | Data safety | A planned download could overwrite a local edit made after the scan. | Re-check the plan-time fingerprint before placement; back up/replace/restore the file; no-replace hard links for new paths; `MvLocal` refuses an appeared destination. | `staged_download_does_not_overwrite...`, `staged_download_replaces_an_unchanged_file`. |
+| F-071 | P1 | Deletions | Delete propagation ignored an edit on the surviving side. | Trash only when the surviving side still matches state; otherwise restore/upload it. | `plan` tests; code review. |
+| F-072 | P1 | Scan | Read errors, symlinks, special files and malformed listings looked like deletions. | Scan fails closed; listings fail on non-arrays/undecryptable/unknown nodes. | `scan` tests; fake CLI suite. |
+| F-073 | P1 | Wipe guard | Libraries under five files were not protected by the empty-side guard. | Guard arms on any non-empty history (`state_local > 0`). | `wipe_guard_protects_a_small_library_too`. |
+| F-074 | P1 | Approval | Folder trashes counted only state-known children, so the approval could show 0 while trashing a subtree. | Every descendant is included in `candidate_cloud`. | Plan tests. |
+| F-075 | P1 | Moves | A cloud rename was paired with a locally edited survivor. | Pair only when every state-known local fingerprint is unchanged. | Plan tests. |
+| F-076 | P1 | Fast path | `FastEdit` wrote downloads/state without the planner's conflict checks. | Removed; event updates use the normal scoped listing + planner. | `loop_` tests. |
+| F-077 | P1 | State scope | State and cloud caches were not scoped to roots/account. | `sync-roots` archives history on a root change; sign-out clears state and cloud caches; root change resets the GUI. | Root guard test; code review. |
+| F-078 | P1 | CLI lock | Cloud mutations bypassed the shared CLI lock; the timeout fallback ran unprotected. | `cli::run_owned` holds the lock and fails closed; Cloud uses it. | Code review; fake CLI tests. |
+| F-079 | P1 | Downloads | Temp dirs were predictable/0755 and left behind; moves followed symlinks/overwrote. | 0700 unique RAII temp dir, recursive collision-safe placement, temp-file rename. | Code review; cloud tests. |
+| F-080 | P1 | Trash | Trash view reused live rows/selection; duplicate names shared one key. | Views clear on switch; trash rows use node UIDs. | Code review. |
+| F-081 | P1 | Sidebar | A failed tree listing spawned a CLI process every frame and stale results overwrote newer data. | Failure cooldown + request timestamp guard. | Code review. |
+| F-082 | P1 | Snapshot | `publish_snapshot` called the CLI outside the lock. | `run_json(..., true)`. | Code review; tests. |
+| F-083 | P1 | Journal/health | systemd `+0800` timestamps failed, notification verbs matched file names, and failed transfers still said “up to date”. | Precise timestamps/normalization, leading-verb classification, engine writes `error` on failure. | Journal tests; loop tests. |
+| F-084 | P2 | Paths | Engine still accepted relative/empty XDG values and raw data dirs. | One absolute resolver shared by GUI/engine; `dirs::data_dir()`. | Code review. |
+| F-085 | P2 | UI/desktop | Theme detection order, tray “Open”, update recovery before the lock, startup tray notification, portal cancel, icon self-copy. | Targeted fixes. | Tests/code review. |
+
+## Remaining P2/P3 after G5
+
+| ID | Sev | Finding | Next window |
+|---|---|---|---|
+| F-086 | P2 | Deletion-approval digest is unkeyed 64-bit FNV and not bound to roots. | Maintenance |
+| F-087 | P2 | Keyring lookup accepts any Proton auth-session label; prefer exact/unique. | Maintenance |
+| F-088 | P2 | A post-download edit before the state rescan can be stamped as synced; carry the placed fingerprint. | Maintenance |
+| F-089 | P2 | Upload target is captured when the picker closes, not when it opens. | Maintenance |
+| F-090 | P2 | Context-menu-only actions still need a full keyboard path; status/error line is hidden during selection. | Maintenance |
+| F-091 | P2 | Pause/resume workers are not serialized. | Maintenance |
+| F-092 | P3 | Non-UTF8 picker paths, portal cancel refinement, second-launch quit race, tree-label elision. | Backlog |
+| F-004 | P2 | Formatter decision: the tree is not rustfmt-clean; no fmt gate. | Director decision |

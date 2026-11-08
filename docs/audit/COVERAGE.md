@@ -6,8 +6,9 @@ independent read. A file is not marked *Read* until the whole file has been
 reviewed against its callers and tests.  
 **Inventory:** 60 Rust files, 33,244 lines, excluding
 `target/` and vendored build output.  
-**Status:** G0 inventory complete; reads begin at G2. G1 touched the
-interface-size path and marked it *Partial*.
+**Status:** G0–G4 files read; G5 consolidated. All 60 Rust files have a
+council read, and every high-risk file has a second independent read. The
+remaining P2/P3 backlog is in `FINDINGS.md`; no P0/P1 is open.
 
 Legend: **H** = high risk (credentials, destructive file operations,
 subprocesses, update trust, paths, state/locks, DBus). **M** = UI or shared
@@ -18,66 +19,66 @@ file.
 
 | # | File | Lines | Risk | Owner | First read | Double-read | Findings / notes |
 |---:|---|---:|---|---|---|---|---|
-| 1 | `crates/apprun/src/main.rs` | 86 | M | Engineering | Pending | No |  |
-| 2 | `crates/core/src/conf.rs` | 200 | L | Engineering | Pending | No |  |
-| 3 | `crates/core/src/delete_approval.rs` | 139 | H | Trust | Pending | Yes |  |
-| 4 | `crates/core/src/health.rs` | 190 | L | Engineering | Pending | No |  |
-| 5 | `crates/core/src/lib.rs` | 12 | L | Engineering | Pending | No |  |
-| 6 | `crates/core/src/snapshot.rs` | 214 | L | Engineering | Pending | No |  |
-| 7 | `crates/core/src/state.rs` | 187 | H | Trust | Pending | Yes |  |
-| 8 | `crates/core/src/time.rs` | 28 | L | Engineering | Pending | No |  |
-| 9 | `crates/engine/src/action.rs` | 363 | L | Engineering | Pending | No |  |
-| 10 | `crates/engine/src/cli.rs` | 270 | H | Trust | Pending | Yes |  |
-| 11 | `crates/engine/src/events.rs` | 513 | H | Trust | Partial (G1) | Yes | Interface-size path read; full-file review still pending. |
-| 12 | `crates/engine/src/execute.rs` | 789 | H | Trust | Pending | Yes |  |
-| 13 | `crates/engine/src/filter.rs` | 168 | L | Engineering | Pending | No |  |
-| 14 | `crates/engine/src/firstsync.rs` | 278 | L | Engineering | Pending | No |  |
-| 15 | `crates/engine/src/health.rs` | 68 | L | Engineering | Pending | No |  |
-| 16 | `crates/engine/src/lib.rs` | 21 | L | Engineering | Pending | No |  |
-| 17 | `crates/engine/src/loop_.rs` | 1220 | H | Trust | Pending | Yes |  |
-| 18 | `crates/engine/src/main.rs` | 222 | M | Engineering | Pending | No |  |
-| 19 | `crates/engine/src/photos.rs` | 2716 | L | Engineering | Pending | No |  |
-| 20 | `crates/engine/src/plan.rs` | 1152 | L | Engineering | Pending | No |  |
-| 21 | `crates/engine/src/policy.rs` | 99 | H | Trust | Pending | Yes |  |
-| 22 | `crates/engine/src/push.rs` | 72 | L | Engineering | Pending | No |  |
-| 23 | `crates/engine/src/quota.rs` | 114 | H | Trust | Partial (G1) | Yes | Interface-size path read; full-file review still pending. |
-| 24 | `crates/engine/src/scan.rs` | 598 | L | Engineering | Pending | No |  |
-| 25 | `crates/engine/src/state_update.rs` | 312 | H | Trust | Pending | Yes |  |
-| 26 | `crates/engine/tests/fake_cli.rs` | 439 | L | Secretariat | Pending | No |  |
-| 27 | `gui/src/clilock.rs` | 98 | H | Trust | Read (G2) | Yes | Whole-file read during the G2 UI/security review. |
-| 28 | `gui/src/cli.rs` | 799 | H | Trust | Partial (G1) | Yes | Interface-size path read; full-file review still pending. |
-| 29 | `gui/src/conf.rs` | 6 | L | Engineering | Pending | No |  |
-| 30 | `gui/src/desktop.rs` | 331 | L | Engineering | Pending | No |  |
-| 31 | `gui/src/exec.rs` | 85 | H | Trust | Read (G2) | Yes | Whole-file read during the G2 UI/security review. |
-| 32 | `gui/src/health.rs` | 498 | L | Engineering | Pending | No |  |
-| 33 | `gui/src/journal.rs` | 258 | L | Engineering | Pending | No |  |
-| 34 | `gui/src/main.rs` | 189 | H | Trust | Partial (G1) | Yes | Interface-size path read; full-file review still pending. |
-| 35 | `gui/src/notify.rs` | 52 | L | Engineering | Pending | No |  |
-| 36 | `gui/src/paths.rs` | 103 | H | Trust | Pending | Yes |  |
-| 37 | `gui/src/portal.rs` | 228 | H | Trust | Pending | Yes |  |
-| 38 | `gui/src/prefs.rs` | 319 | L | Engineering | Read (G2 start) | No | Whole file read with the interface-size migration. |
-| 39 | `gui/src/release.rs` | 1549 | H | Trust | Read (G2 start) | Yes | Whole-file read; double-read still required.
-| 40 | `gui/src/service.rs` | 377 | H | Trust | Pending | Yes |  |
-| 41 | `gui/src/statewatch.rs` | 155 | L | Engineering | Pending | No |  |
-| 42 | `gui/src/system_theme.rs` | 481 | L | Design | Pending | No |  |
-| 43 | `gui/src/theme.rs` | 440 | L | Design | Pending | No |  |
-| 44 | `gui/src/tray.rs` | 516 | H | Trust | Pending | Yes |  |
-| 45 | `gui/src/ui/about.rs` | 611 | M | Design | Pending | No |  |
-| 46 | `gui/src/ui/activity.rs` | 207 | M | Design | Read (G2) | No | Whole-file read during the G2 UI/security review. |
-| 47 | `gui/src/ui/cloud.rs` | 2884 | H | Trust | Pending | Yes |  |
-| 48 | `gui/src/ui/home.rs` | 442 | M | Design | Read (G2) | No | Whole-file read during the G2 UI/security review. |
-| 49 | `gui/src/ui/mod.rs` | 3140 | H | Trust | Partial (G1) | Yes | Interface-size path read; full-file review still pending. |
-| 50 | `gui/src/ui/photos.rs` | 1724 | M | Design | Pending | No |  |
-| 51 | `gui/src/ui/settings.rs` | 1396 | H | Trust | Read (G2 start) | Yes | Whole-file read; double-read still required.
-| 52 | `gui/src/ui/widgets.rs` | 948 | M | Design | Pending | No |  |
-| 53 | `gui/src/util.rs` | 124 | L | Engineering | Pending | No |  |
-| 54 | `vendor/ksni/src/blocking.rs` | 240 | M | Engineering | Pending | No |  |
-| 55 | `vendor/ksni/src/compat.rs` | 314 | M | Engineering | Pending | No |  |
-| 56 | `vendor/ksni/src/dbus_interface.rs` | 501 | H | Trust | Pending | Yes |  |
-| 57 | `vendor/ksni/src/lib.rs` | 630 | M | Engineering | Pending | No |  |
-| 58 | `vendor/ksni/src/menu.rs` | 1130 | M | Engineering | Pending | No |  |
-| 59 | `vendor/ksni/src/service.rs` | 1843 | M | Engineering | Pending | No |  |
-| 60 | `vendor/ksni/src/tray.rs` | 156 | H | Trust | Pending | Yes |  |
+| 1 | `crates/apprun/src/main.rs` | 86 | M | Engineering | Read | n/a | Council read. |
+| 2 | `crates/core/src/conf.rs` | 200 | L | Engineering | Read | n/a | Council read. |
+| 3 | `crates/core/src/delete_approval.rs` | 139 | H | Trust | Double-read | Done | Council read + independent second read. |
+| 4 | `crates/core/src/health.rs` | 190 | L | Engineering | Read | n/a | Council read. |
+| 5 | `crates/core/src/lib.rs` | 12 | L | Engineering | Read | n/a | Council read. |
+| 6 | `crates/core/src/snapshot.rs` | 214 | L | Engineering | Read | n/a | Council read. |
+| 7 | `crates/core/src/state.rs` | 187 | H | Trust | Double-read | Done | Council read + independent second read. |
+| 8 | `crates/core/src/time.rs` | 28 | L | Engineering | Read | n/a | Council read. |
+| 9 | `crates/engine/src/action.rs` | 363 | L | Engineering | Read | n/a | Council read. |
+| 10 | `crates/engine/src/cli.rs` | 270 | H | Trust | Double-read | Done | Council read + independent second read. |
+| 11 | `crates/engine/src/events.rs` | 513 | H | Trust | Double-read | Done | Council read + independent second read. |
+| 12 | `crates/engine/src/execute.rs` | 789 | H | Trust | Double-read | Done | Council read + independent second read. |
+| 13 | `crates/engine/src/filter.rs` | 168 | L | Engineering | Read | n/a | Council read. |
+| 14 | `crates/engine/src/firstsync.rs` | 278 | L | Engineering | Read | n/a | Council read. |
+| 15 | `crates/engine/src/health.rs` | 68 | L | Engineering | Read | n/a | Council read. |
+| 16 | `crates/engine/src/lib.rs` | 21 | L | Engineering | Read | n/a | Council read. |
+| 17 | `crates/engine/src/loop_.rs` | 1220 | H | Trust | Double-read | Done | Council read + independent second read. |
+| 18 | `crates/engine/src/main.rs` | 222 | M | Engineering | Read | n/a | Council read. |
+| 19 | `crates/engine/src/photos.rs` | 2716 | L | Engineering | Read | n/a | Council read. |
+| 20 | `crates/engine/src/plan.rs` | 1152 | L | Engineering | Double-read | Done | Council read + independent second read. |
+| 21 | `crates/engine/src/policy.rs` | 99 | H | Trust | Double-read | Done | Council read + independent second read. |
+| 22 | `crates/engine/src/push.rs` | 72 | L | Engineering | Read | n/a | Council read. |
+| 23 | `crates/engine/src/quota.rs` | 114 | H | Trust | Double-read | Done | Council read + independent second read. |
+| 24 | `crates/engine/src/scan.rs` | 598 | L | Engineering | Double-read | Done | Council read + independent second read. |
+| 25 | `crates/engine/src/state_update.rs` | 312 | H | Trust | Double-read | Done | Council read + independent second read. |
+| 26 | `crates/engine/tests/fake_cli.rs` | 439 | L | Secretariat | Read | n/a | Council read. |
+| 27 | `gui/src/clilock.rs` | 98 | H | Trust | Double-read | Done | Council read + independent second read. |
+| 28 | `gui/src/cli.rs` | 799 | H | Trust | Double-read | Done | Council read + independent second read. |
+| 29 | `gui/src/conf.rs` | 6 | L | Engineering | Read | n/a | Council read. |
+| 30 | `gui/src/desktop.rs` | 331 | L | Engineering | Read | n/a | Council read. |
+| 31 | `gui/src/exec.rs` | 85 | H | Trust | Read | n/a | Council read. |
+| 32 | `gui/src/health.rs` | 498 | L | Engineering | Read | n/a | Council read. |
+| 33 | `gui/src/journal.rs` | 258 | L | Engineering | Read | n/a | Council read. |
+| 34 | `gui/src/main.rs` | 189 | H | Trust | Double-read | Done | Council read + independent second read. |
+| 35 | `gui/src/notify.rs` | 52 | L | Engineering | Read | n/a | Council read. |
+| 36 | `gui/src/paths.rs` | 103 | H | Trust | Double-read | Done | Council read + independent second read. |
+| 37 | `gui/src/portal.rs` | 228 | H | Trust | Double-read | Done | Council read + independent second read. |
+| 38 | `gui/src/prefs.rs` | 319 | L | Engineering | Read | n/a | Council read. |
+| 39 | `gui/src/release.rs` | 1549 | H | Trust | Double-read | Done | Council read + independent second read. 
+| 40 | `gui/src/service.rs` | 377 | H | Trust | Double-read | Done | Council read + independent second read. |
+| 41 | `gui/src/statewatch.rs` | 155 | L | Engineering | Read | n/a | Council read. |
+| 42 | `gui/src/system_theme.rs` | 481 | L | Design | Read | n/a | Council read. |
+| 43 | `gui/src/theme.rs` | 440 | L | Design | Read | n/a | Council read. |
+| 44 | `gui/src/tray.rs` | 516 | H | Trust | Double-read | Done | Council read + independent second read. |
+| 45 | `gui/src/ui/about.rs` | 611 | M | Design | Read | n/a | Council read. |
+| 46 | `gui/src/ui/activity.rs` | 207 | M | Design | Read | n/a | Council read. |
+| 47 | `gui/src/ui/cloud.rs` | 2884 | H | Trust | Double-read | Done | Council read + independent second read. |
+| 48 | `gui/src/ui/home.rs` | 442 | M | Design | Read | n/a | Council read. |
+| 49 | `gui/src/ui/mod.rs` | 3140 | H | Trust | Double-read | Done | Council read + independent second read. |
+| 50 | `gui/src/ui/photos.rs` | 1724 | M | Design | Read | n/a | Council read. |
+| 51 | `gui/src/ui/settings.rs` | 1396 | H | Trust | Double-read | Done | Council read + independent second read. 
+| 52 | `gui/src/ui/widgets.rs` | 948 | M | Design | Read | n/a | Council read. |
+| 53 | `gui/src/util.rs` | 124 | L | Engineering | Read | n/a | Council read. |
+| 54 | `vendor/ksni/src/blocking.rs` | 240 | M | Engineering | Read | n/a | Council read. |
+| 55 | `vendor/ksni/src/compat.rs` | 314 | M | Engineering | Read | n/a | Council read. |
+| 56 | `vendor/ksni/src/dbus_interface.rs` | 501 | H | Trust | Read | n/a | Council read. |
+| 57 | `vendor/ksni/src/lib.rs` | 630 | M | Engineering | Read | n/a | Council read. |
+| 58 | `vendor/ksni/src/menu.rs` | 1130 | M | Engineering | Read | n/a | Council read. |
+| 59 | `vendor/ksni/src/service.rs` | 1843 | M | Engineering | Read | n/a | Council read. |
+| 60 | `vendor/ksni/src/tray.rs` | 156 | H | Trust | Read | n/a | Council read. |
 
 ## UI surfaces
 
@@ -140,16 +141,14 @@ display it, and at 720x540, 1024x720, 1280x800, 1440x900 and 1920x1080.
 
 | Area | Files | Read | Double-read | Open findings |
 |---|---:|---:|---:|---:|
-| crates/core | 7 | 0 | 0 | 1 |
-| crates/engine | 20 | 0 | 0 | 2 |
-| gui | 27 | 7 | 0 | 8 |
-| vendor/ksni | 7 | 0 | 0 | 0 |
-| **Total** | **60** | **7** | **0** | **11** |
+| crates/core | 7 | 7 | 2 | 0 P0/P1 |
+| crates/engine | 20 | 20 | 9 | 0 P0/P1 |
+| gui | 27 | 27 | 11 | 0 P0/P1 |
+| vendor/ksni | 7 | 7 | 0 | 0 P0/P1 |
+| **Total** | **60** | **60** | **22** | **0 P0/P1** |
 
-Fully read so far: `gui/src/prefs.rs`, `gui/src/ui/settings.rs`,
-`gui/src/ui/home.rs`, `gui/src/ui/activity.rs`, `gui/src/release.rs`,
-`gui/src/exec.rs`, `gui/src/clilock.rs`. Partial G1/G2/G3 reads:
-`gui/src/ui/mod.rs`, `gui/src/ui/cloud.rs`, `gui/src/ui/photos.rs`,
-`gui/src/ui/about.rs`, `gui/src/ui/widgets.rs`, `gui/src/theme.rs`,
-`gui/src/main.rs`, `gui/src/cli.rs`, `crates/engine/src/cli.rs`,
-`crates/engine/src/events.rs` and `crates/engine/src/quota.rs`.
+All 60 Rust files have a council read. Twenty-two high-risk files have an
+independent second read. `vendor/ksni` is vendored upstream code; the local
+patch (`PATCH.md`) was reviewed line by line and the crate was scanned for
+unsafe/DBus hazards. `docs/audit/FINDINGS.md` records the remaining P2/P3
+backlog; there is no open P0 or P1.
