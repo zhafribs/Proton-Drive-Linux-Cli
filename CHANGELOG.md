@@ -1,3 +1,14 @@
+## 3.20.50 — 2026-11-08
+
+- **Non-UTF-8 command operands reach the CLI.** AppRun dispatches on raw
+  `OsStr` values, so a filename that is not valid Unicode is forwarded to the
+  official CLI instead of being mistaken for “no argument” and aborting the
+  GUI. Exec failures now use 126 (found but not executable) instead of 127.
+- **A tray name collision cannot kill the app.** If a same-session peer owns
+  the predictable StatusNotifierItem bus name first, the vendored ksni now
+  returns `NameTaken` as a tray-unavailable error instead of asserting; the
+  GUI keeps running without a tray.
+
 ## 3.20.49 — 2026-11-08
 
 - **A download can no longer overwrite an edit made after the scan.** The

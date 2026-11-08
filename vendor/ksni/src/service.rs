@@ -60,10 +60,9 @@ pub(crate) async fn run<T: Tray>(
             std::process::id(),
             INSTANCE_COUNTER.fetch_add(1, Ordering::AcqRel)
         );
-        conn.request_name(&*name).await.map_err(|e| {
-            assert_ne!(e, zbus::Error::NameTaken, "generated name should be unique");
-            Error::Dbus(e)
-        })?;
+        // A same-session peer can own the predictable SNI name first. That
+        // must make the tray unavailable, not abort the whole application.
+        conn.request_name(&*name).await.map_err(Error::Dbus)?;
         name
     } else {
         conn.unique_name()

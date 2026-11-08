@@ -11,6 +11,37 @@
 //!   `usr/bin/proton-engine`.
 
 #[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Route {
+    Engine,
+    Gui,
+    Cli,
+}
+
+/// Dispatch on the raw OS string. A non-UTF-8 first argument is a CLI
+/// operand, not "no argument": converting with `to_str()` used to send it to
+/// the GUI, whose `std::env::args()` then aborts on the same bytes.
+#[cfg(unix)]
+fn route(first: Option<&std::ffi::OsStr>) -> Route {
+    use std::ffi::OsStr;
+    match first {
+        Some(s) if s == OsStr::new("__sync-engine") => Route::Engine,
+        Some(s) if s == OsStr::new("__gui") || s == OsStr::new("--smoke") => Route::Gui,
+        None => Route::Gui,
+        Some(s) if s.is_empty() => Route::Gui,
+        Some(_) => Route::Cli,
+    }
+}
+
+#[cfg(unix)]
+fn exit_code(err: &std::io::Error) -> i32 {
+    match err.kind() {
+        std::io::ErrorKind::NotFound => 127,
+        _ => 126, // found but not executable / bad format / busy
+    }
+}
+
+#[cfg(unix)]
 fn main() {
     use std::env;
     use std::os::unix::process::CommandExt;
@@ -38,10 +69,10 @@ fn main() {
 
     let mut args = env::args_os().skip(1);
     let first = args.next();
-    let dispatch = first.as_deref().and_then(|s| s.to_str()).unwrap_or("");
+    let route = route(first.as_deref());
 
-    match dispatch {
-        "__sync-engine" => {
+    match route {
+        Route::Engine => {
             if !engine.is_file() {
                 eprintln!("proton-engine: missing from AppImage ({})", engine.display());
                 exit(127);
@@ -52,9 +83,9 @@ fn main() {
                 .env("PROTON_DRIVE_BIN", &cli)
                 .exec();
             eprintln!("proton-engine: {err}");
-            exit(127);
+            exit(exit_code(&err));
         }
-        "__gui" | "--smoke" | "" => {
+        Route::Gui => {
             if !gui.is_file() {
                 eprintln!("GUI missing from AppImage ({})", gui.display());
                 exit(127);
@@ -65,16 +96,16 @@ fn main() {
             }
             let err = cmd.args(args).exec();
             eprintln!("proton-drive-gui: {err}");
-            exit(127);
+            exit(exit_code(&err));
         }
-        _ => {
+        Route::Cli => {
             let mut cmd = Command::new(&cli);
             if let Some(a) = first.as_ref() {
                 cmd.arg(a);
             }
             let err = cmd.args(args).exec();
             eprintln!("proton-drive: {err}");
-            exit(127);
+            exit(exit_code(&err));
         }
     }
 }
@@ -83,4 +114,22 @@ fn main() {
 fn main() {
     eprintln!("proton-drive-apprun is Linux-only");
     std::process::exit(1);
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    #[test]
+    fn non_utf8_operands_go_to_the_cli() {
+        let raw = OsStr::from_bytes(b"name-\xff");
+        assert_eq!(route(Some(raw)), Route::Cli);
+        assert_eq!(route(Some(OsStr::new("__sync-engine"))), Route::Engine);
+        assert_eq!(route(Some(OsStr::new("__gui"))), Route::Gui);
+        assert_eq!(route(Some(OsStr::new("--smoke"))), Route::Gui);
+        assert_eq!(route(Some(OsStr::new(""))), Route::Gui);
+        assert_eq!(route(None), Route::Gui);
+    }
 }
