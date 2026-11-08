@@ -1,3 +1,16 @@
+## 3.20.48 — 2026-11-08
+
+- **Security dependencies updated.** `rustls-webpki` and `webpki-roots` are
+  current, clearing the certificate-verification advisories found by
+  `cargo audit`; the remaining report has no vulnerabilities.
+- **Sync settings are private.** `proton-sync.conf` and the GUI preferences
+  are written with mode `0600` on Unix, so an optional proxy credential in the
+  environment block is not readable by other local users.
+- **The release pipeline pins its actions.** Checkout, cache and artifact
+  upload use commit SHAs instead of movable version tags.
+- **Threat model and licence review are recorded** under `docs/audit/` for
+  this milestone.
+
 ## 3.20.47 — 2026-11-08
 
 - **A hung CLI command can no longer freeze sync.** Engine calls now have a

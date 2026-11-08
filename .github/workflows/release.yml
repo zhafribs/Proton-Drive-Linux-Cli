@@ -60,7 +60,7 @@ jobs:
       - name: Use main as the default branch name
         run: git config --global init.defaultBranch main
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
@@ -75,7 +75,7 @@ jobs:
         run: rustup toolchain install 1.99.1 --profile minimal --component clippy
 
       - name: Cache the verification build
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/bin
@@ -117,7 +117,7 @@ jobs:
       - name: Use main as the default branch name
         run: git config --global init.defaultBranch main
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
@@ -131,7 +131,7 @@ jobs:
             librsvg2-bin desktop-file-utils appstream binutils openssl
 
       - name: Cache the Rust build (registry + cargo tools + target)
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/bin
@@ -143,7 +143,7 @@ jobs:
             rust-v2-${{ runner.os }}-
 
       - name: Cache zig
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/zig
           key: zig-${{ runner.os }}-0.15.2-02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239
@@ -182,7 +182,7 @@ jobs:
           fi
 
       - name: Cache Proton binaries and build tools
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             tools
@@ -263,7 +263,7 @@ jobs:
           fi
 
       - name: Keep the built artifacts for inspection
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: appimages-${{ steps.upstream.outputs.version }}
           path: |

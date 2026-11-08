@@ -209,6 +209,14 @@ impl Prefs {
         }
         let _ = std::fs::create_dir_all(self.file.parent().unwrap_or(Path::new(".")));
         let _ = std::fs::write(&self.file, out);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(
+                &self.file,
+                std::fs::Permissions::from_mode(0o600),
+            );
+        }
     }
 }
 

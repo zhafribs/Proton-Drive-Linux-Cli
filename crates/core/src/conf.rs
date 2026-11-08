@@ -116,6 +116,13 @@ pub fn write(path: &Path, values: &BTreeMap<String, String>, extras: &[String]) 
     }
     let _ = std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")));
     let _ = std::fs::write(path, out);
+    // The optional environment block can carry proxy credentials, so keep
+    // the sync settings readable only by the account that owns them.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
 }
 
 /// Which combo entry an interval maps to (nearest choice, like the PyQt app).
@@ -196,5 +203,16 @@ mod tests {
         assert_eq!(interval_index(70), 2); // nearer 60 than 30
         assert_eq!(interval_index(600), 3); // 300 and 900 tie: first wins
         assert_eq!(interval_index(100_000), 6); // clamps to the last choice
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_file_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let p = std::env::temp_dir().join(format!("pdconf-mode-{}.conf", std::process::id()));
+        write(&p, &std::collections::BTreeMap::new(), &[]);
+        let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        let _ = std::fs::remove_file(&p);
     }
 }

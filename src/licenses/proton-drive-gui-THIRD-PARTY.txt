@@ -1775,7 +1775,7 @@ DEALINGS IN THE SOFTWARE.
 Boost Software License 1.0 (BSL-1.0)
 
 Applies to:
-  - clipboard-win 5.4.1
+  - clipboard-win 5.4.3
 
 Boost Software License - Version 1.0 - August 17th, 2003
 
@@ -1790,7 +1790,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 Community Data License Agreement Permissive 2.0 (CDLA-Permissive-2.0)
 
 Applies to:
-  - webpki-roots 1.0.9
+  - webpki-roots 1.0.10
 
 # Community Data License Agreement - Permissive - Version 2.0
 
@@ -2642,7 +2642,7 @@ THIS SOFTWARE.
 ISC License (ISC)
 
 Applies to:
-  - rustls-webpki 0.103.15
+  - rustls-webpki 0.103.16
 
 Except as otherwise noted, this project is licensed under the following
 (ISC-style) terms:
@@ -6619,7 +6619,7 @@ Applies to:
   - adler2 2.0.1
   - anyhow 1.0.104
   - async-channel 2.5.0
-  - async-executor 1.14.0
+  - async-executor 1.14.1
   - async-io 2.6.0
   - async-lock 3.4.2
   - async-process 2.5.0
