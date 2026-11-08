@@ -44,11 +44,11 @@ file.
 | 24 | `crates/engine/src/scan.rs` | 598 | L | Engineering | Pending | No |  |
 | 25 | `crates/engine/src/state_update.rs` | 312 | H | Trust | Pending | Yes |  |
 | 26 | `crates/engine/tests/fake_cli.rs` | 439 | L | Secretariat | Pending | No |  |
-| 27 | `gui/src/clilock.rs` | 98 | H | Trust | Pending | Yes |  |
+| 27 | `gui/src/clilock.rs` | 98 | H | Trust | Read (G2) | Yes | Whole-file read during the G2 UI/security review. |
 | 28 | `gui/src/cli.rs` | 799 | H | Trust | Partial (G1) | Yes | Interface-size path read; full-file review still pending. |
 | 29 | `gui/src/conf.rs` | 6 | L | Engineering | Pending | No |  |
 | 30 | `gui/src/desktop.rs` | 331 | L | Engineering | Pending | No |  |
-| 31 | `gui/src/exec.rs` | 85 | H | Trust | Pending | Yes |  |
+| 31 | `gui/src/exec.rs` | 85 | H | Trust | Read (G2) | Yes | Whole-file read during the G2 UI/security review. |
 | 32 | `gui/src/health.rs` | 498 | L | Engineering | Pending | No |  |
 | 33 | `gui/src/journal.rs` | 258 | L | Engineering | Pending | No |  |
 | 34 | `gui/src/main.rs` | 189 | H | Trust | Partial (G1) | Yes | Interface-size path read; full-file review still pending. |
@@ -63,9 +63,9 @@ file.
 | 43 | `gui/src/theme.rs` | 440 | L | Design | Pending | No |  |
 | 44 | `gui/src/tray.rs` | 516 | H | Trust | Pending | Yes |  |
 | 45 | `gui/src/ui/about.rs` | 611 | M | Design | Pending | No |  |
-| 46 | `gui/src/ui/activity.rs` | 207 | M | Design | Pending | No |  |
+| 46 | `gui/src/ui/activity.rs` | 207 | M | Design | Read (G2) | No | Whole-file read during the G2 UI/security review. |
 | 47 | `gui/src/ui/cloud.rs` | 2884 | H | Trust | Pending | Yes |  |
-| 48 | `gui/src/ui/home.rs` | 442 | M | Design | Pending | No |  |
+| 48 | `gui/src/ui/home.rs` | 442 | M | Design | Read (G2) | No | Whole-file read during the G2 UI/security review. |
 | 49 | `gui/src/ui/mod.rs` | 3140 | H | Trust | Partial (G1) | Yes | Interface-size path read; full-file review still pending. |
 | 50 | `gui/src/ui/photos.rs` | 1724 | M | Design | Pending | No |  |
 | 51 | `gui/src/ui/settings.rs` | 1396 | H | Trust | Read (G2 start) | Yes | Whole-file read; double-read still required.
@@ -141,11 +141,15 @@ display it, and at 720x540, 1024x720, 1280x800, 1440x900 and 1920x1080.
 | Area | Files | Read | Double-read | Open findings |
 |---|---:|---:|---:|---:|
 | crates/core | 7 | 0 | 0 | 1 |
-| crates/engine | 20 | 0 | 0 | 0 |
-| gui | 27 | 3 | 0 | 8 |
+| crates/engine | 20 | 0 | 0 | 2 |
+| gui | 27 | 7 | 0 | 8 |
 | vendor/ksni | 7 | 0 | 0 | 0 |
-| **Total** | **60** | **3** | **0** | **9** |
+| **Total** | **60** | **7** | **0** | **11** |
 
-The G1 partial reads cover `gui/src/prefs.rs`, `gui/src/ui/settings.rs`,
-`gui/src/ui/mod.rs`, `gui/src/main.rs`, `gui/src/cli.rs`,
+Fully read so far: `gui/src/prefs.rs`, `gui/src/ui/settings.rs`,
+`gui/src/ui/home.rs`, `gui/src/ui/activity.rs`, `gui/src/release.rs`,
+`gui/src/exec.rs`, `gui/src/clilock.rs`. Partial G1/G2/G3 reads:
+`gui/src/ui/mod.rs`, `gui/src/ui/cloud.rs`, `gui/src/ui/photos.rs`,
+`gui/src/ui/about.rs`, `gui/src/ui/widgets.rs`, `gui/src/theme.rs`,
+`gui/src/main.rs`, `gui/src/cli.rs`, `crates/engine/src/cli.rs`,
 `crates/engine/src/events.rs` and `crates/engine/src/quota.rs`.

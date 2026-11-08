@@ -40,7 +40,50 @@ file, the evidence, an owner, a fix and a verification step.
 |---|---:|---:|---|
 | G0 Baseline | 0 | 0 | Evidence collection in progress |
 | G1 Interface size | 0 | 0 | Shipped `v0.9.0-gui3.20.44`; patch `v0.9.0-gui3.20.45` fixes F-013; both verified |
-| G2 UI/frontend | - | - | Not started |
+| G2 UI/frontend | 0 | 0 | Shipped `v0.9.0-gui3.20.46`; UI P1s closed; G3/G4 carry-over tracked below |
 | G3 Backend/contract | - | - | Not started |
 | G4 Security/legal/release | - | - | Not started |
 | G5 Consolidation | - | - | Not started |
+
+## G2 release — 3.20.46 (fixed)
+
+| ID | Sev | Area | Finding | Fix | Verified |
+|---|---|---|---|---|---|
+| F-014 | P1 | Files selection | Right-clicking a row built the menu from the previous `app.cloud.sel`; the empty-space menu appeared with no selection, and actions could target the wrong file. | A secondary click over the row selects it before the cell/row context menu is built. | Right-click Projects selected it (accent row) and showed Open/Rename/Duplicate/Details/Move to trash. |
+| F-015 | P1 | Files selection | Shift-range used positions in the raw entry list but sliced the sorted list, ignoring the search filter. | The range now uses the same sorted+filtered vector the table draws. | Shift-click Photos→notes.md selected Photos, Projects, root, notes.md (4), not Documents. |
+| F-016 | P1 | Photos layout | With a selection at 720x400 the hero and metric cards left almost no height for the grid. | The hero and metrics collapse while a selection is active. | Selection card and grid remain usable at 720x400. |
+| F-017 | P1 | Photos layout | `grid_metrics` bounced 1→2→1 columns for widths 221–227 and could hang the UI. | One column returns at `MAX_TILE` instead of growing; regression test covers the edge. | `grid_metrics` test passes for 220/221/224/227/228/260. |
+| F-018 | P1 | Keyboard focus | Tab into an off-screen About/Settings/Home/Photos control left the focus ring and control invisible. | `scroll_focused_into_view` scrolls a newly focused control into the page scroll area. | Tab to About "Check now" at 720x400 scrolled the Updates card into view. |
+| F-019 | P2 | Contrast | Checkbox/input/button borders used the decorative card hairline (1.28:1 light, 1.30:1 dark). | Dedicated control borders at ≥3:1 for both themes; contrast test added. | `palette_meets_wcag_contrast` passes. |
+| F-020 | P2 | Sidebar | Nav rows did not scroll into view on focus and accepted only Enter. | `scroll_to_me` on focus; Space activates like Enter; `my_files_row` follows. | 720x400 Tab to Settings leaves the focused row fully visible. |
+| F-021 | P2 | Accessibility | Page titles and section labels were plain labels. | `page_title` and `section_label` expose `Role::Heading`. | Headings present on Home, Files, Photos, Activity, Settings, About. |
+| F-022 | P2 | Accessibility | Account row only announced “Account menu”. | The accessible name and hover include the signed-in email. | Code review; `cargo clippy` clean. |
+| F-023 | P2 | UX overlap | `PROTON_SYNC_WORKERS` had two controls with different labels. | Fine-tuning now only has Retries; Performance owns Scan workers. | Advanced tab at 720x400 shows one workers control. |
+| F-024 | P3 | Consistency | Small preset 93% did not align with the 5% slider step. | Small is 95%. | Appearance shows 95% on selection. |
+| F-025 | P2 | Accessibility | Selective-sync folder name was not clickable. | The name label toggles the checkbox and shows a pointing cursor. | Code review; no layout change. |
+| F-026 | P2 | Files selection | Select all included files hidden by the search filter. | Selects the filtered set the table shows. | Code review. |
+| F-027 | P2 | Service state | Saving settings restarted a paused engine, silently resuming deletes. | Save skips restart while the paused marker is present. | Code review; hint says "Saved. Syncing stays paused." |
+| F-028 | P3 | Layout | About header allocated 270 pt for buttons needing ~282 pt. | Box is 300 pt. | Header fits at 720x400. |
+| F-029 | P3 | Layout | Metric values could wrap; duplicate GitHub links. | Values truncate with a full-value hover; the Credits duplicate link is removed. | Code review. |
+
+## Cross-gate carry-over (G3/G4)
+
+| ID | Sev | Area | Finding | Target |
+|---|---|---|---|---|
+| F-044 | P1 | CLI session | The GUI CLI lock times out after 60 s and runs unprotected; `auth login` holds the same lock for up to 300 s, so a slow sign-in can race a `fs list` and lose the keyring session. | G3/G4 |
+| F-045 | P1 | State paths | The service unit did not pin `XDG_STATE_HOME`/`XDG_CONFIG_HOME`; a GUI launched with custom XDG dirs could split health/wake/lock files from the engine. | G3 (fixed in working tree: unit pins both, relative XDG values rejected) |
+| F-046 | P2 | Identity | `fetch_identity` maps every non-zero CLI result to signed-out, including busy locks and network failures. | G3 |
+| F-047 | P2 | Logout | `logout` discards the CLI result; the UI clears identity even if sign-out failed. | G3 |
+| F-048 | P2 | Pause | `pause_for` skips `stop()` when `systemd-run` is unavailable or fails. | G3 |
+| F-049 | P2 | Service control | Pause/resume/save spawn independent workers with no serialization. | G3 |
+| F-050 | P2 | Service unit | `unit_appimage` accepts non-executable files; unit writes are not atomic. | G3 |
+| F-051 | P2 | Desktop | Autostart/menu helpers discard write/remove errors. | G3 |
+| F-052 | P2 | Symlinks | `folder_stats` follows symlinks, unlike the engine scanner. | G3 |
+| F-053 | P2 | CLI resolution | GUI resolver ignores `PROTON_DRIVE_BIN` and does not require an executable. | G3 |
+| F-054 | P2 | Symlink write | `arm_photo_hold` and the audit-request write can follow a symlink. | G4 |
+| F-055 | P2 | Files UI | Status/error line is hidden while a selection is active. | G3 |
+| F-056 | P2 | Files UI | Context-menu-only actions lack a keyboard path; table roles are flat. | G3/G5 |
+| F-057 | P2 | Photos | Duplicate-name photos are reported as “already on this computer” even when no local copy exists. | G3 |
+| F-061 | P1 | Engine timeout | The engine `run_output` ignored its timeout parameter and could block the CLI slot forever on a hung command. | G3 (fixed in working tree: poll/kill + test) |
+| F-062 | P2 | CLI lock | `with_cli_lock` claimed re-entrancy but never set the thread depth on the first lock. | G3 (fixed in working tree) |
+| F-063 | P2 | Duplication | `state_dir()` was copied in four engine modules. | G3 (fixed in working tree: one `health::state_dir`) |
