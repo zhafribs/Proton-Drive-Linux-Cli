@@ -113,3 +113,13 @@ After M1, a user can:
   not file copies.
 - **Restore races:** re-check the destination and the recorded fingerprint
   immediately before writing.
+
+## Release verification
+
+- Tag: `v0.9.0-gui3.21.0` (27 releases retained).
+- CI `42492497365`: verify and release succeeded.
+- 297 tests passed, 4 ignored; clippy clean; release-gate fixtures 12/12.
+- AppImage checksum, Ed25519 signature, `--smoke` and GLIBC 2.28 verified.
+- Recovery drill: corrupt `state.json`, leftover download staging, snapshot
+  restore, no destructive plan; `crates/engine/tests/recovery_drill.rs`.
+- Evidence: `docs/audit/evidence/release-3.21.0.txt`.

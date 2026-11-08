@@ -1,0 +1,22 @@
+# Release evidence — v0.9.0-gui3.21.0
+
+Tag: v0.9.0-gui3.21.0
+Scope: M1 Recovery Center — local trash, Conflict Center, state snapshots,
+recovery check/drill.
+
+  ProtonDrive-CLI-0.9.0-GUI-3.21.0-x86_64.AppImage  52709880 bytes
+  SHA256SUMS  115 bytes
+  SHA256SUMS.sig  64 bytes
+
+ProtonDrive-CLI-0.9.0-GUI-3.21.0-x86_64.AppImage: OK
+Signature Verified Successfully
+smoke ok: gui 3.21.0, conf keys 15, local /tmp/release-check210/smoke-home/ProtonDrive, cli true, health status 'ok', theme system (system dark)
+squashfs-root/AppRun: GLIBC_2.28
+squashfs-root/usr/bin/proton-drive-gui: GLIBC_2.28
+squashfs-root/usr/bin/proton-engine: GLIBC_2.28
+Releases retained: 27
+
+CI: run 42492497365 — verify and release both succeeded.
+Local gate: 297 tests passed, 4 ignored; clippy clean; release-gate fixtures 12/12.
+Recovery drill: `cargo test -p proton-engine --test recovery_drill` passed —
+corrupt state, leftover download stage, snapshot restore, no destructive plan.

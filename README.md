@@ -92,6 +92,11 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
 - **Settings** — selective sync, never-sync patterns, instant upload, check
   intervals, notifications, light/dark/system theme, interface size, tray,
   start-at-login, menu install and **in-app updates** (SHA-256 verified).
+- **Recovery** — a **Recovery** page lists local trash with restore/permanent
+  delete, groups engine-created conflict copies with keep-current /
+  use-conflict-copy / keep-both actions, and keeps checksum-verified
+  `state.json` snapshots. A read-only recovery check is shown in
+  About → Diagnostics.
 - **Tray + notifications** — a status dot tells you the state at a glance:
   green when synced, cyan while syncing or signing in, blue while the engine
   starts, magenta on the welcome screen, amber when paused or your session
