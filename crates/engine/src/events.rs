@@ -363,7 +363,8 @@ pub(crate) fn read_cli_session() -> Option<Session> {
     let (paths, _): (Vec<OwnedObjectPath>, Vec<OwnedObjectPath>) = service
         .call("SearchItems", &HashMap::<String, String>::new())
         .ok()?;
-    let mut item = None;
+    let mut exact = None;
+    let mut fallbacks = Vec::new();
     for path in paths {
         let label: String = Proxy::new(
             &conn,
@@ -374,14 +375,18 @@ pub(crate) fn read_cli_session() -> Option<Session> {
         .ok()?
         .get_property("Label")
         .ok()?;
-        if label == SECRET_LABEL
-            || (label.contains("proton") && label.ends_with("/auth-session"))
-        {
-            item = Some(path);
+        if label == SECRET_LABEL {
+            exact = Some(path);
             break;
         }
+        if label.contains("proton") && label.ends_with("/auth-session") {
+            fallbacks.push(path);
+        }
     }
-    let item = item?;
+    // Prefer the exact CLI item. A single renamed item is tolerated, but two
+    // ambiguous Proton sessions must not make quota/event push use the wrong
+    // account.
+    let item = exact.or_else(|| (fallbacks.len() == 1).then(|| fallbacks.remove(0)))?;
     let (_, session_path): (OwnedValue, OwnedObjectPath) = service
         .call("OpenSession", &("plain", Value::from("")))
         .ok()?;

@@ -10,7 +10,7 @@ use crate::scan::{scan_local, scan_remote};
 use crate::state_update::{RefreshOptions, refresh_state};
 use anyhow::Result;
 use proton_core::{conf, delete_approval, health::Health, state};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -21,8 +21,14 @@ use crate::health::state_dir;
 fn approval_matches(
     approval: &delete_approval::DeleteApproval,
     result: &crate::plan::PlanResult,
+    local_root: &str,
+    remote_root: &str,
 ) -> bool {
-    !result.deletes_wipe_guard
+    !approval.local_root.is_empty()
+        && !approval.remote_root.is_empty()
+        && approval.local_root == local_root
+        && approval.remote_root == remote_root
+        && !result.deletes_wipe_guard
         && result.deletes_held > 0
         && approval.local == result.deletes_held_local as u64
         && approval.cloud == result.deletes_held_cloud as u64
@@ -338,11 +344,13 @@ pub fn run_once_cycle(
     let first = st.is_empty() && local.is_empty();
     let mut failed: BTreeSet<String> = BTreeSet::new();
     let mut downloaded: BTreeSet<String> = BTreeSet::new();
+    let mut downloaded_fp: BTreeMap<String, (i64, u64)> = BTreeMap::new();
     let mut snapshot_dirty = false;
     let remote = if first {
         let out = crate::firstsync::download_all(cli, remote_root, Path::new(local_root), filter)?;
         failed.extend(out.failed);
         downloaded.extend(out.downloaded);
+        downloaded_fp.extend(out.downloaded_fp);
         // the tree on disk changed: plan against what actually landed
         local = scan_local(Path::new(local_root), filter)?;
         crate::scan::RemoteScan {
@@ -392,14 +400,14 @@ pub fn run_once_cycle(
     };
     let mut result = plan_cycle(&remote, &local, &st, &config);
     if let Some(approval) = approval
-        && approval_matches(&approval, &result)
+        && approval_matches(&approval, &result, local_root, remote_root)
     {
         config.approved_mass_delete = true;
         result = plan_cycle(&remote, &local, &st, &config);
     }
 
     if !result.actions.is_empty() {
-        let (f, d) = execute(
+        let (f, d, dfp) = execute(
             &result.actions,
             &remote,
             &local,
@@ -409,6 +417,7 @@ pub fn run_once_cycle(
         )?;
         failed.extend(f);
         downloaded.extend(d);
+        downloaded_fp.extend(dfp);
     }
 
     let local2 = if result.actions.is_empty() && !first {
@@ -467,6 +476,7 @@ pub fn run_once_cycle(
         acted: &acted,
         planned_local: Some(&local),
         downloaded: Some(&downloaded),
+        downloaded_fp: Some(&downloaded_fp),
         preserve: Some(&BTreeSet::new()),
     };
     let saved = refresh_state(&remote2, &local2, &st, &options);
@@ -824,16 +834,42 @@ mod tests {
             local_digest: "aa".into(),
             cloud_digest: String::new(),
             created_at: 1,
+            local_root: "/home/u/ProtonDrive".into(),
+            remote_root: "/my-files".into(),
         };
-        assert!(approval_matches(&approval, &result));
+        assert!(approval_matches(
+            &approval,
+            &result,
+            "/home/u/ProtonDrive",
+            "/my-files"
+        ));
 
         let mut wrong_paths = approval.clone();
         wrong_paths.local_digest = "bb".into();
-        assert!(!approval_matches(&wrong_paths, &result));
+        assert!(!approval_matches(
+            &wrong_paths,
+            &result,
+            "/home/u/ProtonDrive",
+            "/my-files"
+        ));
+
+        let mut wrong_root = approval.clone();
+        wrong_root.local_root = "/tmp/other".into();
+        assert!(!approval_matches(
+            &wrong_root,
+            &result,
+            "/home/u/ProtonDrive",
+            "/my-files"
+        ));
 
         let mut wipe = result;
         wipe.deletes_wipe_guard = true;
-        assert!(!approval_matches(&approval, &wipe));
+        assert!(!approval_matches(
+            &approval,
+            &wipe,
+            "/home/u/ProtonDrive",
+            "/my-files"
+        ));
     }
 
     fn wait_until(mut done: impl FnMut() -> bool, timeout: Duration) -> bool {

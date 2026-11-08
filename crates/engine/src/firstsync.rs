@@ -26,6 +26,7 @@ const MAX_BATCH: usize = 25;
 pub struct FirstSync {
     pub tree: RemoteTree,
     pub downloaded: BTreeSet<String>,
+    pub downloaded_fp: BTreeMap<String, (i64, u64)>,
     pub failed: BTreeSet<String>,
 }
 
@@ -55,6 +56,8 @@ pub fn download_all(
         let (tx, rx) = mpsc::sync_channel::<Batch>(transfers * 4);
         let rx = Arc::new(Mutex::new(rx));
         let downloaded: Arc<Mutex<BTreeSet<String>>> = Arc::new(Mutex::new(BTreeSet::new()));
+        let downloaded_fp: Arc<Mutex<BTreeMap<String, (i64, u64)>>> =
+            Arc::new(Mutex::new(BTreeMap::new()));
         let failed: Arc<Mutex<BTreeSet<String>>> = Arc::new(Mutex::new(BTreeSet::new()));
         let done = Arc::new(AtomicU64::new(0));
 
@@ -66,6 +69,7 @@ pub fn download_all(
             for _ in 0..transfers {
                 let rx = Arc::clone(&rx);
                 let downloaded = Arc::clone(&downloaded);
+                let downloaded_fp = Arc::clone(&downloaded_fp);
                 let failed = Arc::clone(&failed);
                 let done = Arc::clone(&done);
                 s.spawn(move || loop {
@@ -75,7 +79,7 @@ pub fn download_all(
                     };
                     let Ok(batch) = batch else { return };
                     let n = batch.rels.len() as u64;
-                    let failed_rels = crate::execute::staged_download(
+                    let dl = crate::execute::staged_download(
                         cli,
                         remote_root,
                         local_root,
@@ -85,11 +89,14 @@ pub fn download_all(
                         retries,
                     );
                     for (rel, _) in &batch.rels {
-                        if failed_rels.contains(rel) {
+                        if dl.failed.contains(rel) {
                             failed.lock().unwrap().insert(rel.clone());
                         } else {
                             eprintln!("DOWNLOAD {}", rel);
                             downloaded.lock().unwrap().insert(rel.clone());
+                            if let Some(fp) = dl.placed.get(rel) {
+                                downloaded_fp.lock().unwrap().insert(rel.clone(), *fp);
+                            }
                         }
                     }
                     let done = done.fetch_add(n, Ordering::Relaxed) + n;
@@ -256,9 +263,13 @@ pub fn download_all(
         let failed = Arc::try_unwrap(failed)
             .map(|m| m.into_inner().unwrap())
             .unwrap_or_default();
+        let downloaded_fp = Arc::try_unwrap(downloaded_fp)
+            .map(|m| m.into_inner().unwrap())
+            .unwrap_or_default();
         Ok(FirstSync {
             tree,
             downloaded,
+            downloaded_fp,
             failed,
         })
     })

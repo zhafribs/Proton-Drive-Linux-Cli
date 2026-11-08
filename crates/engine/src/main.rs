@@ -127,6 +127,7 @@ fn refresh_cmd(args: &[String]) -> Result<()> {
         acted: &fixture.acted,
         planned_local: fixture.planned_local.as_ref(),
         downloaded: Some(&fixture.downloaded),
+        downloaded_fp: None,
         preserve: Some(&fixture.preserve),
     };
     let state = refresh_state(

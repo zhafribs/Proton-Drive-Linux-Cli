@@ -1,3 +1,18 @@
+## 3.20.51 — 2026-11-08
+
+- **A post-download edit is no longer stamped as synced.** The fingerprint of
+  the bytes actually placed is carried into `state_update`; a later rescan
+  cannot hide an edit that happened between the download and the state write.
+- **Pause and Resume are serialized.** One service-control lane and a desired
+  state bit make the last click win, so a quick pause→resume cannot leave the
+  engine in the opposite state.
+- **Deletion approvals are SHA-256 and root-bound.** The one-shot approval now
+  covers the exact side/path set and the local/remote roots; an approval for a
+  different root or a stale path set fails closed.
+- **The keyring lookup prefers the exact CLI item.** A single renamed
+  auth-session is tolerated, but two ambiguous Proton sessions no longer make
+  quota/event calls use the wrong account.
+
 ## 3.20.50 — 2026-11-08
 
 - **Non-UTF-8 command operands reach the CLI.** AppRun dispatches on raw

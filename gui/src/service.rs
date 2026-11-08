@@ -8,9 +8,30 @@
 use crate::exec;
 use crate::paths::JOURNAL_UNIT;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 const T: Duration = Duration::from_secs(30);
+
+/// One serialized service-control lane. The desired bit is written before
+/// taking the lane, so a pause and a quick resume cannot interleave into the
+/// opposite state: the last click wins and the worker re-checks it under the
+/// lock.
+static SERVICE_MTX: Mutex<()> = Mutex::new(());
+static DESIRED_RUN: AtomicBool = AtomicBool::new(true);
+
+fn start_locked() -> bool {
+    systemctl(&["--user", "start", JOURNAL_UNIT])
+}
+
+fn stop_locked() -> bool {
+    systemctl(&["--user", "stop", JOURNAL_UNIT])
+}
+
+fn restart_locked() -> bool {
+    systemctl(&["--user", "restart", JOURNAL_UNIT])
+}
 
 fn systemctl(args: &[&str]) -> bool {
     let exe = which_systemctl();
@@ -42,15 +63,21 @@ pub fn is_enabled() -> bool {
 }
 
 pub fn start() -> bool {
-    systemctl(&["--user", "start", JOURNAL_UNIT])
-}
-
-pub fn stop() -> bool {
-    systemctl(&["--user", "stop", JOURNAL_UNIT])
+    DESIRED_RUN.store(true, Ordering::SeqCst);
+    let _lane = SERVICE_MTX.lock().unwrap();
+    if !DESIRED_RUN.load(Ordering::SeqCst) {
+        return false;
+    }
+    start_locked()
 }
 
 pub fn restart() -> bool {
-    systemctl(&["--user", "restart", JOURNAL_UNIT])
+    DESIRED_RUN.store(true, Ordering::SeqCst);
+    let _lane = SERVICE_MTX.lock().unwrap();
+    if !DESIRED_RUN.load(Ordering::SeqCst) {
+        return false;
+    }
+    restart_locked()
 }
 
 /// Restart the unit and confirm it stayed up. `systemctl restart` reports
@@ -81,6 +108,11 @@ pub fn disable() -> bool {
 /// Stop syncing; schedule an automatic return after `secs`, or leave it off
 /// until the user resumes (`None`).
 pub fn pause_for(secs: Option<u64>) -> bool {
+    DESIRED_RUN.store(false, Ordering::SeqCst);
+    let _lane = SERVICE_MTX.lock().unwrap();
+    if DESIRED_RUN.load(Ordering::SeqCst) {
+        return false; // a resume was requested while this thread waited
+    }
     systemctl(&["--user", "stop", "proton-sync-autoresume.timer"]);
     systemctl(&["--user", "stop", "proton-sync-autoresume.service"]);
     let scheduled = match secs {
@@ -108,13 +140,18 @@ pub fn pause_for(secs: Option<u64>) -> bool {
     // caller has already recorded the pause, and leaving the engine running
     // would make the UI lie about the state.
     let _ = scheduled;
-    stop()
+    stop_locked()
 }
 
 /// Undo a pause: cancel the pending autoresume and start syncing now.
 pub fn resume() -> bool {
+    DESIRED_RUN.store(true, Ordering::SeqCst);
+    let _lane = SERVICE_MTX.lock().unwrap();
+    if !DESIRED_RUN.load(Ordering::SeqCst) {
+        return false; // a pause was requested while this thread waited
+    }
     systemctl(&["--user", "stop", "proton-sync-autoresume.timer"]);
-    start()
+    start_locked()
 }
 
 fn quote_for_unit(v: &str) -> String {

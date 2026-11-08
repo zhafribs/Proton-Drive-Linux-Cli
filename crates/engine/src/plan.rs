@@ -697,8 +697,8 @@ pub fn plan_cycle(
         deletes_held: held_local.len() + held_cloud.len(),
         deletes_held_local: held_local.len(),
         deletes_held_cloud: held_cloud.len(),
-        deletes_held_local_digest: (!held_local.is_empty()).then(|| digest_paths(&held_local)),
-        deletes_held_cloud_digest: (!held_cloud.is_empty()).then(|| digest_paths(&held_cloud)),
+        deletes_held_local_digest: (!held_local.is_empty()).then(|| digest_paths("local", &held_local)),
+        deletes_held_cloud_digest: (!held_cloud.is_empty()).then(|| digest_paths("cloud", &held_cloud)),
         deletes_held_sample: sample,
         deletes_wipe_guard: hold && wipe,
     }

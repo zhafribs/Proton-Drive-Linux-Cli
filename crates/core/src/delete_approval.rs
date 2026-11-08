@@ -6,6 +6,7 @@
 //! batch fail closed.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::io;
 use std::path::Path;
@@ -20,6 +21,12 @@ pub struct DeleteApproval {
     pub local_digest: String,
     pub cloud_digest: String,
     pub created_at: u64,
+    /// The roots this approval was reviewed for. Missing roots in an old
+    /// approval fail closed.
+    #[serde(default)]
+    pub local_root: String,
+    #[serde(default)]
+    pub remote_root: String,
 }
 
 pub fn now_secs() -> u64 {
@@ -29,21 +36,21 @@ pub fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// Stable digest for the exact set of paths the user reviewed. Length-prefix
-/// every path so names containing separators or newlines cannot collide.
-pub fn digest_paths(paths: &BTreeSet<String>) -> String {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+/// SHA-256 over the side and the exact path set the user reviewed.
+/// Length-prefix every path so names containing separators or newlines cannot
+/// collide. The root binding lives in [`DeleteApproval`].
+pub fn digest_paths(side: &str, paths: &BTreeSet<String>) -> String {
+    let mut hash = Sha256::new();
+    hash.update(side.as_bytes());
+    hash.update([0u8]);
     for path in paths {
-        for byte in (path.len() as u64)
-            .to_le_bytes()
-            .iter()
-            .chain(path.as_bytes())
-        {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
+        hash.update((path.len() as u64).to_le_bytes());
+        hash.update(path.as_bytes());
     }
-    format!("{hash:016x}")
+    hash.finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// Write atomically. The caller must have already confirmed the path set.
@@ -92,6 +99,8 @@ mod tests {
             local_digest: "aa".into(),
             cloud_digest: "bb".into(),
             created_at: 100,
+            local_root: "/home/u/ProtonDrive".into(),
+            remote_root: "/my-files".into(),
         }
     }
 
@@ -99,11 +108,12 @@ mod tests {
     fn digest_is_path_exact_and_separator_safe() {
         let a = BTreeSet::from(["a/b".into(), "c".into()]);
         let b = BTreeSet::from(["a".into(), "b/c".into()]);
-        assert_eq!(digest_paths(&a), digest_paths(&a.clone()));
-        assert_ne!(digest_paths(&a), digest_paths(&b));
+        assert_eq!(digest_paths("local", &a), digest_paths("local", &a.clone()));
+        assert_ne!(digest_paths("local", &a), digest_paths("cloud", &a));
+        assert_ne!(digest_paths("local", &a), digest_paths("local", &b));
         assert_ne!(
-            digest_paths(&BTreeSet::from(["a b".into()])),
-            digest_paths(&BTreeSet::from(["a\nb".into()]))
+            digest_paths("local", &BTreeSet::from(["a b".into()])),
+            digest_paths("local", &BTreeSet::from(["a\nb".into()]))
         );
     }
 

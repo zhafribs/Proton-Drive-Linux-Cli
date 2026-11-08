@@ -17,7 +17,7 @@ use crate::action::LocalTree;
 use proton_core::snapshot::RemoteTree;
 use proton_core::state::{State, StateEntry};
 use serde::Deserialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub struct RefreshOptions<'a> {
     pub propagate_deletes: bool,
@@ -25,6 +25,8 @@ pub struct RefreshOptions<'a> {
     pub acted: &'a BTreeSet<String>,
     pub planned_local: Option<&'a LocalTree>,
     pub downloaded: Option<&'a BTreeSet<String>>,
+    /// Fingerprints captured immediately after each successful download.
+    pub downloaded_fp: Option<&'a BTreeMap<String, (i64, u64)>>,
     pub preserve: Option<&'a BTreeSet<String>>,
 }
 
@@ -40,6 +42,7 @@ impl<'a> RefreshOptions<'a> {
             acted,
             planned_local: None,
             downloaded: None,
+            downloaded_fp: None,
             preserve: None,
         }
     }
@@ -54,6 +57,7 @@ pub fn refresh_state(
     let empty = BTreeSet::new();
     let planned_local = options.planned_local.unwrap_or(local);
     let downloaded = options.downloaded.unwrap_or(&empty);
+    let downloaded_fp = options.downloaded_fp;
     let preserve = options.preserve.unwrap_or(&empty);
 
     let mut keys: BTreeSet<&str> = BTreeSet::new();
@@ -79,14 +83,25 @@ pub fn refresh_state(
             if local_node.is_file() {
                 // fresh local after a download; otherwise keep the plan-time
                 // view so a mid-cycle edit is not stamped as synced
-                let source = if downloaded.contains(rel) {
-                    local_node
+                if downloaded.contains(rel) {
+                    if let Some((mtime_ns, size)) = downloaded_fp
+                        .and_then(|fp| fp.get(rel))
+                    {
+                        // The bytes we placed, not a later rescan: an edit
+                        // between the download and the rescan must stay visible
+                        // as local_changed on the next cycle.
+                        entry.l_mtime_ns = Some(*mtime_ns);
+                        entry.l_size = Some(*size);
+                    } else if local_node.is_file() {
+                        entry.l_mtime_ns = local_node.mtime_ns();
+                        entry.l_size = local_node.size();
+                    }
                 } else {
-                    planned_local.get(rel).unwrap_or(local_node)
-                };
-                if source.is_file() {
-                    entry.l_mtime_ns = source.mtime_ns();
-                    entry.l_size = source.size();
+                    let source = planned_local.get(rel).unwrap_or(local_node);
+                    if source.is_file() {
+                        entry.l_mtime_ns = source.mtime_ns();
+                        entry.l_size = source.size();
+                    }
                 }
             }
             entry.r_mtime = remote_node.mtime.clone();
@@ -225,6 +240,23 @@ mod tests {
         options.downloaded = Some(&downloaded);
         let saved = refresh_state(&remote, &local, &State::new(), &options);
         assert_eq!(saved["a"].l_mtime_ns, Some(2));
+    }
+
+    #[test]
+    fn downloaded_fingerprint_is_not_replaced_by_a_later_rescan_edit() {
+        let remote = BTreeMap::from([("a".into(), rfile("u", "R", 3))]);
+        // The rescan sees a user edit after placement (mtime 2).
+        let local = BTreeMap::from([("a".into(), lfile(2, 3))]);
+        let failed = BTreeSet::new();
+        let acted = BTreeSet::new();
+        let downloaded = BTreeSet::from(["a".to_string()]);
+        let fp = BTreeMap::from([("a".to_string(), (1, 3))]);
+        let mut options = RefreshOptions::new(true, &failed, &acted);
+        options.downloaded = Some(&downloaded);
+        options.downloaded_fp = Some(&fp);
+        let saved = refresh_state(&remote, &local, &State::new(), &options);
+        assert_eq!(saved["a"].l_mtime_ns, Some(1));
+        assert_eq!(saved["a"].l_size, Some(3));
     }
 
     #[test]

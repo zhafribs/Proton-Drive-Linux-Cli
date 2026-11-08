@@ -13,6 +13,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::health::state_dir;
 
+type PathSet = BTreeSet<String>;
+type Fingerprints = BTreeMap<String, (i64, u64)>;
+
 fn parent_of(rel: &str) -> String {
     if let Some(pos) = rel.rfind('/') {
         rel[..pos].to_string()
@@ -184,7 +187,19 @@ fn place_download(
     dest: &Path,
     planned: Option<&LocalEntry>,
     backup_dir: &Path,
-) -> Result<()> {
+) -> Result<(i64, u64)> {
+    let source_fp = fs::symlink_metadata(source)
+        .map(|m| (crate::scan::mtime_ns(&m), m.len()))
+        .with_context(|| format!("reading staged {}", source.display()))?;
+    let placed_fp = |dest: &Path| -> Result<(i64, u64)> {
+        let meta = fs::symlink_metadata(dest)
+            .with_context(|| format!("reading placed {}", dest.display()))?;
+        let fp = (crate::scan::mtime_ns(&meta), meta.len());
+        if fp != source_fp {
+            anyhow::bail!("local file changed during the download: {}", dest.display());
+        }
+        Ok(fp)
+    };
     match planned {
         Some(LocalEntry::File { mtime_ns, size }) => {
             let before = fs::symlink_metadata(dest)
@@ -216,7 +231,7 @@ fn place_download(
                 && (!linked || crate::scan::mtime_ns(&old) == *mtime_ns);
             if matches {
                 let _ = fs::remove_file(&backup);
-                Ok(())
+                placed_fp(dest)
             } else {
                 let _ = fs::remove_file(dest);
                 let _ = fs::rename(&backup, dest);
@@ -230,7 +245,7 @@ fn place_download(
             match fs::hard_link(source, dest) {
                 Ok(()) => {
                     let _ = fs::remove_file(source);
-                    Ok(())
+                    placed_fp(dest)
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     anyhow::bail!("destination appeared during the download: {}", dest.display())
@@ -243,11 +258,17 @@ fn place_download(
                             dest.display()
                         );
                     }
-                    fs::rename(source, dest).map_err(Into::into)
+                    fs::rename(source, dest)?;
+                    placed_fp(dest)
                 }
             }
         }
     }
+}
+
+pub(crate) struct Downloads {
+    pub failed: PathSet,
+    pub placed: Fingerprints,
 }
 
 /// Download `rels` into a private staging directory, verify each file's size,
@@ -263,10 +284,11 @@ pub(crate) fn staged_download(
     parent: &str,
     rels: &[(String, u64)],
     retries: usize,
-) -> BTreeSet<String> {
+) -> Downloads {
     let mut failed = BTreeSet::new();
+    let mut placed = BTreeMap::new();
     if rels.is_empty() {
-        return failed;
+        return Downloads { failed, placed };
     }
     for (rel, _) in rels {
         if !safe_rel(rel) {
@@ -276,7 +298,7 @@ pub(crate) fn staged_download(
     }
     if !failed.is_empty() {
         failed.extend(rels.iter().map(|(rel, _)| rel.clone()));
-        return failed;
+        return Downloads { failed, placed };
     }
 
     let stage = match new_stage(local_root, parent) {
@@ -284,7 +306,7 @@ pub(crate) fn staged_download(
         Err(e) => {
             eprintln!("FAILED staging directory: {e:#}");
             failed.extend(rels.iter().map(|(rel, _)| rel.clone()));
-            return failed;
+            return Downloads { failed, placed };
         }
     };
     let rpaths: Vec<String> = rels
@@ -328,14 +350,14 @@ pub(crate) fn staged_download(
                     failed.insert(rel.clone());
                     continue;
                 }
-                if let Err(e) = place_download(
-                    &source,
-                    &dest,
-                    planned_local.get(rel),
-                    &stage,
-                ) {
-                    eprintln!("FAILED place {}: {e:#}", rel);
-                    failed.insert(rel.clone());
+                match place_download(&source, &dest, planned_local.get(rel), &stage) {
+                    Ok(fp) => {
+                        placed.insert(rel.clone(), fp);
+                    }
+                    Err(e) => {
+                        eprintln!("FAILED place {}: {e:#}", rel);
+                        failed.insert(rel.clone());
+                    }
                 }
             }
         }
@@ -345,7 +367,7 @@ pub(crate) fn staged_download(
         }
     }
     let _ = fs::remove_dir_all(&stage);
-    failed
+    Downloads { failed, placed }
 }
 
 /// Download one file, verify it, then rename it to `dest`.
@@ -390,7 +412,7 @@ fn staged_download_one(
         }
         fs::File::open(&source)?.sync_all()?;
         ensure_local_parent(local_root, dest)?;
-        place_download(&source, dest, None, &stage)?;
+        let _ = place_download(&source, dest, None, &stage)?;
         Ok(())
     })();
     let _ = fs::remove_dir_all(&stage);
@@ -432,13 +454,14 @@ pub fn execute(
     remote_root: &str,
     local_root: &Path,
     _filter: &Filter,
-) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
+) -> Result<(PathSet, PathSet, Fingerprints)> {
     let cli = Cli::new()?;
     let trash_dir = state_dir().join("trash");
     let mut tree: RemoteTree = remote.clone();
     let mut created_dirs: BTreeSet<String> = BTreeSet::new();
     let mut failed: BTreeSet<String> = BTreeSet::new();
     let mut downloaded: BTreeSet<String> = BTreeSet::new();
+    let mut downloaded_fp: BTreeMap<String, (i64, u64)> = BTreeMap::new();
     let mut deferred_up: Vec<String> = Vec::new();
     let mut deferred_dl: Vec<(String, u64)> = Vec::new();
 
@@ -644,7 +667,7 @@ pub fn execute(
     let outcomes = cli::with_cli_lock(|| {
         Ok(cli::run_parallel(batches, transfers, |b| {
             let n = b.rels.len() as u64;
-            let res: Result<BTreeSet<String>> = if b.upload {
+            let res: Result<Downloads> = if b.upload {
                 let locals: Vec<String> = b
                     .rels
                     .iter()
@@ -656,7 +679,10 @@ pub fn execute(
                 args.extend(locals.iter().map(|s| s.as_str()));
                 args.push(&parent_rpath);
                 cli.run(&args, false, Some(3600), false)
-                    .map(|_| BTreeSet::new())
+                    .map(|_| Downloads {
+                        failed: BTreeSet::new(),
+                        placed: BTreeMap::new(),
+                    })
             } else {
                 let pairs: Vec<(String, u64)> = b
                     .rels
@@ -694,15 +720,18 @@ pub fn execute(
 
     for (b, res) in outcomes {
         match res {
-            Ok(failed_rels) => {
+            Ok(dl) => {
                 for rel in &b.rels {
-                    if failed_rels.contains(rel) {
+                    if dl.failed.contains(rel) {
                         failed.insert(rel.clone());
                     } else if b.upload {
                         eprintln!("UPLOAD {}", rel);
                     } else {
                         eprintln!("DOWNLOAD {}", rel);
                         downloaded.insert(rel.clone());
+                        if let Some(fp) = dl.placed.get(rel) {
+                            downloaded_fp.insert(rel.clone(), *fp);
+                        }
                     }
                 }
             }
@@ -712,7 +741,7 @@ pub fn execute(
             }
         }
     }
-    Ok((failed, downloaded))
+    Ok((failed, downloaded, downloaded_fp))
 }
 
 const MAX_BATCH: usize = 50;
@@ -833,7 +862,7 @@ mod tests {
             "",
             &[("a.txt".to_string(), 5)],
             1,
-        );
+        ).failed;
         assert!(failed.is_empty());
         assert_eq!(fs::read(root.join("a.txt")).unwrap(), b"hello");
         let _ = fs::remove_dir_all(&root);
@@ -867,7 +896,7 @@ mod tests {
             "",
             &[("a.txt".to_string(), 5)],
             1,
-        );
+        ).failed;
         assert!(failed.contains("a.txt"));
         assert_eq!(fs::read(&path).unwrap(), b"user-edit");
         let _ = fs::remove_dir_all(&root);
@@ -898,7 +927,7 @@ mod tests {
             "",
             &[("a.txt".to_string(), 5)],
             1,
-        );
+        ).failed;
         assert!(failed.is_empty());
         assert_eq!(fs::read(&path).unwrap(), b"hello");
         let _ = fs::remove_dir_all(&root);
@@ -919,7 +948,7 @@ mod tests {
             "",
             &[("a.txt".to_string(), 9)],
             1,
-        );
+        ).failed;
         assert!(failed.contains("a.txt"));
         assert_eq!(fs::read(root.join("a.txt")).unwrap(), b"old");
         let _ = fs::remove_dir_all(&root);
@@ -939,7 +968,7 @@ mod tests {
             "",
             &[("../escape.txt".to_string(), 5), ("a.txt".to_string(), 5)],
             1,
-        );
+        ).failed;
         assert!(failed.contains("../escape.txt"));
         assert!(failed.contains("a.txt"));
         assert!(!root.join("a.txt").exists());

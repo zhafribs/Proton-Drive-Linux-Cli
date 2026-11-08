@@ -2659,6 +2659,16 @@ impl App {
                     local_digest,
                     cloud_digest,
                     created_at: proton_core::delete_approval::now_secs(),
+                    local_root: self
+                        .conf
+                        .get("PROTON_SYNC_LOCAL")
+                        .cloned()
+                        .unwrap_or_default(),
+                    remote_root: self
+                        .conf
+                        .get("PROTON_SYNC_REMOTE")
+                        .cloned()
+                        .unwrap_or_default(),
                 };
                 let path = self.paths.state_dir.join("deletes-approval.json");
                 match proton_core::delete_approval::write(&path, &approval) {
