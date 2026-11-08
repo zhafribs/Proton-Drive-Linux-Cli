@@ -25,9 +25,10 @@ mod util;
 
 use eframe::egui;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 /// The GUI's own version (the release tag is `v<CLI>-gui<GUI>`).
-pub const GUI_VERSION: &str = "3.20.51";
+pub const GUI_VERSION: &str = "3.20.52";
 
 /// The systemd user unit path (shared with `service.rs`).
 pub fn service_unit_path() -> PathBuf {
@@ -70,9 +71,31 @@ fn main() -> eframe::Result<()> {
         }
     };
     if lock.try_lock_exclusive().is_err() {
-        let _ = std::fs::write(p.state_dir.join("show-request"), b"1");
-        eprintln!("Proton Drive is already running - bringing it to the front.");
-        return Ok(());
+        let show = p.state_dir.join("show-request");
+        let _ = std::fs::write(&show, b"1");
+        // The owner may instead be in the middle of quitting. Wait briefly
+        // for the lock: if it is released, this launch must start normally
+        // rather than exit and leave no instance running. A healthy owner
+        // removes `show-request` within its poll interval, which ends the
+        // wait immediately.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut took = false;
+        while Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+            if lock.try_lock_exclusive().is_ok() {
+                took = true;
+                break;
+            }
+            if !show.exists() {
+                break;
+            }
+        }
+        if !took {
+            eprintln!("Proton Drive is already running - bringing it to the front.");
+            return Ok(());
+        }
+        let _ = std::fs::remove_file(&show);
+        eprintln!("The previous instance exited; starting normally.");
     }
 
     // Update recovery: the marker decides whether this start is the freshly

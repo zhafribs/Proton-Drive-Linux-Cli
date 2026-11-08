@@ -427,6 +427,13 @@ fn discard(app: &mut App) {
     app.save_hint.clear();
 }
 
+/// True when Save would change either sync root. The confirmation dialog
+/// uses this to warn that history is archived and cloud caches are dropped.
+pub fn root_change_pending(app: &App) -> bool {
+    app.conf.get("PROTON_SYNC_LOCAL") != Some(&app.draft.local)
+        || app.conf.get("PROTON_SYNC_REMOTE") != Some(&app.draft.remote)
+}
+
 /// Write conf + restart flow (worker-side; the hint lands via SaveHint).
 pub fn do_save(app: &mut App, ctx: &egui::Context) {
     if let Some((title, body)) = validate(app) {
@@ -489,8 +496,7 @@ pub fn do_save(app: &mut App, ctx: &egui::Context) {
 
     let conf_changed = values.iter().any(|(k, v)| app.conf.get(k) != Some(v))
         || extras != app.conf_extras;
-    let root_changed = app.conf.get("PROTON_SYNC_LOCAL") != Some(&d.local)
-        || app.conf.get("PROTON_SYNC_REMOTE") != Some(&d.remote);
+    let root_changed = root_change_pending(app);
     conf::write(&app.paths.conf_file, &values, &extras);
     if root_changed {
         // The engine archives state.json on its next start; drop the GUI's
@@ -1072,6 +1078,16 @@ fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
                         apply = true;
                     }
                 });
+                if pct == crate::prefs::UiScale::MIN {
+                    ui.add_space(2.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "50% is the minimum; text is very small on a 1080p display.",
+                        )
+                        .size(11.5)
+                        .weak(),
+                    );
+                }
                 if changed || apply {
                     if changed {
                         app.draft.ui_scale_pct = pct;

@@ -623,10 +623,22 @@ pub fn pick_upload_files(app: &mut App) {
         app.toast_error("Sign in to upload files.");
         return;
     }
+    let target = app.cloud.rel.clone();
     let tx = app.tx.clone();
     std::thread::spawn(move || {
-        let paths = portal::open_files();
-        let picked = (!paths.is_empty()).then_some(super::Picked::UploadFiles(paths));
+        let picked = match portal::open_files() {
+            portal::PickResult::Done(paths) => {
+                Some(super::Picked::UploadFiles { paths, target })
+            }
+            portal::PickResult::Cancelled => None,
+            portal::PickResult::Unavailable => {
+                let _ = tx.send(Back::CloudPickFailed(
+                    "No file dialog is available. Install xdg-desktop-portal, zenity or kdialog."
+                        .into(),
+                ));
+                return;
+            }
+        };
         let _ = tx.send(Back::CloudPicked(picked));
     });
 }
@@ -636,9 +648,22 @@ pub fn pick_upload_folder(app: &mut App) {
         app.toast_error("Sign in to upload folders.");
         return;
     }
+    let target = app.cloud.rel.clone();
     let tx = app.tx.clone();
     std::thread::spawn(move || {
-        let picked = portal::open_dir("Upload folder").map(super::Picked::UploadFolder);
+        let picked = match portal::open_dir("Upload folder") {
+            portal::PickResult::Done(dir) => {
+                Some(super::Picked::UploadFolder { dir, target })
+            }
+            portal::PickResult::Cancelled => None,
+            portal::PickResult::Unavailable => {
+                let _ = tx.send(Back::CloudPickFailed(
+                    "No folder dialog is available. Install xdg-desktop-portal, zenity or kdialog."
+                        .into(),
+                ));
+                return;
+            }
+        };
         let _ = tx.send(Back::CloudPicked(picked));
     });
 }
@@ -679,8 +704,19 @@ pub fn pick_download(app: &mut App) {
             let rpath = cli::rpath(&root, &rel);
             let tx = app.tx.clone();
             std::thread::spawn(move || {
-                let picked = portal::save_file(&name)
-                    .map(|dest| super::Picked::DownloadSave { rpath, dest });
+                let picked = match portal::save_file(&name) {
+                    portal::PickResult::Done(dest) => {
+                        Some(super::Picked::DownloadSave { rpath, dest })
+                    }
+                    portal::PickResult::Cancelled => None,
+                    portal::PickResult::Unavailable => {
+                        let _ = tx.send(Back::CloudPickFailed(
+                            "No save dialog is available. Install xdg-desktop-portal, zenity or kdialog."
+                                .into(),
+                        ));
+                        return;
+                    }
+                };
                 let _ = tx.send(Back::CloudPicked(picked));
             });
             return;
@@ -690,8 +726,19 @@ pub fn pick_download(app: &mut App) {
     let n = rpaths.len();
     let tx = app.tx.clone();
     std::thread::spawn(move || {
-        let picked = portal::open_dir("Save to folder")
-            .map(|dest| super::Picked::DownloadDir { rpaths, dest, n });
+        let picked = match portal::open_dir("Save to folder") {
+            portal::PickResult::Done(dest) => {
+                Some(super::Picked::DownloadDir { rpaths, dest, n })
+            }
+            portal::PickResult::Cancelled => None,
+            portal::PickResult::Unavailable => {
+                let _ = tx.send(Back::CloudPickFailed(
+                    "No folder dialog is available. Install xdg-desktop-portal, zenity or kdialog."
+                        .into(),
+                ));
+                return;
+            }
+        };
         let _ = tx.send(Back::CloudPicked(picked));
     });
 }
@@ -700,14 +747,22 @@ pub fn on_picked(app: &mut App, picked: Option<super::Picked>) {
     use super::Picked;
     match picked {
         None => {} // cancelled: no state change
-        Some(Picked::UploadFiles(paths)) => {
+        Some(Picked::UploadFiles { paths, target }) => {
             let n = paths.len();
             let root = remote_root(&app.conf);
             let mut args = vec!["fs".to_string(), "upload".to_string()];
             for p in &paths {
-                args.push(p.to_string_lossy().into_owned());
+                match p.to_str() {
+                    Some(p) => args.push(p.to_string()),
+                    None => {
+                        app.toast_error(
+                            "A selected path contains characters this build cannot pass to the CLI.",
+                        );
+                        return;
+                    }
+                }
             }
-            args.push(cli::rpath(&root, &app.cloud.rel));
+            args.push(cli::rpath(&root, &target));
             mutate(
                 app,
                 args,
@@ -716,11 +771,17 @@ pub fn on_picked(app: &mut App, picked: Option<super::Picked>) {
                 Some(("Uploaded".into(), format!("{n} file(s)"))),
             );
         }
-        Some(Picked::UploadFolder(dir)) => {
+        Some(Picked::UploadFolder { dir, target }) => {
             let name = dir
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
+            let Some(dir) = dir.to_str() else {
+                app.toast_error(
+                    "The selected folder path contains characters this build cannot pass to the CLI.",
+                );
+                return;
+            };
             let root = remote_root(&app.conf);
             let body = name.clone();
             mutate(
@@ -728,8 +789,8 @@ pub fn on_picked(app: &mut App, picked: Option<super::Picked>) {
                 vec![
                     "fs".into(),
                     "upload".into(),
-                    dir.to_string_lossy().into_owned(),
-                    cli::rpath(&root, &app.cloud.rel),
+                    dir.to_string(),
+                    cli::rpath(&root, &target),
                 ],
                 "Uploading folder...",
                 format!("Uploaded {name}."),
@@ -1681,8 +1742,11 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
             let load_failed = app.cloud.entries.is_empty()
                 && !loading
                 && app.cloud.status.starts_with("Couldn't open");
-            // Frame margin (24) + gap (6) + the action row (~36).
-            let max_h = (ui.available_height() - 66.0).max(120.0);
+            // Frame margin (24) + gap (6) + the action row. With a selection
+            // the row can wrap to two lines (actions plus the status label),
+            // so reserve the taller height instead of clipping it.
+            let reserve = if app.cloud.sel.is_empty() { 66.0 } else { 92.0 };
+            let max_h = (ui.available_height() - reserve).max(120.0);
 
             let mut open_rel: Option<String> = None;
             let mut menu_item: Option<&'static str> = None;
@@ -1935,6 +1999,19 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
                 && !app.cloud.sel.is_empty()
             {
                 app.dialog = Some(super::Dialog::ConfirmTrash { n: app.cloud.sel.len() });
+            }
+
+            // F2 renames the one selected item, matching the desktop file
+            // managers users already know.
+            let f2 = ui.input(|i| i.key_pressed(egui::Key::F2))
+                && !ui.ctx().text_edit_focused()
+                && app.dialog.is_none()
+                && !trash_view
+                && !app.cloud.busy
+                && app.can_transfer()
+                && app.cloud.sel.len() == 1;
+            if f2 {
+                apply_menu_item(app, Some("rename"));
             }
         });
 }
@@ -2516,6 +2593,7 @@ fn bottom_row(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
 
+    let mut menu_item: Option<&'static str> = None;
     ui.horizontal_wrapped(|ui| {
         ui.label(
             egui::RichText::new(format!("{} selected", sel.len()))
@@ -2523,6 +2601,37 @@ fn bottom_row(app: &mut App, ui: &mut egui::Ui) {
                 .size(12.5),
         );
         ui.separator();
+        if !trash_view {
+            // Keyboard route to the row context menu: Tab reaches this
+            // button, Enter/Space opens it, and the menu is arrow-navigable.
+            ui.menu_button("More", |ui| {
+                if sel.len() == 1 {
+                    if ui.button("Open").clicked() {
+                        ui.close();
+                        menu_item = Some("open");
+                    }
+                    if ui.button("Rename...").clicked() {
+                        ui.close();
+                        menu_item = Some("rename");
+                    }
+                    if ui.button("Duplicate").clicked() {
+                        ui.close();
+                        menu_item = Some("duplicate");
+                    }
+                    if ui.button("Details").clicked() {
+                        ui.close();
+                        menu_item = Some("details");
+                    }
+                    ui.separator();
+                }
+                if ui.button("Move to...").clicked() {
+                    ui.close();
+                    menu_item = Some("move");
+                }
+            })
+            .response
+            .on_hover_text("More actions (Open, Rename, Duplicate, Details, Move)");
+        }
         if trash_view {
             if ui
                 .add_enabled(!busy && can_transfer, egui::Button::new("Restore"))
@@ -2563,7 +2672,22 @@ fn bottom_row(app: &mut App, ui: &mut egui::Ui) {
         {
             app.cloud.sel.clear();
         }
+        // The status/error line stays visible while a selection owns the
+        // bottom row; otherwise a failed action would be invisible until the
+        // user clears the selection.
+        if !status.is_empty() {
+            ui.separator();
+            let short = widgets::elide(&status, 32);
+            let resp = ui.add(
+                egui::Label::new(egui::RichText::new(short).size(12.0).weak()).truncate(),
+            );
+            if resp.hovered() {
+                let full = if status_tip.is_empty() { status } else { status_tip };
+                resp.on_hover_text(full);
+            }
+        }
     });
+    apply_menu_item(app, menu_item);
 }
 
 // ------------------------------------------------------------- sidebar tree
@@ -2879,13 +3003,23 @@ fn tree_rows(app: &mut App, ui: &mut egui::Ui, parent: &str, depth: usize) {
             egui::vec2(14.0, 14.0),
         );
         widgets::nav_icon(ui.painter(), icon_rect, widgets::NavIcon::Folder, color);
+        // Width-aware elision: the sidebar can be dragged down to 176 px and
+        // deep indentation leaves little room, so a fixed character count
+        // either clipped the name or wasted space.
+        let label_x = rect.left() + indent + 36.0;
+        let label_w = (rect.right() - 8.0 - label_x).max(12.0);
+        let label = elide_fit(ui, &e.name, egui::FontId::proportional(13.5), label_w);
+        let truncated = label != e.name;
         ui.painter().text(
             rect.left_center() + egui::vec2(indent + 36.0, 0.0),
             egui::Align2::LEFT_CENTER,
-            widgets::elide(&e.name, 26),
+            &label,
             egui::FontId::proportional(13.5),
             color,
         );
+        if truncated {
+            let _ = resp.clone().on_hover_text(&e.name);
+        }
         let at_click = ui.input(|i| {
             i.has_accesskit_action_request(resp.id, egui::accesskit::Action::Click)
         });

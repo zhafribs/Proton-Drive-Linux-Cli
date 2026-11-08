@@ -1,3 +1,20 @@
+## 3.20.52 — 2026-11-08
+
+- **Uploads use the folder that was open when the picker opened.** A late
+  listing or navigation can no longer retarget the upload.
+- **The selection bar keeps the status/error line visible** and adds a
+  keyboard-reachable **More actions** menu (Open, Rename, Duplicate, Details,
+  Move to...) plus **F2** rename. Ctrl+A is listed in the shortcut reference.
+- **Native picker failures are reported.** A missing portal/zenity/kdialog is
+  now an error toast instead of looking like the user cancelled.
+- **Sidebar tree labels elide to the available width** and show the full name
+  on hover, including at the 176 px pane minimum.
+- **Changing a sync root warns before saving** that history is archived and
+  cloud caches are cleared.
+- **A second launch during quit waits for the lock** and starts normally if
+  the previous instance has already exited.
+- **50% now shows a readability warning** in Appearance.
+
 ## 3.20.51 — 2026-11-08
 
 - **A post-download edit is no longer stamped as synced.** The fingerprint of

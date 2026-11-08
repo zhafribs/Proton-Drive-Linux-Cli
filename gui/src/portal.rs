@@ -138,100 +138,152 @@ fn run_dialog(exe: &str, args: Vec<String>) -> DialogResult {
     )
 }
 
-fn empty_on_cancel(result: DialogResult) -> Vec<PathBuf> {
+/// A file-dialog outcome. `Cancelled` means the user closed the picker;
+/// `Unavailable` means no portal, zenity or kdialog could answer, which the
+/// caller must report instead of silently doing nothing.
+pub enum PickResult<T> {
+    Done(T),
+    Cancelled,
+    Unavailable,
+}
+
+fn dialog_result(result: DialogResult) -> PickResult<Vec<PathBuf>> {
     match result {
-        DialogResult::Done(paths) => paths,
-        DialogResult::Cancel | DialogResult::Unavailable => Vec::new(),
+        DialogResult::Done(paths) if !paths.is_empty() => PickResult::Done(paths),
+        DialogResult::Done(_) | DialogResult::Cancel => PickResult::Cancelled,
+        DialogResult::Unavailable => PickResult::Unavailable,
     }
 }
 
-/// Pick several files ("Upload files..."). Empty = cancelled.
-pub fn open_files() -> Vec<PathBuf> {
+fn first_path(result: DialogResult) -> PickResult<PathBuf> {
+    match result {
+        DialogResult::Done(paths) => match paths.into_iter().next() {
+            Some(path) => PickResult::Done(path),
+            None => PickResult::Cancelled,
+        },
+        DialogResult::Cancel => PickResult::Cancelled,
+        DialogResult::Unavailable => PickResult::Unavailable,
+    }
+}
+
+/// Pick several files ("Upload files...").
+pub fn open_files() -> PickResult<Vec<PathBuf>> {
     match portal(
         "OpenFile",
         "Upload files",
         vec![("multiple", Value::from(true))],
     ) {
-        Portal::Done(p) => p,
-        Portal::Cancel => Vec::new(),
-        Portal::Unavailable => match run_dialog(
-            "zenity",
-            vec![
-                "--file-selection".into(),
-                "--multiple".into(),
-                "--separator=\n".into(),
-            ],
-        ) {
-            DialogResult::Unavailable => empty_on_cancel(run_dialog(
-                "kdialog",
+        Portal::Done(p) if !p.is_empty() => PickResult::Done(p),
+        Portal::Done(_) | Portal::Cancel => PickResult::Cancelled,
+        Portal::Unavailable => {
+            let zenity = run_dialog(
+                "zenity",
                 vec![
-                    "--getopenfilename".into(),
-                    ".".into(),
+                    "--file-selection".into(),
                     "--multiple".into(),
-                    "--separate-output".into(),
+                    "--separator=\n".into(),
                 ],
-            )),
-            other => empty_on_cancel(other),
-        },
+            );
+            match zenity {
+                DialogResult::Unavailable => dialog_result(run_dialog(
+                    "kdialog",
+                    vec![
+                        "--getopenfilename".into(),
+                        ".".into(),
+                        "--multiple".into(),
+                        "--separate-output".into(),
+                    ],
+                )),
+                other => dialog_result(other),
+            }
+        }
     }
 }
 
-/// Pick a folder ("Upload folder..." / "Save to folder"). None = cancelled.
-pub fn open_dir(title: &str) -> Option<PathBuf> {
+/// Pick a folder ("Upload folder..." / "Save to folder").
+pub fn open_dir(title: &str) -> PickResult<PathBuf> {
     match portal("OpenFile", title, vec![("directory", Value::from(true))]) {
-        Portal::Done(p) => p.into_iter().next(),
-        Portal::Cancel => None,
-        Portal::Unavailable => match run_dialog(
-            "zenity",
-            vec!["--file-selection".into(), "--directory".into()],
-        ) {
-            DialogResult::Done(paths) => paths.into_iter().next(),
-            DialogResult::Cancel => None,
-            DialogResult::Unavailable => match run_dialog(
-                "kdialog",
-                vec!["--getexistingdirectory".into(), ".".into()],
-            ) {
-                DialogResult::Done(paths) => paths.into_iter().next(),
-                _ => None,
-            },
+        Portal::Done(p) => match p.into_iter().next() {
+            Some(path) => PickResult::Done(path),
+            None => PickResult::Cancelled,
         },
+        Portal::Cancel => PickResult::Cancelled,
+        Portal::Unavailable => {
+            let zenity = run_dialog(
+                "zenity",
+                vec!["--file-selection".into(), "--directory".into()],
+            );
+            match zenity {
+                DialogResult::Unavailable => first_path(run_dialog(
+                    "kdialog",
+                    vec!["--getexistingdirectory".into(), ".".into()],
+                )),
+                other => first_path(other),
+            }
+        }
     }
 }
 
-/// Save-as path for a single download. None = cancelled.
-pub fn save_file(name: &str) -> Option<PathBuf> {
+/// Save-as path for a single download.
+pub fn save_file(name: &str) -> PickResult<PathBuf> {
     match portal(
         "SaveFile",
         "Save file",
         vec![("current_name", Value::from(name.to_owned()))],
     ) {
-        Portal::Done(p) => p.into_iter().next(),
-        Portal::Cancel => None,
-        Portal::Unavailable => match run_dialog(
-            "zenity",
-            vec![
-                "--file-selection".into(),
-                "--save".into(),
-                "--confirm-overwrite".into(),
-                format!("--filename={name}"),
-            ],
-        ) {
-            DialogResult::Done(paths) => paths.into_iter().next(),
-            DialogResult::Cancel => None,
-            DialogResult::Unavailable => match run_dialog(
-                "kdialog",
-                vec!["--getsavefilename".into(), format!("Downloads/{name}")],
-            ) {
-                DialogResult::Done(paths) => paths.into_iter().next(),
-                _ => None,
-            },
+        Portal::Done(p) => match p.into_iter().next() {
+            Some(path) => PickResult::Done(path),
+            None => PickResult::Cancelled,
         },
+        Portal::Cancel => PickResult::Cancelled,
+        Portal::Unavailable => {
+            let zenity = run_dialog(
+                "zenity",
+                vec![
+                    "--file-selection".into(),
+                    "--save".into(),
+                    "--confirm-overwrite".into(),
+                    format!("--filename={name}"),
+                ],
+            );
+            match zenity {
+                DialogResult::Unavailable => first_path(run_dialog(
+                    "kdialog",
+                    vec!["--getsavefilename".into(), format!("Downloads/{name}")],
+                )),
+                other => first_path(other),
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unavailable_is_reported_separately_from_cancel() {
+        assert!(matches!(
+            dialog_result(DialogResult::Unavailable),
+            PickResult::Unavailable
+        ));
+        assert!(matches!(
+            dialog_result(DialogResult::Cancel),
+            PickResult::Cancelled
+        ));
+        assert!(matches!(
+            dialog_result(DialogResult::Done(Vec::new())),
+            PickResult::Cancelled
+        ));
+        assert!(matches!(
+            first_path(DialogResult::Unavailable),
+            PickResult::Unavailable
+        ));
+        assert!(matches!(
+            first_path(DialogResult::Done(Vec::new())),
+            PickResult::Cancelled
+        ));
+    }
 
     #[test]
     fn uri_decoding() {

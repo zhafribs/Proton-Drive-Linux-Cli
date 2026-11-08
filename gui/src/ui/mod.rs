@@ -105,6 +105,8 @@ pub enum Back {
     },
     /// Cloud browser: a file dialog returned (None = cancelled).
     CloudPicked(Option<Picked>),
+    /// Cloud browser: no native dialog could be started.
+    CloudPickFailed(String),
     /// Cloud browser: the move-to picker's folder listing landed.
     PickerFolders {
         parent: String,
@@ -123,8 +125,16 @@ pub enum Back {
 /// A file-dialog answer from the Cloud page (portal/zenity/kdialog).
 #[derive(Clone, Debug)]
 pub enum Picked {
-    UploadFiles(Vec<PathBuf>),
-    UploadFolder(PathBuf),
+    UploadFiles {
+        paths: Vec<PathBuf>,
+        /// Remote folder that was open when the picker opened.
+        target: String,
+    },
+    UploadFolder {
+        dir: PathBuf,
+        /// Remote folder that was open when the picker opened.
+        target: String,
+    },
     DownloadSave {
         rpath: String,
         dest: PathBuf,
@@ -1361,6 +1371,7 @@ impl App {
                     cloud::on_downloaded(self, ok, err, name, n)
                 }
                 Back::CloudPicked(p) => cloud::on_picked(self, p),
+                Back::CloudPickFailed(msg) => self.toast_error(msg),
                 Back::PickerFolders { parent, folders } => {
                     cloud::on_picker_folders(self, parent, folders)
                 }
@@ -2146,7 +2157,9 @@ impl App {
                             "shortcut-files",
                             &[
                                 ("Ctrl+F", "Search files"),
+                                ("Ctrl+A", "Select all visible files"),
                                 ("Delete", "Move the selection to trash"),
+                                ("F2", "Rename the selected item"),
                                 ("Enter", "Open the focused folder or file"),
                                 ("Space", "Select or deselect the focused file"),
                             ],
@@ -2168,6 +2181,18 @@ impl App {
                     .open(&mut open)
                     .show(ctx, |ui| {
                         ui.label("Save your settings now?");
+                        if settings::root_change_pending(self) {
+                            ui.add_space(6.0);
+                            ui.label(
+                                egui::RichText::new(
+                                    "The sync folder or remote root changed. Saving archives \
+                                     the current sync history and clears cached cloud rows \
+                                     before the next sync.",
+                                )
+                                .size(12.5)
+                                .weak(),
+                            );
+                        }
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
                             let cancel = ui.button("Cancel");
@@ -2883,7 +2908,13 @@ impl eframe::App for App {
                     .collect()
             });
             if !dropped.is_empty() {
-                cloud::on_picked(self, Some(Picked::UploadFiles(dropped)));
+                cloud::on_picked(
+                    self,
+                    Some(Picked::UploadFiles {
+                        paths: dropped,
+                        target: self.cloud.rel.clone(),
+                    }),
+                );
             }
         }
         // Solid page backdrop: hierarchy comes from surfaces and borders,
