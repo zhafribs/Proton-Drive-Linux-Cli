@@ -62,6 +62,7 @@ pub struct RecoveryState {
     pub snapshot_error: Option<String>,
     pub snapshot_status: String,
     pub confirm_snapshot: Option<PathBuf>,
+    pub confirm_delete_snapshot: Option<PathBuf>,
     // Last read-only recovery check.
     pub last_check: Option<CheckResult>,
     pub check_loaded: bool,
@@ -518,6 +519,37 @@ fn snapshot_card(app: &mut App, ui: &mut egui::Ui, snap: &SnapshotInfo) {
                 return;
             }
 
+            if app
+                .recovery
+                .confirm_delete_snapshot
+                .as_deref()
+                == Some(snap.path.as_path())
+            {
+                ui.label(
+                    egui::RichText::new(
+                        "Delete this restore point? Your files are not touched.",
+                    )
+                    .size(12.0),
+                );
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .add_enabled(
+                            !app.recovery.snapshot_busy,
+                            egui::Button::new("Delete snapshot"),
+                        )
+                        .clicked()
+                    {
+                        app.recovery.confirm_delete_snapshot = None;
+                        start_snapshot_delete(app, snap.path.clone());
+                    }
+                    if ui.button("Cancel").clicked() {
+                        app.recovery.confirm_delete_snapshot = None;
+                    }
+                });
+                return;
+            }
+
             ui.horizontal_wrapped(|ui| {
                 if ui
                     .add_enabled(
@@ -539,7 +571,7 @@ fn snapshot_card(app: &mut App, ui: &mut egui::Ui, snap: &SnapshotInfo) {
                     .on_hover_text("Delete this restore point. Your files are not touched.")
                     .clicked()
                 {
-                    start_snapshot_delete(app, snap.path.clone());
+                    app.recovery.confirm_delete_snapshot = Some(snap.path.clone());
                 }
             });
         });
@@ -777,7 +809,19 @@ fn run_check(state_dir: &std::path::Path, root: Option<&std::path::Path>) -> Che
         ));
     }
     match local_trash::entries(state_dir) {
-        Ok(entries) => details.push(format!("local trash: {} entries", entries.len())),
+        Ok(entries) => {
+            let bytes: u64 = entries.iter().map(|e| e.size).sum();
+            let size = super::cloud::fmt_size(bytes);
+            details.push(format!(
+                "local trash: {} entries{}",
+                entries.len(),
+                if size.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({size})")
+                }
+            ));
+        }
         Err(e) => {
             problems += 1;
             details.push(format!("local trash: unreadable ({e})"));
@@ -785,8 +829,10 @@ fn run_check(state_dir: &std::path::Path, root: Option<&std::path::Path>) -> Che
     }
     if let Some(root) = root {
         match conflict::scan(root) {
-            Ok(conflicts) => {
-                details.push(format!("conflict copies: {} found", conflicts.len()))
+            Ok(mut conflicts) => {
+                let acked = conflict::acked(state_dir);
+                conflicts.retain(|c| acked.get(&c.conflict_rel) != Some(&c.mtime_ns));
+                details.push(format!("conflict copies: {} to review", conflicts.len()))
             }
             Err(e) => {
                 problems += 1;

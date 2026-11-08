@@ -1,3 +1,13 @@
+## 3.21.1 — 2026-11-09
+
+- **Recovery refreshes when you open the page.** A deletion or conflict created
+  while the app was running is visible without pressing Refresh.
+- **Recovery check ignores conflicts you already chose to keep both.** The
+  diagnostics count now matches the Conflict Center, and local-trash usage is
+  included in the report.
+- **Deleting a state snapshot asks for confirmation.** Restore points are
+  metadata-only, but an accidental click no longer removes one.
+
 ## 3.21.0 — 2026-11-08
 
 ### Recovery Center

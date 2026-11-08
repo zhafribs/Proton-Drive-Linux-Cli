@@ -268,6 +268,8 @@ pub struct App {
     pub active: bool,
     pub enabled: bool,
     pub page: Page,
+    /// Previous frame's page, used to refresh a page when it is re-entered.
+    last_page: Page,
     /// Sidebar width in points; the pane default and the remembered size.
     pub nav_width: f32,
     /// True while the user is dragging the pane divider.
@@ -817,6 +819,7 @@ impl App {
             active: false,
             enabled: false,
             page: Page::Home,
+            last_page: Page::Home,
             nav_width,
             nav_drag: false,
             journal_open: journal.clone(),
@@ -2787,6 +2790,21 @@ impl eframe::App for App {
             .store(matches!(self.page, Page::Home | Page::Activity) && !self.hidden, Ordering::Relaxed);
         self.drain(ctx);
         self.drain_theme(ctx);
+
+        // Recovery listings are snapshots of the state folder. Re-read them
+        // whenever the page is entered, so a deletion or conflict created
+        // while the app was running is visible without a manual Refresh.
+        if self.page != self.last_page {
+            if self.page == Page::Recovery {
+                self.recovery.loaded = false;
+                self.recovery.conflicts_loaded = false;
+                self.recovery.snapshots_loaded = false;
+                self.recovery.error = None;
+                self.recovery.conflict_error = None;
+                self.recovery.snapshot_error = None;
+            }
+            self.last_page = self.page;
+        }
 
         // Re-probe sign-in after a keyring-lock report (see on_poll).
         if let Some(t) = self.identity_retry
