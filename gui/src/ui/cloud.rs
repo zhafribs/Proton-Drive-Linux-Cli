@@ -2826,15 +2826,6 @@ pub fn nav_ui(app: &mut App, ui: &mut egui::Ui) {
         go_trash(app);
     }
     ui.add_space(6.0);
-    if widgets::nav_row(
-        ui,
-        widgets::NavIcon::Recovery,
-        "Recovery",
-        app.page == super::Page::Recovery,
-    ) {
-        app.page = super::Page::Recovery;
-    }
-    ui.add_space(6.0);
     if widgets::nav_row(ui, widgets::NavIcon::About, "About", app.page == super::Page::About) {
         app.page = super::Page::About;
     }
