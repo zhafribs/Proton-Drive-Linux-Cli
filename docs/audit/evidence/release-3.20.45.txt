@@ -1,0 +1,30 @@
+# Release evidence — v0.9.0-gui3.20.45
+
+Date: 2026-11-08
+Tag: v0.9.0-gui3.20.45
+Reason: F-013 — interface slider applied zoom during the drag, which
+moved the rail under the pointer and could jump the value to 50% or 200%.
+
+Assets:
+  ProtonDrive-CLI-0.9.0-GUI-3.20.45-x86_64.AppImage  52484600 bytes
+  SHA256SUMS  116 bytes
+  SHA256SUMS.sig  64 bytes
+
+Checksum and signature:
+ProtonDrive-CLI-0.9.0-GUI-3.20.45-x86_64.AppImage: OK
+Signature Verified Successfully
+
+Smoke:
+smoke ok: gui 3.20.45, conf keys 15, local /tmp/release-check45/smoke-home/ProtonDrive, cli true, health status 'ok', theme system (system dark)
+
+GLIBC floor:
+squashfs-root/AppRun: GLIBC_2.28
+squashfs-root/usr/bin/proton-drive-gui: GLIBC_2.28
+squashfs-root/usr/bin/proton-engine: GLIBC_2.28
+
+Pointer-drag verification (virtual evdev mouse, 1024x720 at 100%):
+  mid-drag screenshot: label 120%, UI still at 100% scale
+  after release: UI at 120%, slider 120%, no jump to 50%/200%
+  earlier drag: 40 px right -> 140%, not 200%
+
+Releases retained: 19

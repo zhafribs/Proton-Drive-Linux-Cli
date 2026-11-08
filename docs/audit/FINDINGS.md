@@ -32,13 +32,14 @@ file, the evidence, an owner, a fix and a verification step.
 | F-001 | P1 | Layout | `gui/src/ui/settings.rs` | At narrow widths the preset row and the slider shared one horizontal control row, pushing the percentage, Reset and part of the card past the right edge. | Presets and the slider now use separate rows inside a vertical control; the slider has a fixed 160 pt rail and a trailing fill. | 720x400 and 720x600 screenshots; Appearance card ends inside the page with the value and Reset visible. |
 | F-002 | P1 | State | `gui/src/prefs.rs`, `gui/src/ui/mod.rs` | The window size was saved in egui points. Restarting at a larger interface scale restored a smaller physical window, and at 200% the layout fell below its minimum. | Window sizes are stored as physical pixels at the desktop scale (egui points × zoom). Loading clamps the saved size to a scale-aware floor. | `prefs::tests`; 200% launch from a 1024x720 seed grows to 1440x800. |
 | F-003 | P1 | Layout | `gui/src/ui/mod.rs`, `gui/src/main.rs` | The viewport minimum was a fixed 720x540 physical points, so 200% left only 360 logical points and the three-column pages collided and clipped. | The minimum is 720x400 egui points, capped to the monitor; changing scale sends a scaled `MinInnerSize` and grows the window to the logical minimum. | 200% screenshots at 1440x800, 1440x900 and 1440x1000; all pages in `docs/audit/layout/`. |
+| F-013 | P1 | Interaction | `gui/src/ui/settings.rs` | Dragging the new interface-size slider applied the zoom on every frame. The zoom changed the slider's geometry under the pointer, feeding back into the value; one short drag from 100% could jump to 50% or 200%. | The percentage still previews live, but the zoom is applied on release (or immediately for a click, wheel or arrow key). Added `scale_applies` and a unit test for the drag-stopped transition. | Virtual evdev pointer drag: 20 px right from 100% showed 120% while the UI stayed at 100% scale; on release the UI moved to 120%; a 40 px drag landed at 140%, not 200%. |
 
 ## Gate status
 
 | Gate | Open P0 | Open P1 | Status |
 |---|---:|---:|---|
 | G0 Baseline | 0 | 0 | Evidence collection in progress |
-| G1 Interface size | 0 | 0 | Shipped `v0.9.0-gui3.20.44`; checksum, signature, smoke and GLIBC_2.28 floor verified |
+| G1 Interface size | 0 | 0 | Shipped `v0.9.0-gui3.20.44`; patch `v0.9.0-gui3.20.45` fixes F-013; both verified |
 | G2 UI/frontend | - | - | Not started |
 | G3 Backend/contract | - | - | Not started |
 | G4 Security/legal/release | - | - | Not started |

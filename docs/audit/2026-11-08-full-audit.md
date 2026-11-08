@@ -137,6 +137,8 @@ no unrelated feature work. Interface size is the one planned feature.
       sizes; evidence in `docs/audit/layout/`.
 - [x] Design, engineering and accessibility review; shipped `v0.9.0-gui3.20.44`
       with checksum, Ed25519 signature, smoke test and GLIBC_2.28 floor verified.
+- [x] Patch `v0.9.0-gui3.20.45` applies the slider zoom on release instead of
+      mid-drag, fixing the 50%/200% runaway (F-013).
 
 ### G2 - UI/frontend audit (Nov 12-17)
 
