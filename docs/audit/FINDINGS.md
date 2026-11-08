@@ -18,11 +18,11 @@ file, the evidence, an owner, a fix and a verification step.
 | F-004 | P2 | Tooling | workspace | `cargo fmt --check` is not part of CI and the current tree is not rustfmt-clean; adopting the default formatter would rewrite ~33k lines. | Engineering | G5 | Open: decide between one formatting release and a documented "no fmt gate" decision. |
 | F-005 | P3 | Accessibility | `gui/src/ui/settings.rs` | 50% renders text at half size; it is the approved lower bound, but very small on a 1080p display. | Design | G5 | Open: collect feedback before changing the approved range. |
 | F-006 | P3 | Layout | `gui/src/ui/settings.rs` | At the 720x400 logical minimum, the Appearance card needs vertical scrolling to reach the slider. No overlap or clipping occurs. | Design | G2 | Open: consider a more compact Appearance card if the audit finds horizontal room. |
-| F-007 | P2 | Tooling | workspace | `cargo-audit`, `cargo-deny`, `cargo-machete` and `cargo-udeps` are not installed locally; CI has the license check and clippy only. | Trust | G4 | Open: install or record the supported substitute before the dependency audit. |
-| F-008 | P2 | UX overlap | `gui/src/ui/settings.rs` | The same `PROTON_SYNC_WORKERS` value is edited by **Scan workers** (Performance) and **Parallel connections** (Fine-tuning), with different labels and help text. | Design/Engineering | G2 | Open: keep one control and link the other card to it. |
-| F-009 | P2 | Security | `crates/core/src/conf.rs` | `conf::write` creates `proton-sync.conf` with the default umask (usually 0644). The **Extra environment variables** card accepts proxy credentials, so the file can be readable by other local users. | Trust | G4 | Open: create the file with mode 0600 on Unix and add a test. |
-| F-010 | P3 | Consistency | `gui/src/ui/settings.rs` | The **Small** preset is 93%, but the slider steps in 5% increments, so 93% cannot be reached by dragging and the next drag jumps to 95%. | Design | G2 | Open: decide between 95% and a 1% slider step. |
-| F-011 | P2 | Accessibility | `gui/src/ui/settings.rs` | In the selective-sync tree the folder name is a plain label; only the small checkbox glyph and the expand arrow are clickable. | Design | G2 | Open: make the row name toggle the checkbox and keep the arrow separate. |
+| F-007 | P2 | Tooling | workspace | `cargo-audit`, `cargo-deny`, `cargo-machete` and `cargo-udeps` are not installed locally; CI has the license check and clippy only. | Trust | G4 | `cargo-audit 0.22.2` and `cargo-machete 0.9.2` installed; audit pending. |
+| F-008 | P2 | UX overlap | `gui/src/ui/settings.rs` | The same `PROTON_SYNC_WORKERS` value is edited by **Scan workers** (Performance) and **Parallel connections** (Fine-tuning), with different labels and help text. | Design/Engineering | G2 | Fixed in 3.20.46 (see F-023). |
+| F-009 | P2 | Security | `crates/core/src/conf.rs` | `conf::write` creates `proton-sync.conf` with the default umask (usually 0644). The **Extra environment variables** card accepts proxy credentials, so the file can be readable by other local users. | Trust | G4 | Fixed in working tree for 3.20.48 (0600 + test). |
+| F-010 | P3 | Consistency | `gui/src/ui/settings.rs` | The **Small** preset is 93%, but the slider steps in 5% increments, so 93% cannot be reached by dragging and the next drag jumps to 95%. | Design | G2 | Fixed in 3.20.46 (Small 95%, see F-024). |
+| F-011 | P2 | Accessibility | `gui/src/ui/settings.rs` | In the selective-sync tree the folder name is a plain label; only the small checkbox glyph and the expand arrow are clickable. | Design | G2 | Fixed in 3.20.46 (see F-025). |
 | F-012 | P3 | Migration | `gui/src/prefs.rs` | Configs written before 3.20.44 stored the window size in egui points. At a non-100% scale those values are now read as physical units, so the first launch after upgrading can open a smaller window; the scale-aware floor and auto-grow correct it. | Engineering | G5 | Open: document the one-time change; no data loss. |
 
 ## Closed findings
@@ -41,7 +41,7 @@ file, the evidence, an owner, a fix and a verification step.
 | G0 Baseline | 0 | 0 | Evidence collection in progress |
 | G1 Interface size | 0 | 0 | Shipped `v0.9.0-gui3.20.44`; patch `v0.9.0-gui3.20.45` fixes F-013; both verified |
 | G2 UI/frontend | 0 | 0 | Shipped `v0.9.0-gui3.20.46`; UI P1s closed; G3/G4 carry-over tracked below |
-| G3 Backend/contract | - | - | Not started |
+| G3 Backend/contract | 0 | 0 | Shipped `v0.9.0-gui3.20.47`; engine timeout/lock/state P1s closed; UI logout/pause-race items carried |
 | G4 Security/legal/release | - | - | Not started |
 | G5 Consolidation | - | - | Not started |
 
@@ -87,3 +87,24 @@ file, the evidence, an owner, a fix and a verification step.
 | F-061 | P1 | Engine timeout | The engine `run_output` ignored its timeout parameter and could block the CLI slot forever on a hung command. | G3 (fixed in working tree: poll/kill + test) |
 | F-062 | P2 | CLI lock | `with_cli_lock` claimed re-entrancy but never set the thread depth on the first lock. | G3 (fixed in working tree) |
 | F-063 | P2 | Duplication | `state_dir()` was copied in four engine modules. | G3 (fixed in working tree: one `health::state_dir`) |
+
+## G3 release — 3.20.47 (fixed)
+
+| ID | Sev | Area | Finding | Fix | Verified |
+|---|---|---|---|---|---|
+| F-061 | P1 | Engine | `run_output` ignored its timeout and could block the CLI slot forever on a hung command. | Poll/kill with a deadline; metadata calls bounded at 180 s, transfers at 3600 s. | `a_hung_command_is_killed_at_the_deadline` (1 s). |
+| F-062 | P2 | CLI lock | `with_cli_lock` never set the thread depth on the first lock, so the advertised re-entrant path was unreachable. | Depth is set to 1 before the closure. | Code review; nested calls now take the inner path. |
+| F-063 | P2 | Duplication | `state_dir()` was copied in four engine modules. | One `health::state_dir()` shared by cli/execute/loop. | `cargo test --workspace`. |
+| F-045 | P1 | State paths | The unit did not pin XDG dirs; a custom-XDG GUI could split state from the engine. | Unit pins `XDG_STATE_HOME`/`XDG_CONFIG_HOME`; relative/empty XDG values are rejected. | Unit template test and smoke. |
+| F-044 | P1 | CLI session | `auth login` could time out of its lock and the sign-in probe could run unprotected after 60 s. | Login never runs without the lock; the sign-in identity probe waits 330 s. | Login-script test; code review. Remaining fallback for non-identity calls is tracked for G4. |
+| F-046 | P2 | Identity | Any non-zero CLI result looked like signed-out. | Transient errors are kept as errors; the UI treats them as unknown instead of welcome. | Code review. |
+| F-048 | P2 | Pause | `pause_for` skipped `stop()` when the autoresume timer failed. | It always stops; the timer failure only loses auto-resume. | Code review. |
+| F-050 | P2 | Service unit | A non-executable file could become `ExecStart`; unit writes were non-atomic. | Executable-only AppImage selection; temp+rename unit write; reload failure is reported. | Service tests. |
+| F-052 | P2 | Symlinks | `folder_stats` followed symlinks outside the sync root. | Uses `symlink_metadata`, skips symlinks. | `folder_stats_skips_symlinks...` test. |
+| F-053 | P2 | CLI resolution | GUI ignored `PROTON_DRIVE_BIN` and accepted non-executables; engine accepted non-executables. | Both resolvers prefer `PROTON_DRIVE_BIN` and require an executable file. | Code review. |
+| F-054 | P2 | Symlink write | `arm_photo_hold` could truncate a symlink target. | A symlink marker is removed before writing. | Code review. |
+| F-059 | P3 | Menu paths | Menu entries hardcoded `~/.local/share`. | Uses `dirs::data_dir()` with an absolute-path fallback. | Code review. |
+
+### Remaining open after G3
+
+F-047 (logout ignores errors), F-049 (pause/resume worker race), F-051 (autostart/menu errors), F-055 (status hidden with selection), F-056 (context-menu keyboard path), F-057 (duplicate-name photo copy), F-058 (non-UTF8 paths), F-060 (selective folder error). F-004/F-005/F-006/F-007 remain for G4/G5.
