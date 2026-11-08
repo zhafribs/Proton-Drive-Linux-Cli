@@ -1,0 +1,16 @@
+# Release evidence — v0.9.0-gui3.20.48
+
+Tag: v0.9.0-gui3.20.48
+Scope: G4 security/legal/release.
+
+  ProtonDrive-CLI-0.9.0-GUI-3.20.48-x86_64.AppImage  52500984 bytes
+  SHA256SUMS  116 bytes
+  SHA256SUMS.sig  64 bytes
+
+ProtonDrive-CLI-0.9.0-GUI-3.20.48-x86_64.AppImage: OK
+Signature Verified Successfully
+smoke ok: gui 3.20.48, conf keys 15, local /tmp/release-check48/smoke-home/ProtonDrive, cli true, health status 'ok', theme system (system dark)
+squashfs-root/AppRun: GLIBC_2.28
+squashfs-root/usr/bin/proton-drive-gui: GLIBC_2.28
+squashfs-root/usr/bin/proton-engine: GLIBC_2.28
+Releases retained: 22

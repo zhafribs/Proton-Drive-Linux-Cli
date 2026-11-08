@@ -15,10 +15,10 @@ file, the evidence, an owner, a fix and a verification step.
 
 | ID | Sev | Area | File | Evidence | Owner | Target | Status |
 |---|---|---|---|---|---|---|---|
-| F-004 | P2 | Tooling | workspace | `cargo fmt --check` is not part of CI and the current tree is not rustfmt-clean; adopting the default formatter would rewrite ~33k lines. | Engineering | G5 | Open: decide between one formatting release and a documented "no fmt gate" decision. |
-| F-005 | P3 | Accessibility | `gui/src/ui/settings.rs` | 50% renders text at half size; it is the approved lower bound, but very small on a 1080p display. | Design | G5 | Open: collect feedback before changing the approved range. |
-| F-006 | P3 | Layout | `gui/src/ui/settings.rs` | At the 720x400 logical minimum, the Appearance card needs vertical scrolling to reach the slider. No overlap or clipping occurs. | Design | G2 | Open: consider a more compact Appearance card if the audit finds horizontal room. |
-| F-007 | P2 | Tooling | workspace | `cargo-audit`, `cargo-deny`, `cargo-machete` and `cargo-udeps` are not installed locally; CI has the license check and clippy only. | Trust | G4 | `cargo-audit 0.22.2` and `cargo-machete 0.9.2` installed; audit pending. |
+| F-004 | P2 | Tooling | workspace | `cargo fmt --check` is not part of CI and the current tree is not rustfmt-clean; adopting the default formatter would rewrite ~33k lines. | Engineering | G5 | Open: G5 decision — one formatting-only release or document the deviation. |
+| F-005 | P3 | Accessibility | `gui/src/ui/settings.rs` | 50% renders text at half size; it is the approved lower bound, but very small on a 1080p display. | Design | G5 | Accepted: the director approved 50%; keep collecting feedback. |
+| F-006 | P3 | Layout | `gui/src/ui/settings.rs` | At the 720x400 logical minimum, the Appearance card needs vertical scrolling to reach the slider. No overlap or clipping occurs. | Design | G2 | Accepted: scrolling is expected at the minimum height. |
+| F-007 | P2 | Tooling | workspace | `cargo-audit`, `cargo-deny`, `cargo-machete` and `cargo-udeps` are not installed locally; CI has the license check and clippy only. | Trust | G4 | Fixed: audit + machete run and recorded in `security-3.20.48.txt`. |
 | F-008 | P2 | UX overlap | `gui/src/ui/settings.rs` | The same `PROTON_SYNC_WORKERS` value is edited by **Scan workers** (Performance) and **Parallel connections** (Fine-tuning), with different labels and help text. | Design/Engineering | G2 | Fixed in 3.20.46 (see F-023). |
 | F-009 | P2 | Security | `crates/core/src/conf.rs` | `conf::write` creates `proton-sync.conf` with the default umask (usually 0644). The **Extra environment variables** card accepts proxy credentials, so the file can be readable by other local users. | Trust | G4 | Fixed in working tree for 3.20.48 (0600 + test). |
 | F-010 | P3 | Consistency | `gui/src/ui/settings.rs` | The **Small** preset is 93%, but the slider steps in 5% increments, so 93% cannot be reached by dragging and the next drag jumps to 95%. | Design | G2 | Fixed in 3.20.46 (Small 95%, see F-024). |
@@ -42,7 +42,7 @@ file, the evidence, an owner, a fix and a verification step.
 | G1 Interface size | 0 | 0 | Shipped `v0.9.0-gui3.20.44`; patch `v0.9.0-gui3.20.45` fixes F-013; both verified |
 | G2 UI/frontend | 0 | 0 | Shipped `v0.9.0-gui3.20.46`; UI P1s closed; G3/G4 carry-over tracked below |
 | G3 Backend/contract | 0 | 0 | Shipped `v0.9.0-gui3.20.47`; engine timeout/lock/state P1s closed; UI logout/pause-race items carried |
-| G4 Security/legal/release | - | - | Not started |
+| G4 Security/legal/release | 0 | 0 | Shipped `v0.9.0-gui3.20.48`; 0 cargo-audit vulnerabilities, action pins and 0600 config tests verified |
 | G5 Consolidation | - | - | Not started |
 
 ## G2 release — 3.20.46 (fixed)
@@ -108,3 +108,21 @@ file, the evidence, an owner, a fix and a verification step.
 ### Remaining open after G3
 
 F-047 (logout ignores errors), F-049 (pause/resume worker race), F-051 (autostart/menu errors), F-055 (status hidden with selection), F-056 (context-menu keyboard path), F-057 (duplicate-name photo copy), F-058 (non-UTF8 paths), F-060 (selective folder error). F-004/F-005/F-006/F-007 remain for G4/G5.
+
+## G4 release — 3.20.48 (fixed)
+
+| ID | Sev | Area | Finding | Fix | Verified |
+|---|---|---|---|---|---|
+| F-009 | P2 | Security | `proton-sync.conf`/prefs were created with the default umask and can hold proxy credentials. | Unix writes set mode 0600; core test checks the mode. | `config_file_is_private`. |
+| F-064 | P2 | CI supply chain | Release workflow used movable action tags (`@v7`, `@v6`). | Checkout, cache and artifact actions pinned to commit SHAs. | CI run 42477805162 passed all jobs with the pins. |
+| F-065 | P1 | Dependencies | `cargo audit` found rustls-webpki 0.103.15 (RUSTSEC-2026-0382) and webpki-roots 1.0.9 (RUSTSEC-2026-0381). | Updated to 0.103.16 and 1.0.10. | `cargo audit`: 0 vulnerabilities. |
+| F-066 | P3 | Dependencies | Three zbus-family crates are flagged unmaintained. | No known vulnerability; documented with an upgrade path. | Accepted in `LICENSE-REVIEW.md`. |
+
+## Remaining G5 backlog
+
+F-047 (logout result, fixed in working tree for 3.20.49), F-049 (pause/resume
+worker race), F-051 (autostart/menu errors, fixed in working tree), F-055
+(status hidden during selection), F-056 (context-menu keyboard path, Ctrl+A
+partial), F-057 (duplicate-name photo copy), F-058 (non-UTF8 paths), F-060
+(selective-folder error). F-004 is the formatter decision; F-005/F-006 are
+accepted product decisions.

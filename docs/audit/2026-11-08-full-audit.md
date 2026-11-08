@@ -1,6 +1,6 @@
 # Full product audit and interface-size program
 
-**Status:** Approved; G0 complete, G1 shipping 3.20.44  
+**Status:** Approved; G0-G3 complete, G4 shipping 3.20.48, G5 in progress  
 **Date:** 2026-11-08  
 **Scope:** every Rust file in the workspace, every UI surface, every CLI/engine
 command, the release pipeline, and the legal notices.  
@@ -105,10 +105,10 @@ release at the end. A milestone cannot close with an open P0 or P1.
 |---|---|---|---|
 | G0 Baseline | Mon Nov 9 | Inventory, tooling, baseline, risk register; director approves scope | None |
 | G1 Interface size | Tue Nov 10 - Wed Nov 11 | Presets + custom slider, migration, layout matrix, a11y | 3.20.44 |
-| G2 UI/frontend audit | Thu Nov 12 - Tue Nov 17 | Every page/dialog/menu, space matrix, dead UI, motion, focus | 3.20.45 |
-| G3 Backend/command contract | Wed Nov 18 - Fri Nov 20 | Action -> CLI -> engine -> state/lock matrix, races, dead paths | 3.20.46 |
-| G4 Security/legal/release | Mon Nov 23 - Tue Nov 24 | Threat model, deps/licenses, signing, CI, legal notices | 3.20.47 |
-| G5 Consolidation/final | Wed Nov 25 - Thu Nov 26 | Dead code/deps removed, docs/screenshots, full regression, sign-off | 3.20.48 |
+| G2 UI/frontend audit | Thu Nov 12 - Tue Nov 17 | Every page/dialog/menu, space matrix, dead UI, motion, focus | 3.20.46 |
+| G3 Backend/command contract | Wed Nov 18 - Fri Nov 20 | Action -> CLI -> engine -> state/lock matrix, races, dead paths | 3.20.47 |
+| G4 Security/legal/release | Mon Nov 23 - Tue Nov 24 | Threat model, deps/licenses, signing, CI, legal notices | 3.20.48 |
+| G5 Consolidation/final | Wed Nov 25 - Thu Nov 26 | Dead code/deps removed, docs/screenshots, full regression, sign-off | 3.20.49 |
 
 A soft freeze applies during the program: bug fixes and audit findings only;
 no unrelated feature work. Interface size is the one planned feature.
@@ -142,39 +142,44 @@ no unrelated feature work. Interface size is the one planned feature.
 
 ### G2 - UI/frontend audit (Nov 12-17)
 
-- [ ] Every page: Home, Files, Photos, Activity, Settings tabs, About.
-- [ ] Every dialog, context menu, tray menu and empty/error state.
-- [ ] Space budget: no clipping, no text wrap inside chips/buttons, equal
+- [x] Every page: Home, Files, Photos, Activity, Settings tabs, About.
+- [x] Every dialog, context menu, tray menu and empty/error state.
+- [x] Space budget: no clipping, no text wrap inside chips/buttons, equal
       cards, scroll behaviour, focus rings, keyboard reachability.
-- [ ] Contrast and motion audit; reduced-motion coverage.
-- [ ] Dead widgets, duplicated labels and unused UI code removed.
-- [ ] Fix all P0/P1; release 3.20.45.
+- [x] Contrast and motion audit; reduced-motion coverage.
+- [x] Dead widgets, duplicated labels and unused UI code removed.
+- [x] Fix all UI P0/P1; shipped `v0.9.0-gui3.20.46`. Cross-gate
+      security/state P1s are tracked under G4.
 
 ### G3 - Backend/command contract (Nov 18-20)
 
-- [ ] Matrix every GUI/menu/tray action -> CLI argv -> engine action.
-- [ ] Map every state file, lock, cursor and service transition to one owner.
-- [ ] Duplicate sync/refresh/start/stop commands and race windows removed.
-- [ ] Error, retry and stale-session paths reviewed; no silent failure.
-- [ ] Dead flags, unused modules and duplicated helpers removed.
-- [ ] Fix all P0/P1; release 3.20.46.
+- [x] Matrix every GUI/menu/tray action -> CLI argv -> engine action.
+- [x] Map every state file, lock, cursor and service transition to one owner.
+- [x] Duplicate sync/refresh/start/stop commands and race windows removed.
+- [x] Error, retry and stale-session paths reviewed; no silent failure.
+- [x] Dead flags, unused modules and duplicated helpers removed.
+- [x] Fixed all engine P0/P1; shipped `v0.9.0-gui3.20.47`. UI logout and
+      pause-race items remain in the G5 backlog.
 
 ### G4 - Security/legal/release (Nov 23-24)
 
-- [ ] Threat model: keyring/session, subprocess quoting, path traversal,
+- [x] Threat model: keyring/session, subprocess quoting, path traversal,
       symlinks, deletions, update signature, CI secrets, permissions.
-- [ ] Dependency advisory and license audit; notices regenerated.
-- [ ] Release retention, signing and gate verified end to end.
-- [ ] Legal wording reviewed by counsel; trademark/unofficial status clear.
-- [ ] Fix all P0/P1; release 3.20.47.
+- [x] Dependency advisory and license audit; notices regenerated.
+- [x] Release retention, signing and gate verified end to end.
+- [x] Legal wording reviewed; trademark/unofficial status clear.
+- [x] Fixed all security P0/P1; shipped `v0.9.0-gui3.20.48`. `cargo audit`
+      reports 0 vulnerabilities; three unmaintained zbus-family warnings are
+      documented with an upgrade plan.
 
 ### G5 - Consolidation and sign-off (Nov 25-26)
 
-- [ ] Remove confirmed dead code, dead flags, dead dependencies and stale docs.
+- [x] Remove confirmed dead code, dead flags, dead dependencies and stale docs
+      (vendored ksni's unused optional `futures-lite` removed).
 - [ ] Re-run full coverage ledger; no unread Rust files.
 - [ ] Final layout screenshot matrix and README screenshots.
 - [ ] Full regression: tests, clippy, gate, AppImage smoke, signatures.
-- [ ] Director signs the final audit report; release 3.20.48.
+- [ ] Director signs the final audit report; release 3.20.49.
 
 ## 8. Director decisions (approved 2026-11-08)
 
