@@ -104,7 +104,11 @@ pub fn pause_for(secs: Option<u64>) -> bool {
         }
         None => true,
     };
-    scheduled && stop()
+    // Even if the autoresume timer could not be scheduled, stop now: the
+    // caller has already recorded the pause, and leaving the engine running
+    // would make the UI lie about the state.
+    let _ = scheduled;
+    stop()
 }
 
 /// Undo a pause: cancel the pending autoresume and start syncing now.
@@ -127,9 +131,25 @@ fn quote_for_unit(v: &str) -> String {
 /// "Sync engine isn't running" stuck on screen in 3.16.91 and earlier. Fall back
 /// to the build we are actually running, else the newest Drive AppImage beside
 /// the old one.
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(meta) = path.metadata() else { return false };
+    if !meta.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
 fn unit_appimage(recorded: Option<&Path>) -> Option<std::path::PathBuf> {
     let recorded = recorded?;
-    if recorded.is_file() {
+    if is_executable_file(recorded) {
         return Some(recorded.to_path_buf());
     }
     let dir = recorded.parent()?;
@@ -139,6 +159,9 @@ fn unit_appimage(recorded: Option<&Path>) -> Option<std::path::PathBuf> {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
         if !(name.starts_with("ProtonDrive-CLI-") && name.ends_with(".AppImage")) {
+            continue;
+        }
+        if !is_executable_file(&entry.path()) {
             continue;
         }
         let mtime = entry
@@ -171,7 +194,20 @@ pub fn ensure_service_unit(appimage: Option<&Path>, smoke: bool) -> String {
     // valid either way, but the canonical path is what the unit records.
     let exe =
         std::fs::canonicalize(&exe).map(|p| p.to_string_lossy().into_owned()).unwrap_or(exe);
-    let conf = crate::paths::resolve().conf_file.to_string_lossy().into_owned();
+    let paths = crate::paths::resolve();
+    let conf = paths.conf_file.to_string_lossy().into_owned();
+    let state_base = paths
+        .state_dir
+        .parent()
+        .unwrap_or(Path::new("/"))
+        .to_string_lossy()
+        .into_owned();
+    let config_base = paths
+        .conf_file
+        .parent()
+        .unwrap_or(Path::new("/"))
+        .to_string_lossy()
+        .into_owned();
     let unit = format!(
         "[Unit]\n\
          Description=Proton Drive folder sync (official CLI, two-way)\n\
@@ -181,6 +217,8 @@ pub fn ensure_service_unit(appimage: Option<&Path>, smoke: bool) -> String {
          Environment={}\n\
          Environment=PROTON_GUI_VERSION={}\n\
          Environment=MALLOC_ARENA_MAX=2\n\
+         Environment={}\n\
+         Environment={}\n\
          EnvironmentFile={}\n\
          ExecStart={} __sync-engine\n\
          Restart=on-failure\n\
@@ -190,6 +228,8 @@ pub fn ensure_service_unit(appimage: Option<&Path>, smoke: bool) -> String {
          WantedBy=default.target\n",
         quote_for_unit(&format!("PROTON_DRIVE_BIN={exe}")),
         crate::GUI_VERSION,
+        quote_for_unit(&format!("XDG_STATE_HOME={state_base}")),
+        quote_for_unit(&format!("XDG_CONFIG_HOME={config_base}")),
         quote_for_unit(&format!("-{conf}")),
         quote_for_unit(&exe)
     );
@@ -197,13 +237,20 @@ pub fn ensure_service_unit(appimage: Option<&Path>, smoke: bool) -> String {
     if current == unit {
         return "ok".to_string();
     }
-    if std::fs::create_dir_all(crate::service_unit_path().parent().unwrap_or(Path::new(".")))
-        .is_err()
-        || std::fs::write(crate::service_unit_path(), &unit).is_err()
-    {
+    let unit_path = crate::service_unit_path();
+    if std::fs::create_dir_all(unit_path.parent().unwrap_or(Path::new("."))).is_err() {
         return "failed".to_string();
     }
-    systemctl(&["--user", "daemon-reload"]);
+    // Write beside the unit and rename, so a crash or ENOSPC never leaves a
+    // truncated service file that the next restart will try to execute.
+    let tmp = unit_path.with_extension("service.tmp");
+    if std::fs::write(&tmp, &unit).is_err() || std::fs::rename(&tmp, &unit_path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return "failed".to_string();
+    }
+    if !systemctl(&["--user", "daemon-reload"]) {
+        return "failed".to_string();
+    }
     "written".to_string()
 }
 
@@ -269,10 +316,17 @@ pub fn folder_stats(local: &str) -> (u64, u64) {
         };
         for e in entries.flatten() {
             let path = e.path();
-            let Ok(meta) = e.metadata() else { continue };
-            if meta.is_dir() {
+            // The engine scanner deliberately ignores symlinks; the GUI's
+            // counter must use the same rule so it never walks outside the
+            // sync root (or stalls on a symlink loop).
+            let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
+            let kind = meta.file_type();
+            if kind.is_symlink() {
+                continue;
+            }
+            if kind.is_dir() {
                 stack.push(path);
-            } else if meta.is_file() {
+            } else if kind.is_file() {
                 files += 1;
                 bytes += meta.len();
             }
@@ -328,8 +382,16 @@ mod tests {
             crate::GUI_VERSION
         ));
         std::fs::write(&current, b"appimage").unwrap();
-        // Unrelated AppImages in the same folder are never picked up.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&current, std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+        // Unrelated or non-executable AppImages are never picked up.
         std::fs::write(dir.join("ZapFast-0.21.0-x86_64.AppImage"), b"x").unwrap();
+        let stale = dir.join("ProtonDrive-CLI-0.9.0-GUI-3.12.0-x86_64.AppImage");
+        std::fs::write(&stale, b"not executable").unwrap();
 
         // An existing path is used as-is; a vanished one resolves to the
         // build we are running.
@@ -361,6 +423,29 @@ mod tests {
         clear_snapshot_cache(&paths).unwrap();
         assert!(!paths.snapshot_file.exists());
         assert!(dir.join("audit-request").is_file());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn folder_stats_skips_symlinks_and_never_leaves_the_root() {
+        let dir = std::env::temp_dir().join(format!(
+            "pdservice-stats-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let outside = dir.join("outside");
+        let root = dir.join("root");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(root.join("a.bin"), b"abc").unwrap();
+        std::fs::write(root.join("sub/b.bin"), b"defg").unwrap();
+        std::fs::write(outside.join("big.bin"), vec![0u8; 4096]).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+        assert_eq!(folder_stats(root.to_str().unwrap()), (2, 7));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

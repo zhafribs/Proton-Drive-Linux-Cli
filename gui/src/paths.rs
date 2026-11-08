@@ -45,11 +45,20 @@ pub fn cli_lock_file() -> &'static PathBuf {
 
 pub fn resolve() -> Paths {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
-    let config = dirs::config_dir().unwrap_or_else(|| home.join(".config"));
-    let state = std::env::var_os("XDG_STATE_HOME")
+    // Ignore empty or relative XDG values: systemd would resolve them against
+    // a different working directory, and the GUI and engine must agree on the
+    // state/config paths or wake/health/lock files silently split.
+    let config = dirs::config_dir()
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| home.join(".config"));
+    let state_base = std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".local/state"))
-        .join("proton-sync");
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| home.join(".local/state"));
+    let state = state_base.join("proton-sync");
+    let data = dirs::data_dir()
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| home.join(".local/share"));
 
     // Qt required a real file and recorded its canonical path (resolve()).
     let appimage = std::env::var_os("APPIMAGE")
@@ -69,12 +78,8 @@ pub fn resolve() -> Paths {
         release_cache_file: state.join("release-cache.json"),
         update_mark_file: state.join("update-pending.json"),
         autostart_file: config.join("autostart/proton-drive.desktop"),
-        menu_desktop_file: home
-            .join(".local/share/applications")
-            .join("proton-drive.desktop"),
-        menu_icon_file: home
-            .join(".local/share/icons/hicolor/scalable/apps")
-            .join("proton-drive-gui.svg"),
+        menu_desktop_file: data.join("applications/proton-drive.desktop"),
+        menu_icon_file: data.join("icons/hicolor/scalable/apps/proton-drive-gui.svg"),
         prefs_file: config.join("ProtonDriveCLI/ProtonDriveGUI.conf"),
         appimage,
     }
@@ -93,7 +98,9 @@ pub fn find_icon_svg() -> Option<PathBuf> {
             cands.push(dir.join("../src/protondrive-icon.svg"));
             cands.push(dir.join("protondrive-icon.svg"));
         }
-    if let Some(home) = dirs::home_dir() {
+    if let Some(data) = dirs::data_dir().filter(|p| p.is_absolute()) {
+        cands.push(data.join("icons/hicolor/scalable/apps/proton-drive-gui.svg"));
+    } else if let Some(home) = dirs::home_dir() {
         cands.push(home.join(".local/share/icons/hicolor/scalable/apps/proton-drive-gui.svg"));
     }
     cands.push(PathBuf::from(

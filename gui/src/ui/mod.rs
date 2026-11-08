@@ -858,7 +858,19 @@ impl App {
             .as_ref()
             .and_then(|i| i.error.as_deref())
             .is_some_and(health::is_login_error);
-        let identity = self.identity.as_ref().map(|i| i.logged_in);
+        // A busy lock, locked keyring or network error is not a sign-out.
+        // Leave the identity unknown so the orb shows Starting/Synced instead
+        // of the welcome screen; `needs_login` from the engine still wins.
+        let transient_identity_error = self
+            .identity
+            .as_ref()
+            .and_then(|i| i.error.as_deref())
+            .is_some_and(|e| !health::is_login_error(e));
+        let identity = if transient_identity_error {
+            None
+        } else {
+            self.identity.as_ref().map(|i| i.logged_in)
+        };
         health::derive_status(
             self.active,
             &self.health.status,
@@ -1028,7 +1040,7 @@ impl App {
                 std::thread::spawn(move || {
                     std::thread::sleep(Duration::from_secs(10));
                     if let Some(c) = cli::resolve_cli() {
-                        let _ = tx.send(Back::Identity(cli::fetch_identity(&c)));
+                        let _ = tx.send(Back::Identity(cli::fetch_identity_waiting(&c)));
                     }
                 });
             }
@@ -2659,9 +2671,18 @@ impl eframe::App for App {
         {
             self.identity_retry = None;
             let tx = self.tx.clone();
+            let waiting = self
+                .login_started
+                .is_some_and(|t| t.elapsed() < Duration::from_secs(300))
+                && !self.logged_in();
             std::thread::spawn(move || {
                 if let Some(c) = cli::resolve_cli() {
-                    let _ = tx.send(Back::Identity(cli::fetch_identity(&c)));
+                    let identity = if waiting {
+                        cli::fetch_identity_waiting(&c)
+                    } else {
+                        cli::fetch_identity(&c)
+                    };
+                    let _ = tx.send(Back::Identity(identity));
                 }
             });
         }

@@ -594,7 +594,7 @@ fn upload_command(
             .map(|n| dir.join(n).to_string_lossy().into_owned()),
     );
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    cli.run_output(&refs, true, None, true)
+    cli.run_output(&refs, true, Some(3600), true)
         .with_context(|| format!("uploading {} photo(s)", names.len()))
 }
 
@@ -760,7 +760,7 @@ fn download(cli: &Cli, dir: &Path, uids: &[String]) -> Result<usize> {
         args.extend(chunk.iter().map(|u| format!("/photos/{u}")));
         args.push(dir.to_string_lossy().into_owned());
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        cli.run(&refs, false, None, true)
+        cli.run(&refs, false, Some(3600), true)
             .with_context(|| format!("downloading {} photo(s)", chunk.len()))?;
         done += chunk.len();
     }
@@ -774,7 +774,7 @@ fn trash_remote(cli: &Cli, photos: &[(String, String)]) -> Result<usize> {
         let mut args: Vec<String> = ["fs", "trash"].iter().map(|s| s.to_string()).collect();
         args.extend(chunk.iter().map(|(_, uid)| format!("/photos/{uid}")));
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        cli.run(&refs, false, None, true)
+        cli.run(&refs, false, Some(300), true)
             .with_context(|| format!("trashing {} photo(s)", chunk.len()))?;
         done += chunk.len();
     }
@@ -886,7 +886,7 @@ fn repair_one(cli: &Cli, dir: &Path, remote: &RemotePhoto) -> Result<bool> {
             rpath.as_str(),
             dest.as_str(),
         ];
-        cli.run(&args, false, None, true)?;
+        cli.run(&args, false, Some(3600), true)?;
         let files: Vec<PathBuf> = std::fs::read_dir(&tmp_root)?
             .filter_map(Result::ok)
             .map(|e| e.path())

@@ -12,6 +12,9 @@ use std::time::Duration;
 /// PATH, the manual-install location.
 pub fn resolve_cli() -> Option<PathBuf> {
     let mut cands: Vec<PathBuf> = Vec::new();
+    if let Some(p) = std::env::var_os("PROTON_DRIVE_BIN") {
+        cands.push(PathBuf::from(p));
+    }
     if let Ok(dir) = std::env::var("APPDIR") {
         cands.push(PathBuf::from(dir).join("usr/bin/proton-drive"));
     }
@@ -32,14 +35,30 @@ pub fn resolve_cli() -> Option<PathBuf> {
     if let Some(p) = which("proton-drive") {
         cands.push(PathBuf::from(p));
     }
-    cands.into_iter().find(|p| p.is_file())
+    cands.into_iter().find(|p| executable(p))
+}
+
+fn executable(path: &Path) -> bool {
+    let Ok(meta) = path.metadata() else { return false };
+    if !meta.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 fn which(name: &str) -> Option<String> {
     std::env::var("PATH").ok().and_then(|paths| {
         std::env::split_paths(&paths)
             .map(|p| p.join(name))
-            .find(|p| p.is_file())
+            .find(|p| executable(p))
             .map(|p| p.to_string_lossy().into_owned())
     })
 }
@@ -56,7 +75,16 @@ fn lock_path() -> PathBuf {
 /// processes refreshing that session at once lose it outright - see
 /// `clilock` for the full story.
 fn run_cli(cli: &Path, args: &[&str], timeout: Duration) -> Result<exec::Output, String> {
-    let _lock = crate::clilock::CliLock::acquire(&lock_path(), crate::clilock::WAIT);
+    run_cli_wait(cli, args, timeout, crate::clilock::WAIT)
+}
+
+fn run_cli_wait(
+    cli: &Path,
+    args: &[&str],
+    timeout: Duration,
+    wait: Duration,
+) -> Result<exec::Output, String> {
+    let _lock = crate::clilock::CliLock::acquire(&lock_path(), wait);
     exec::run(&cli.to_string_lossy(), args, timeout)
 }
 
@@ -107,13 +135,25 @@ struct OwnedBy {
 /// Version + who is signed in (`fs list` of the root returns `ownedBy`).
 /// Independent of the engine: the update check must not wait on this.
 pub fn fetch_identity(cli: &Path) -> Identity {
+    fetch_identity_with_wait(cli, crate::clilock::WAIT)
+}
+
+/// While the sign-in terminal is open, `auth login` holds the CLI lock for up
+/// to 300 s. Waiting the normal 60 s and then running unprotected is exactly
+/// the race that loses the keyring session, so the sign-in probe waits longer.
+pub fn fetch_identity_waiting(cli: &Path) -> Identity {
+    fetch_identity_with_wait(cli, Duration::from_secs(330))
+}
+
+fn fetch_identity_with_wait(cli: &Path, wait: Duration) -> Identity {
     let mut out = Identity { version: "?".into(), ..Default::default() };
     let v = cli_version(cli);
     out.version = if v.is_empty() { "?".into() } else { v };
-    match run_cli(
+    match run_cli_wait(
         cli,
         &["fs", "list", "/my-files", "--json"],
         Duration::from_secs(180),
+        wait,
     ) {
         Ok(o) if o.ok() => {
             // The root listing is an array; take the first entry with an email
@@ -123,7 +163,20 @@ pub fn fetch_identity(cli: &Path) -> Identity {
                 out.logged_in = out.email.is_some();
             }
         }
-        Ok(_) => out.logged_in = false, // not signed in yet
+        Ok(o) => {
+            // A non-zero exit is not proof of sign-out: the lock could be
+            // busy, the keyring locked, or the network down. Keep the error
+            // so the UI can avoid showing the welcome screen for a transient
+            // failure; an explicit auth/401 message still counts as a login
+            // error via `health::is_login_error`.
+            let msg = o.stderr.trim().to_string();
+            out.error = Some(if msg.is_empty() {
+                format!("proton-drive exited with code {}", o.code)
+            } else {
+                msg
+            });
+            out.logged_in = false;
+        }
         Err(e) => out.error = Some(e),
     }
     out
@@ -447,6 +500,14 @@ pub fn arm_photo_hold(dir: &std::path::Path, state_dir: &std::path::Path) {
     let missing = synced.keys().any(|name| !dir.join(name).is_file());
     if missing {
         let _ = std::fs::create_dir_all(dir);
+        // A shared/external photo folder can contain a planted symlink; remove
+        // the link itself instead of letting write() truncate its target.
+        if std::fs::symlink_metadata(&marker)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            let _ = std::fs::remove_file(&marker);
+        }
         let _ = std::fs::write(marker, b"");
     } else {
         let _ = std::fs::remove_file(marker);
@@ -585,7 +646,9 @@ pub fn login_script(cli: &Path) -> String {
     // overlaps the sync engine's cycle can clobber the session it is
     // writing. flock(1) is util-linux and is always present.
     let lock = shell_quote(&lock_path().to_string_lossy());
-    format!("flock -w 300 {lock} {q} auth login; echo; echo \"You can close this window now.\"")
+    format!(
+        "flock -w 300 {lock} {q} auth login; rc=$?; echo;          if [ $rc -ne 0 ]; then            echo \"Sign-in did not finish. The sync engine may be busy; close this window and try again.\";          else            echo \"You can close this window now.\";          fi"
+    )
 }
 
 fn shell_quote(s: &str) -> String {
@@ -603,7 +666,9 @@ mod tests {
         // flock wraps the CLI so a sign-in cannot race the sync engine.
         assert!(s.contains("'/opt/My Apps/proton-drive' auth login"));
         assert!(s.contains("flock -w 300"));
-        assert!(s.ends_with("You can close this window now.\""));
+        assert!(s.contains("You can close this window now."));
+        assert!(s.contains("Sign-in did not finish"));
+        assert!(!s.contains("auth login; echo"));
     }
 
     #[test]

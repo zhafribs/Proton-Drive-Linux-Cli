@@ -16,6 +16,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::health::state_dir;
+
 fn approval_matches(
     approval: &delete_approval::DeleteApproval,
     result: &crate::plan::PlanResult,
@@ -26,16 +28,6 @@ fn approval_matches(
         && approval.cloud == result.deletes_held_cloud as u64
         && result.deletes_held_local_digest.as_deref().unwrap_or("") == approval.local_digest
         && result.deletes_held_cloud_digest.as_deref().unwrap_or("") == approval.cloud_digest
-}
-
-fn state_dir() -> std::path::PathBuf {
-    if let Some(xdg) = std::env::var_os("XDG_STATE_HOME") {
-        std::path::PathBuf::from(xdg).join("proton-sync")
-    } else {
-        dirs::home_dir()
-            .unwrap_or_else(|| std::path::Path::new("/").to_path_buf())
-            .join(".local/state/proton-sync")
-    }
 }
 
 fn cfg_values() -> std::collections::BTreeMap<String, String> {

@@ -1,3 +1,28 @@
+## 3.20.47 — 2026-11-08
+
+- **A hung CLI command can no longer freeze sync.** Engine calls now have a
+  deadline; a command that overruns it is killed and reported instead of
+  holding the single CLI slot forever.
+- **The CLI lock is genuinely re-entrant.** The first locked call sets the
+  thread depth, so a nested CLI call cannot deadlock on the app-wide lock.
+- **State files have one owner.** The engine resolves the state directory in
+  one place, and the service unit pins `XDG_STATE_HOME` and `XDG_CONFIG_HOME`
+  so a GUI launched with custom XDG dirs and the background engine agree on
+  health, wake files and `cli.lock`.
+- **Sign-in cannot lose the keyring session.** `auth login` never runs without
+  the lock, and the identity probe waits for a slow sign-in instead of running
+  unprotected after 60 seconds.
+- **A transient CLI failure is not a sign-out.** Busy locks, locked keyrings
+  and network errors no longer send the user to the welcome screen.
+- **Pause always stops the engine.** A failed autoresume timer no longer
+  leaves sync running while the UI says paused.
+- **Service updates are atomic and executable-only.** The unit is written to a
+  temp file and renamed, and only executable AppImages can become `ExecStart`.
+- **Safer file handling.** The GUI and engine resolve the CLI the same way
+  (including `PROTON_DRIVE_BIN`), the folder counter skips symlinks, and the
+  photo-hold marker cannot follow a planted symlink.
+- **App-menu files honor `XDG_DATA_HOME`.**
+
 ## 3.20.46 — 2026-11-08
 
 - **Keyboard navigation reaches every page and control.** Sidebar rows and

@@ -6,21 +6,15 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use std::env;
+use std::io::Read;
 use std::path::PathBuf;
-use std::process::Command;
-use std::sync::{Mutex, OnceLock};
+use std::process::{Child, Command, Stdio};
+use std::sync::{Mutex, OnceLock, mpsc};
+use std::time::{Duration, Instant};
 
 use fs2::FileExt;
 
-fn state_dir() -> PathBuf {
-    if let Some(xdg) = env::var_os("XDG_STATE_HOME") {
-        PathBuf::from(xdg).join("proton-sync")
-    } else {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("/"))
-            .join(".local/state/proton-sync")
-    }
-}
+use crate::health::state_dir;
 
 fn cli_lock_file() -> PathBuf {
     static LOCK: OnceLock<PathBuf> = OnceLock::new();
@@ -52,6 +46,7 @@ where
             let _ = fh.lock_exclusive();
             *CLI_FH.lock().unwrap() = Some(fh);
         }
+        CLI_DEPTH.set(1);
         let result = f();
         CLI_DEPTH.set(0);
         if let Some(fh) = CLI_FH.lock().unwrap().take() {
@@ -70,19 +65,88 @@ where
 pub fn bin() -> Option<PathBuf> {
     if let Some(p) = env::var_os("PROTON_DRIVE_BIN") {
         let p = PathBuf::from(p);
-        if p.exists() {
+        if executable(&p) {
             return Some(p);
         }
     }
     env::var_os("PATH").and_then(|paths| {
         env::split_paths(&paths).find_map(|dir| {
             let candidate = dir.join("proton-drive");
-            if candidate.is_file() {
-                Some(candidate)
-            } else {
-                None
-            }
+            executable(&candidate).then_some(candidate)
         })
+    })
+}
+
+fn executable(path: &std::path::Path) -> bool {
+    let Ok(meta) = path.metadata() else { return false };
+    if !meta.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+/// Wait for a child and collect its pipes without an unbounded wait. A
+/// hung `proton-drive` (network stall, keyring prompt) must not pin the
+/// engine's only CLI slot forever. `None` keeps the old no-deadline behaviour
+/// for callers that deliberately need it (large photo transfers).
+fn wait_with_timeout(mut child: Child, timeout: Option<Duration>) -> Result<std::process::Output> {
+    let mut out_pipe = child.stdout.take().ok_or_else(|| anyhow!("no stdout pipe"))?;
+    let mut err_pipe = child.stderr.take().ok_or_else(|| anyhow!("no stderr pipe"))?;
+    let (tx_out, rx_out) = mpsc::channel();
+    let (tx_err, rx_err) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = out_pipe.read_to_end(&mut buf);
+        let _ = tx_out.send(buf);
+    });
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = err_pipe.read_to_end(&mut buf);
+        let _ = tx_err.send(buf);
+    });
+
+    let started = Instant::now();
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait().context("waiting for proton-drive")? {
+            Some(status) => break status,
+            None => {
+                if let Some(limit) = timeout
+                    && started.elapsed() >= limit
+                {
+                    timed_out = true;
+                    let _ = child.kill();
+                    break child.wait().context("reaping proton-drive")?;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    };
+
+    let grab = |rx: mpsc::Receiver<Vec<u8>>| -> Vec<u8> {
+        rx.recv_timeout(Duration::from_secs(2)).unwrap_or_default()
+    };
+    let stdout = grab(rx_out);
+    let mut stderr = grab(rx_err);
+    if timed_out
+        && let Some(limit) = timeout
+    {
+        stderr.extend_from_slice(
+            format!("\ncommand timed out after {}s", limit.as_secs()).as_bytes(),
+        );
+    }
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
     })
 }
 
@@ -111,7 +175,7 @@ impl Cli {
         &self,
         args: &[&str],
         json: bool,
-        _timeout: Option<u64>,
+        timeout: Option<u64>,
         locked: bool,
     ) -> Result<std::process::Output> {
         let mut cmd_args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
@@ -121,7 +185,10 @@ impl Cli {
         let bin = self.bin.clone();
         let do_run = move || -> Result<std::process::Output> {
             let mut cmd = Command::new(&bin);
-            cmd.args(&cmd_args);
+            cmd.args(&cmd_args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
             for key in [
                 "PATH",
                 "HOME",
@@ -138,8 +205,8 @@ impl Cli {
                     cmd.env(key, v);
                 }
             }
-            let out = cmd.output().with_context(|| "running proton-drive")?;
-            Ok(out)
+            let child = cmd.spawn().with_context(|| "running proton-drive")?;
+            wait_with_timeout(child, timeout.map(Duration::from_secs))
         };
         if locked { with_cli_lock(do_run) } else { do_run() }
     }
@@ -176,7 +243,8 @@ impl Cli {
     }
 
     pub fn run_json(&self, args: &[&str], locked: bool) -> Result<serde_json::Value> {
-        let s = self.run(args, true, None, locked)?;
+        // Metadata calls are bounded; a stuck listing must not pin the engine.
+        let s = self.run(args, true, Some(180), locked)?;
         Ok(serde_json::from_str(&s)?)
     }
 }
@@ -266,5 +334,31 @@ mod flag_tests {
         assert!(parse_flag(Some("on"), false));
         assert!(parse_flag(None, true));
         assert!(!parse_flag(None, false));
+    }
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn a_hung_command_is_killed_at_the_deadline() {
+        let dir = std::env::temp_dir().join(format!("pd-cli-timeout-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("fake-proton-drive");
+        std::fs::write(&bin, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cli = Cli::for_test(bin);
+        let started = Instant::now();
+        let out = cli
+            .run_output(&["fs", "list", "/my-files"], true, Some(1), false)
+            .unwrap();
+        assert!(!out.status.success());
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("timed out"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

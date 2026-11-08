@@ -11,15 +11,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-fn state_dir() -> std::path::PathBuf {
-    if let Some(xdg) = std::env::var_os("XDG_STATE_HOME") {
-        std::path::PathBuf::from(xdg).join("proton-sync")
-    } else {
-        dirs::home_dir()
-            .unwrap_or_else(|| std::path::Path::new("/").to_path_buf())
-            .join(".local/state/proton-sync")
-    }
-}
+use crate::health::state_dir;
 
 fn parent_of(rel: &str) -> String {
     if let Some(pos) = rel.rfind('/') {
