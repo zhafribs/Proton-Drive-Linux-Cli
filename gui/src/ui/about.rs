@@ -464,6 +464,38 @@ fn details(app: &mut App, ui: &mut egui::Ui) {
             detail_row(ui, "Install", install, None);
             detail_row(ui, "Configuration", &conf, Some(&conf_full));
             detail_row(ui, "State", &state, Some(&state_full));
+            if !app.recovery.check_loaded {
+                app.recovery.last_check =
+                    super::recovery::load_check(&app.paths.state_dir);
+                app.recovery.check_loaded = true;
+            }
+            let (check, check_detail) = match &app.recovery.last_check {
+                Some(result) => {
+                    let when = chrono::DateTime::<chrono::Utc>::from_timestamp(
+                        result.ts as i64,
+                        0,
+                    )
+                    .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string())
+                    .unwrap_or_else(|| "unknown time".into());
+                    (
+                        if result.ok {
+                            "passed"
+                        } else {
+                            "needs attention"
+                        },
+                        format!(
+                            "{when} \u{b7} {}\n{}",
+                            result.summary,
+                            result.details.join("\n")
+                        ),
+                    )
+                }
+                None => (
+                    "not run",
+                    "Run it from Recovery \u{2192} State snapshots.".to_string(),
+                ),
+            };
+            detail_row(ui, "Recovery check", check, Some(&check_detail));
             ui.add_space(8.0);
             if ui.button("Copy diagnostics").clicked() {
                 let text = format!(
@@ -473,7 +505,9 @@ fn details(app: &mut App, ui: &mut egui::Ui) {
                      Platform {} {}\n\
                      Install {install}\n\
                      Config {conf_full}\n\
-                     State {state_full}",
+                     State {state_full}\n\
+                     Recovery check {check}\n\
+                     {check_detail}",
                     std::env::consts::OS,
                     std::env::consts::ARCH,
                 );

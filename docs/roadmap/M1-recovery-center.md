@@ -1,6 +1,6 @@
 # Milestone M1 — Recovery Center
 
-**Status:** in progress — P1 complete (local trash manifest + Recovery view)  
+**Status:** complete — released as `v0.9.0-gui3.21.0`
 **Target release:** `v0.9.0-gui3.21.0` (one signed release)  
 **Theme:** make every destructive path reviewable and reversible from the GUI.
 

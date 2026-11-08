@@ -1,3 +1,28 @@
+## 3.21.0 — 2026-11-08
+
+### Recovery Center
+
+- **Local trash has a manifest and a view.** Every local deletion records its
+  original path, time, size and kind; the Recovery page restores it without
+  overwriting anything, or permanently deletes it after confirmation. Legacy
+  entries written before the manifest are still found on disk.
+- **Conflict Center.** Engine-created conflict copies are grouped with their
+  canonical file. You can keep the current file (the copy moves to local
+  trash), use the conflict copy (the current file is backed up to local trash
+  first), keep both (the conflict is hidden until one changes), or open the
+  folder.
+- **Checksum-verified state snapshots.** A snapshot is taken before a root
+  change, an approved mass delete and an update swap, and can be created
+  manually. Restore verifies SHA-256, preserves the current state, refuses a
+  snapshot from different sync roots, and wakes the engine to re-plan.
+- **Recovery check and drill.** A read-only check reports sync history,
+  snapshot, trash and conflict health in About → Diagnostics. The new engine
+  test corrupts `state.json`, leaves an interrupted download stage behind,
+  restores the snapshot and proves no local file is deleted.
+- **Fingerprint and no-replace rules.** Conflict actions re-check both files;
+  local trash restore uses hard-link/copy fallbacks that never replace a
+  destination.
+
 ## 3.20.52 — 2026-11-08
 
 - **Uploads use the folder that was open when the picker opened.** A late
