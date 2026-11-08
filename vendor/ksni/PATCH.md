@@ -1,12 +1,17 @@
 # Local ksni patch
 
-`ksni` 0.3.6 is vendored here for one addition: `Handle::update_icon` /
-`blocking::Handle::update_icon`. It refreshes the StatusNotifierItem
-properties and icon but skips `Service::update_menu`, so an animated tray icon
-does not rebuild the D-Bus menu on every frame.
+`ksni` 0.3.6 is vendored here for one safety fix: `Service::new` no longer
+asserts on `zbus::Error::NameTaken`. A same-session peer can own the
+predictable StatusNotifierItem bus name first; the old assert aborted the
+whole GUI (release builds use `panic = "abort"`). The error now makes the tray
+unavailable, which the GUI already handles.
 
-Upstream: https://github.com/iovxw/ksni (Unlicense). Re-apply the three hunks
-in `src/lib.rs`, `src/service.rs` and `src/blocking.rs` when upgrading.
+The earlier `update_icon` animation patch was removed in the 2026-11-08 audit
+because nothing calls it; the crate matches upstream except the NameTaken fix
+and the dropped optional `futures-lite` feature dependency.
+
+Upstream: https://github.com/iovxw/ksni (Unlicense). Re-apply the one hunk in
+`src/service.rs` when upgrading.
 
 Audit 2026-11-08: removed the optional `futures-lite` dependency. It was only
 listed by the unused `async-io` feature and had no source reference; the

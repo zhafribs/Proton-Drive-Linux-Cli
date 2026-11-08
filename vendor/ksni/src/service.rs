@@ -171,11 +171,6 @@ pub(crate) async fn run<T: Tray>(
                             let _ = service.update(&conn).await;
                             let _ = singal.send(());
                         }
-                        HandleReuest::UpdateIcon(singal) => {
-                            let mut service = service.lock().await;
-                            let _ = service.update_icon_only(&conn).await;
-                            let _ = singal.send(());
-                        }
                         HandleReuest::Shutdown(singal) => {
                             let _ = conn.close().await;
                             let _ = singal.send(());
@@ -208,10 +203,6 @@ impl<T: Tray> Service<T> {
             item_id_offset: 0,
             revision: 0,
         }))
-    }
-
-    async fn update_icon_only(&mut self, conn: &Connection) -> zbus::Result<()> {
-        self.update_properties(conn).await
     }
 
     async fn update_properties(&mut self, conn: &Connection) -> zbus::Result<()> {

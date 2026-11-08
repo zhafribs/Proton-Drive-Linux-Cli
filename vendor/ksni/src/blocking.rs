@@ -207,11 +207,6 @@ impl<T> Handle<T> {
         compat::block_on(self.0.update(f))
     }
 
-    /// Refresh only the icon/properties, not the menu. Local patch.
-    pub fn update_icon<R, F: FnOnce(&mut T) -> R>(&self, f: F) -> Option<R> {
-        compat::block_on(self.0.update_icon(f))
-    }
-
     /// Shutdown the tray service
     pub fn shutdown(&self) -> ShutdownAwaiter {
         ShutdownAwaiter(self.0.shutdown())

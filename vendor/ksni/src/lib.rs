@@ -517,9 +517,6 @@ async fn spawn_with_options<T: Tray>(
 
 pub(crate) enum HandleReuest {
     Update(oneshot::Sender<()>),
-    /// Refresh the SNI icon only, without rebuilding the menu or the rest of
-    /// the tray properties. Local pstack patch for animated status icons.
-    UpdateIcon(oneshot::Sender<()>),
     Shutdown(oneshot::Sender<()>),
 }
 
@@ -540,19 +537,6 @@ impl<T> Handle<T> {
             let r = f(&mut service.lock().await.tray);
             let (tx, rx) = oneshot::channel();
             if self.sender.send(HandleReuest::Update(tx)).is_ok() {
-                let _ = rx.await;
-                return Some(r);
-            }
-        }
-        None
-    }
-
-    /// Refresh only the icon/properties, not the menu. Local patch.
-    pub async fn update_icon<R, F: FnOnce(&mut T) -> R>(&self, f: F) -> Option<R> {
-        if let Some(service) = self.service.upgrade() {
-            let r = f(&mut service.lock().await.tray);
-            let (tx, rx) = oneshot::channel();
-            if self.sender.send(HandleReuest::UpdateIcon(tx)).is_ok() {
                 let _ = rx.await;
                 return Some(r);
             }
