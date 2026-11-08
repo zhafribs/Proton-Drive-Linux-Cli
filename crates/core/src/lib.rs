@@ -5,6 +5,7 @@
 //! drifting apart.
 
 pub mod conf;
+pub mod conflict;
 pub mod delete_approval;
 pub mod health;
 pub mod local_trash;

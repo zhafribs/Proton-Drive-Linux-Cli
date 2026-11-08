@@ -440,6 +440,47 @@ fn remove_manifest_entry(manifest: &mut Manifest, stored_rel: &str) {
         .retain(|e| e.stored_rel != stored_rel && !e.stored_rel.starts_with(&prefix));
 }
 
+/// Move a local path into the trash and record it. Used by the Recovery page
+/// when a conflict action needs to back up the canonical file. A manifest
+/// write failure is not fatal: the file is already in the trash, and the
+/// legacy scan still finds it.
+pub fn trash_local(state_dir: &Path, local_root: &Path, rel: &str) -> Result<Entry, String> {
+    if !safe_rel(rel) {
+        return Err("refusing to trash an unsafe path".into());
+    }
+    let full = local_root.join(rel);
+    let meta = fs::symlink_metadata(&full)
+        .map_err(|e| format!("reading {}: {e}", full.display()))?;
+    if meta.file_type().is_symlink() {
+        return Err(format!("refusing to trash a symlink: {}", full.display()));
+    }
+    let trash = trash_dir(state_dir);
+    let mut stored_rel = rel.to_string();
+    let mut suffix = 1u32;
+    while trash.join(&stored_rel).exists() {
+        suffix += 1;
+        stored_rel = format!("{rel}.{suffix}");
+    }
+    let dst = trash.join(&stored_rel);
+    if let Some(parent) = dst.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("creating {}: {e}", parent.display()))?;
+    }
+    move_out(&full, &dst, &meta)?;
+    let entry = Entry {
+        stored_rel,
+        original_rel: rel.to_string(),
+        trashed_at: now_secs(),
+        size: if meta.is_file() { meta.len() } else { 0 },
+        kind: if meta.is_dir() { "dir" } else { "file" }.to_string(),
+        legacy: false,
+    };
+    if let Err(e) = record(state_dir, &entry) {
+        eprintln!("WARN trashed {rel} but could not update the manifest: {e}");
+    }
+    Ok(entry)
+}
+
 /// Restore one entry to its original relative path. The destination must not
 /// exist, parent components must not be symlinks, and the move is done with
 /// no-replace semantics even across filesystems.
@@ -593,6 +634,24 @@ mod tests {
         assert_eq!(fs::read(&copy).unwrap(), b"abc");
         assert!(copy_file_no_replace(&file, &copy, &file_meta).is_err());
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn trash_local_records_and_restores() {
+        let state = temp("trash-local-state");
+        let root = temp("trash-local-root");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("a.txt"), b"abc").unwrap();
+        let entry = trash_local(&state, &root, "a.txt").unwrap();
+        assert!(!root.join("a.txt").exists());
+        assert!(trash_dir(&state).join("a.txt").exists());
+        let listed = entries(&state).unwrap();
+        assert_eq!(listed.len(), 1);
+        restore(&state, &root, &listed[0]).unwrap();
+        assert_eq!(fs::read(root.join("a.txt")).unwrap(), b"abc");
+        let _ = entry;
+        let _ = fs::remove_dir_all(&state);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
