@@ -69,21 +69,38 @@ pub fn ensure_remote_dir(
     Ok(())
 }
 
-fn trash_local_path(rel: &str, local_root: &Path, trash_dir: &Path) -> Result<()> {
+fn trash_local_path(
+    rel: &str,
+    local_root: &Path,
+    trash_dir: &Path,
+) -> Result<proton_core::local_trash::Entry> {
     let full = local_root.join(rel);
-    let mut dst = trash_dir.join(rel);
-    let mut suffix = 1u32;
-    while dst.exists() {
-        suffix += 1;
-        dst = trash_dir.join(format!("{rel}.{suffix}"));
+    let meta = fs::symlink_metadata(&full)
+        .with_context(|| format!("reading {}", full.display()))?;
+    if meta.file_type().is_symlink() {
+        anyhow::bail!("refusing to trash a symlink: {}", full.display());
     }
+    let mut stored_rel = rel.to_string();
+    let mut suffix = 1u32;
+    while trash_dir.join(&stored_rel).exists() {
+        suffix += 1;
+        stored_rel = format!("{rel}.{suffix}");
+    }
+    let dst = trash_dir.join(&stored_rel);
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent)?;
     }
     fs::rename(&full, &dst)
         .with_context(|| format!("moving {} to {}", full.display(), dst.display()))?;
     eprintln!("TRASH  local {}", rel);
-    Ok(())
+    Ok(proton_core::local_trash::Entry {
+        stored_rel,
+        original_rel: rel.to_string(),
+        trashed_at: proton_core::local_trash::now_secs(),
+        size: if meta.is_file() { meta.len() } else { 0 },
+        kind: if meta.is_dir() { "dir" } else { "file" }.to_string(),
+        legacy: false,
+    })
 }
 
 /// A cloud-supplied relative path is safe only if every component is a plain
@@ -456,7 +473,8 @@ pub fn execute(
     _filter: &Filter,
 ) -> Result<(PathSet, PathSet, Fingerprints)> {
     let cli = Cli::new()?;
-    let trash_dir = state_dir().join("trash");
+    let state = state_dir();
+    let trash_dir = state.join("trash");
     let mut tree: RemoteTree = remote.clone();
     let mut created_dirs: BTreeSet<String> = BTreeSet::new();
     let mut failed: BTreeSet<String> = BTreeSet::new();
@@ -510,9 +528,18 @@ pub fn execute(
                 if !planned_file_matches(local_root, rel, local.get(rel)) {
                     eprintln!("FAILED trash {}: local file changed after the scan", rel);
                     failed.insert(rel.clone());
-                } else if let Err(e) = trash_local_path(rel, local_root, &trash_dir) {
-                    eprintln!("FAILED trash {}: {e:#}", rel);
-                    failed.insert(rel.clone());
+                } else {
+                    match trash_local_path(rel, local_root, &trash_dir) {
+                        Ok(entry) => {
+                            if let Err(e) = proton_core::local_trash::record(&state, &entry) {
+                                eprintln!("WARN trash manifest {}: {e}", rel);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("FAILED trash {}: {e:#}", rel);
+                            failed.insert(rel.clone());
+                        }
+                    }
                 }
             }
             Action::TrashRemote { rel, .. } => {
@@ -798,9 +825,14 @@ mod tests {
         fs::write(root.join("a/same.txt"), b"first").unwrap();
         fs::write(root.join("b/same.txt"), b"second").unwrap();
 
-        trash_local_path("a/same.txt", &root, &trash).unwrap();
-        trash_local_path("b/same.txt", &root, &trash).unwrap();
+        let first = trash_local_path("a/same.txt", &root, &trash).unwrap();
+        let second = trash_local_path("b/same.txt", &root, &trash).unwrap();
 
+        assert_eq!(first.stored_rel, "a/same.txt");
+        assert_eq!(first.original_rel, "a/same.txt");
+        assert_eq!(first.kind, "file");
+        assert_eq!(first.size, 5);
+        assert_eq!(second.stored_rel, "b/same.txt");
         assert_eq!(fs::read(trash.join("a/same.txt")).unwrap(), b"first");
         assert_eq!(fs::read(trash.join("b/same.txt")).unwrap(), b"second");
         let _ = fs::remove_dir_all(root);
