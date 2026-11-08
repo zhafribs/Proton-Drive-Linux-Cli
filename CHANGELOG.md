@@ -1,3 +1,11 @@
+## 3.20.45 — 2026-11-08
+
+- **The interface-size slider no longer jumps to the ends.** The percentage
+  still updates while you drag, but the zoom is applied when you release the
+  slider (or immediately for a click, wheel or arrow key). Applying zoom
+  mid-drag moved the slider under the pointer and could throw the value to
+  50% or 200% in one gesture.
+
 ## 3.20.44 — 2026-11-08
 
 - **Interface size is now fully adjustable.** Appearance offers five presets

@@ -991,6 +991,7 @@ fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
                 ];
                 let mut pct = app.draft.ui_scale_pct;
                 let mut changed = false;
+                let mut apply = false;
 
                 ui.horizontal_wrapped(|ui| {
                     for (name, preset) in PRESETS {
@@ -998,6 +999,7 @@ fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
                         if ui.selectable_label(selected, name).clicked() {
                             pct = preset;
                             changed = true;
+                            apply = true;
                         }
                     }
                 });
@@ -1014,8 +1016,18 @@ fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
                     .step_by(5.0)
                     .show_value(false)
                     .trailing_fill(true);
-                    if ui.add(slider).changed() {
+                    let response = ui.add(slider);
+                    if response.changed() {
                         changed = true;
+                    }
+                    // Do not zoom while the pointer is dragging. Changing the
+                    // zoom changes the slider's own geometry under the
+                    // pointer, which feeds back and can throw the value to
+                    // 50% or 200% in one gesture. The percentage still
+                    // updates live; the zoom applies on release (or at once
+                    // for a click, wheel or arrow key).
+                    if scale_applies(changed, response.dragged(), response.drag_stopped()) {
+                        apply = true;
                     }
                     ui.add_sized(
                         [42.0, 20.0],
@@ -1028,13 +1040,18 @@ fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
                     {
                         pct = crate::prefs::UiScale::DEFAULT;
                         changed = true;
+                        apply = true;
                     }
                 });
-                if changed {
-                    app.draft.ui_scale_pct = pct;
-                    let scale = crate::prefs::UiScale::from_percent(pct);
-                    app.preview_scale = Some(scale);
-                    ui.ctx().set_zoom_factor(scale.factor());
+                if changed || apply {
+                    if changed {
+                        app.draft.ui_scale_pct = pct;
+                    }
+                    if apply {
+                        let scale = crate::prefs::UiScale::from_percent(pct);
+                        app.preview_scale = Some(scale);
+                        ui.ctx().set_zoom_factor(scale.factor());
+                    }
                 }
             });
         });
@@ -1303,9 +1320,31 @@ fn sel_row(app: &mut App, ui: &mut egui::Ui, rel: &str, label: &str) {
     });
 }
 
+/// The interface-slider zoom may only change when the value settled: on a
+/// click/wheel/keyboard change, or when a drag is released. Applying it while
+/// the pointer is still down moves the rail under the pointer and causes a
+/// runaway zoom.
+fn scale_applies(changed: bool, dragged: bool, drag_stopped: bool) -> bool {
+    drag_stopped || (changed && !dragged)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interface_scale_waits_for_the_drag_to_end() {
+        // While the pointer is down the label may change, but the zoom must
+        // not: the rail would move under the pointer and the value would race
+        // to the ends.
+        assert!(!scale_applies(true, true, false));
+        // A click, wheel or arrow key settles immediately.
+        assert!(scale_applies(true, false, false));
+        // Releasing a drag applies the last value even when egui does not
+        // report another value change on that frame.
+        assert!(scale_applies(false, false, true));
+        assert!(!scale_applies(false, true, false));
+    }
 
     #[test]
     fn parses_transfer_concurrency() {
