@@ -55,8 +55,8 @@ file.
 | 35 | `gui/src/notify.rs` | 52 | L | Engineering | Pending | No |  |
 | 36 | `gui/src/paths.rs` | 103 | H | Trust | Pending | Yes |  |
 | 37 | `gui/src/portal.rs` | 228 | H | Trust | Pending | Yes |  |
-| 38 | `gui/src/prefs.rs` | 319 | L | Engineering | Partial (G1) | No | Interface-size path read; full-file review still pending. |
-| 39 | `gui/src/release.rs` | 1549 | H | Trust | Pending | Yes |  |
+| 38 | `gui/src/prefs.rs` | 319 | L | Engineering | Read (G2 start) | No | Whole file read with the interface-size migration. |
+| 39 | `gui/src/release.rs` | 1549 | H | Trust | Read (G2 start) | Yes | Whole-file read; double-read still required.
 | 40 | `gui/src/service.rs` | 377 | H | Trust | Pending | Yes |  |
 | 41 | `gui/src/statewatch.rs` | 155 | L | Engineering | Pending | No |  |
 | 42 | `gui/src/system_theme.rs` | 481 | L | Design | Pending | No |  |
@@ -68,7 +68,7 @@ file.
 | 48 | `gui/src/ui/home.rs` | 442 | M | Design | Pending | No |  |
 | 49 | `gui/src/ui/mod.rs` | 3140 | H | Trust | Partial (G1) | Yes | Interface-size path read; full-file review still pending. |
 | 50 | `gui/src/ui/photos.rs` | 1724 | M | Design | Pending | No |  |
-| 51 | `gui/src/ui/settings.rs` | 1396 | H | Trust | Partial (G1) | Yes | Interface-size path read; full-file review still pending. |
+| 51 | `gui/src/ui/settings.rs` | 1396 | H | Trust | Read (G2 start) | Yes | Whole-file read; double-read still required.
 | 52 | `gui/src/ui/widgets.rs` | 948 | M | Design | Pending | No |  |
 | 53 | `gui/src/util.rs` | 124 | L | Engineering | Pending | No |  |
 | 54 | `vendor/ksni/src/blocking.rs` | 240 | M | Engineering | Pending | No |  |
@@ -140,11 +140,11 @@ display it, and at 720x540, 1024x720, 1280x800, 1440x900 and 1920x1080.
 
 | Area | Files | Read | Double-read | Open findings |
 |---|---:|---:|---:|---:|
-| crates/core | 7 | 0 | 0 | 0 |
+| crates/core | 7 | 0 | 0 | 1 |
 | crates/engine | 20 | 0 | 0 | 0 |
-| gui | 27 | 0 | 0 | 3 |
+| gui | 27 | 3 | 0 | 8 |
 | vendor/ksni | 7 | 0 | 0 | 0 |
-| **Total** | **60** | **0** | **0** | **3** |
+| **Total** | **60** | **3** | **0** | **9** |
 
 The G1 partial reads cover `gui/src/prefs.rs`, `gui/src/ui/settings.rs`,
 `gui/src/ui/mod.rs`, `gui/src/main.rs`, `gui/src/cli.rs`,

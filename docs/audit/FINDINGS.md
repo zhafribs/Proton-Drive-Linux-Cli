@@ -19,6 +19,11 @@ file, the evidence, an owner, a fix and a verification step.
 | F-005 | P3 | Accessibility | `gui/src/ui/settings.rs` | 50% renders text at half size; it is the approved lower bound, but very small on a 1080p display. | Design | G5 | Open: collect feedback before changing the approved range. |
 | F-006 | P3 | Layout | `gui/src/ui/settings.rs` | At the 720x400 logical minimum, the Appearance card needs vertical scrolling to reach the slider. No overlap or clipping occurs. | Design | G2 | Open: consider a more compact Appearance card if the audit finds horizontal room. |
 | F-007 | P2 | Tooling | workspace | `cargo-audit`, `cargo-deny`, `cargo-machete` and `cargo-udeps` are not installed locally; CI has the license check and clippy only. | Trust | G4 | Open: install or record the supported substitute before the dependency audit. |
+| F-008 | P2 | UX overlap | `gui/src/ui/settings.rs` | The same `PROTON_SYNC_WORKERS` value is edited by **Scan workers** (Performance) and **Parallel connections** (Fine-tuning), with different labels and help text. | Design/Engineering | G2 | Open: keep one control and link the other card to it. |
+| F-009 | P2 | Security | `crates/core/src/conf.rs` | `conf::write` creates `proton-sync.conf` with the default umask (usually 0644). The **Extra environment variables** card accepts proxy credentials, so the file can be readable by other local users. | Trust | G4 | Open: create the file with mode 0600 on Unix and add a test. |
+| F-010 | P3 | Consistency | `gui/src/ui/settings.rs` | The **Small** preset is 93%, but the slider steps in 5% increments, so 93% cannot be reached by dragging and the next drag jumps to 95%. | Design | G2 | Open: decide between 95% and a 1% slider step. |
+| F-011 | P2 | Accessibility | `gui/src/ui/settings.rs` | In the selective-sync tree the folder name is a plain label; only the small checkbox glyph and the expand arrow are clickable. | Design | G2 | Open: make the row name toggle the checkbox and keep the arrow separate. |
+| F-012 | P3 | Migration | `gui/src/prefs.rs` | Configs written before 3.20.44 stored the window size in egui points. At a non-100% scale those values are now read as physical units, so the first launch after upgrading can open a smaller window; the scale-aware floor and auto-grow correct it. | Engineering | G5 | Open: document the one-time change; no data loss. |
 
 ## Closed findings
 
@@ -33,7 +38,7 @@ file, the evidence, an owner, a fix and a verification step.
 | Gate | Open P0 | Open P1 | Status |
 |---|---:|---:|---|
 | G0 Baseline | 0 | 0 | Evidence collection in progress |
-| G1 Interface size | 0 | 0 | Ready to release 3.20.44 |
+| G1 Interface size | 0 | 0 | Shipped `v0.9.0-gui3.20.44`; checksum, signature, smoke and GLIBC_2.28 floor verified |
 | G2 UI/frontend | - | - | Not started |
 | G3 Backend/contract | - | - | Not started |
 | G4 Security/legal/release | - | - | Not started |

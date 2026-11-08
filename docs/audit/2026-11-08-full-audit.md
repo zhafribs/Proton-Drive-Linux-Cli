@@ -135,7 +135,8 @@ no unrelated feature work. Interface size is the one planned feature.
 - [x] Verify live preview and Save/Discard with keyboard navigation.
 - [x] Run the layout matrix at 50/100/150/200% and at the supported window
       sizes; evidence in `docs/audit/layout/`.
-- [x] Design, engineering and accessibility review; release 3.20.44.
+- [x] Design, engineering and accessibility review; shipped `v0.9.0-gui3.20.44`
+      with checksum, Ed25519 signature, smoke test and GLIBC_2.28 floor verified.
 
 ### G2 - UI/frontend audit (Nov 12-17)
 
