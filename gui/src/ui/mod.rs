@@ -302,6 +302,9 @@ pub struct App {
     /// written to prefs by Save; closing the app discards them.
     pub preview_theme: Option<prefs::Theme>,
     pub preview_scale: Option<prefs::UiScale>,
+    /// The zoom whose minimum window size has been applied. Changing it grows
+    /// the window to the smallest layout that still fits every page.
+    scale_applied: Option<f32>,
     /// New colour schemes from `system_theme::watch` (OS flips).
     theme_rx: mpsc::Receiver<prefs::Theme>,
     pub icon_tex: Option<egui::TextureHandle>,
@@ -822,6 +825,7 @@ impl App {
             system_theme: detected_theme,
             preview_theme: None,
             preview_scale: None,
+            scale_applied: None,
             theme_rx,
             icon_tex,
             tray,
@@ -1501,7 +1505,11 @@ impl App {
     fn remember_window_size(&mut self, ctx: &egui::Context) {
         let size = ctx.input(|i| i.viewport().inner_rect.map(|r| r.size()));
         if let Some(sz) = size {
-            let (w, h) = (sz.x as u32, sz.y as u32);
+            // Store physical pixels at the desktop scale: egui points times
+            // the interface zoom. Restoring that number as logical points
+            // keeps the same physical window across zoom changes.
+            let zoom = ctx.zoom_factor();
+            let (w, h) = ((sz.x * zoom).round() as u32, (sz.y * zoom).round() as u32);
             if w != self.prefs.window_w || h != self.prefs.window_h {
                 self.prefs.set_window_size(w, h);
             }
@@ -1546,6 +1554,7 @@ impl App {
     }
 
     fn quit(&mut self, ctx: &egui::Context) {
+        self.remember_window_size(ctx);
         self.quitting = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
@@ -2723,6 +2732,28 @@ impl eframe::App for App {
             .factor();
         if (ctx.zoom_factor() - want_zoom).abs() > 0.001 {
             ctx.set_zoom_factor(want_zoom);
+        }
+        // A larger interface needs a larger physical window, or the fixed
+        // sidebar and three-column cards collide. The minimum is in egui
+        // points, so egui-winit multiplies it by the current pixels-per-point
+        // (desktop scale * zoom). Cap it to the monitor so a 200% setting on a
+        // small screen opens full-screen instead of off-screen.
+        if self.scale_applied != Some(want_zoom) {
+            self.scale_applied = Some(want_zoom);
+            let monitor = ctx.input(|i| i.viewport().monitor_size);
+            let min = match monitor {
+                Some(m) if m.x > 1.0 && m.y > 1.0 => {
+                    egui::vec2(720.0_f32.min(m.x), 400.0_f32.min(m.y))
+                }
+                _ => egui::vec2(720.0, 400.0),
+            };
+            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(min));
+            if let Some(size) = ctx.input(|i| i.viewport().inner_rect.map(|r| r.size())) {
+                let target = egui::vec2(size.x.max(min.x), size.y.max(min.y));
+                if target.x > size.x + 0.5 || target.y > size.y + 0.5 {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(target));
+                }
+            }
         }
 
         // Awake once a second for relative times and the status pollers. The

@@ -27,7 +27,7 @@ use eframe::egui;
 use std::path::{Path, PathBuf};
 
 /// The GUI's own version (the release tag is `v<CLI>-gui<GUI>`).
-pub const GUI_VERSION: &str = "3.20.43";
+pub const GUI_VERSION: &str = "3.20.44";
 
 /// The systemd user unit path (shared with `service.rs`).
 pub fn service_unit_path() -> PathBuf {
@@ -122,7 +122,7 @@ fn main() -> eframe::Result<()> {
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_title("Proton Drive")
         .with_inner_size([prefs.window_w as f32, prefs.window_h as f32])
-        .with_min_inner_size([720.0, 540.0])
+        .with_min_inner_size([720.0, 400.0])
         // Start quietly in the tray without a window flash (honored on X11).
         .with_visible(!prefs.start_in_tray());
     if let Some(ic) = icon {

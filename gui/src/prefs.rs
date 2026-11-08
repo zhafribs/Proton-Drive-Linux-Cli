@@ -38,35 +38,51 @@ impl Theme {
 /// 15" laptop panel shows the same 14 pt labels as a 27" desktop - there is
 /// no OS/browser text-size setting to follow. This is the user's knob for
 /// that: it scales the UI as a whole, like a browser zoom.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum UiScale {
-    Compact,
-    Default,
-    Large,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UiScale {
+    percent: u16,
 }
 
 impl UiScale {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            UiScale::Compact => "compact",
-            UiScale::Default => "default",
-            UiScale::Large => "large",
+    pub const MIN: u16 = 50;
+    pub const MAX: u16 = 200;
+    pub const DEFAULT: u16 = 100;
+
+    pub fn from_percent(percent: u16) -> Self {
+        Self {
+            percent: percent.clamp(Self::MIN, Self::MAX),
         }
     }
+
+    pub fn percent(&self) -> u16 {
+        self.percent
+    }
+
+    pub fn as_str(&self) -> String {
+        self.percent.to_string()
+    }
+
     pub fn from_str(s: &str) -> UiScale {
-        match s {
-            "compact" => UiScale::Compact,
-            "large" => UiScale::Large,
-            _ => UiScale::Default,
+        match s.trim() {
+            "compact" => Self::from_percent(85),
+            "large" => Self::from_percent(110),
+            "default" => Self::from_percent(Self::DEFAULT),
+            other => other
+                .parse::<u16>()
+                .map(Self::from_percent)
+                .unwrap_or_else(|_| Self::from_percent(Self::DEFAULT)),
         }
     }
-    /// egui zoom factor: 0.85 / 1.0 / 1.1.
+
+    /// egui zoom factor: 0.5..2.0.
     pub fn factor(&self) -> f32 {
-        match self {
-            UiScale::Compact => 0.85,
-            UiScale::Default => 1.0,
-            UiScale::Large => 1.1,
-        }
+        f32::from(self.percent) / 100.0
+    }
+}
+
+impl Default for UiScale {
+    fn default() -> Self {
+        Self::from_percent(Self::DEFAULT)
     }
 }
 
@@ -94,23 +110,27 @@ impl Prefs {
                 }
             }
         }
+        // Window sizes are stored in physical pixels at the desktop scale,
+        // i.e. the egui size multiplied by the interface zoom. Restoring them
+        // unchanged keeps the same physical window when the zoom changes;
+        // storing raw egui points would shrink the window on every restart at
+        // a larger scale.
+        let scale = UiScale::from_str(values.get("ui_scale").map(String::as_str).unwrap_or("default"));
+        let factor = scale.factor();
+        let min_w = (720.0 * factor).round() as u32;
+        let min_h = (400.0 * factor).round() as u32;
         let (window_w, window_h) = values
             .get("window_size")
             .and_then(|s| s.split_once('x'))
             .and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?)))
-            // Qt: a remembered size counts from 700x480, then gets floored to
-            // the layout-safe minimum so old saves never come back clipped.
-            // 720x540 is the same floor the viewport enforces and every page
-            // now fits it, so a compact window is remembered instead of being
-            // silently grown back to 920x780 on the next start.
-            .filter(|(w, h)| *w >= 700 && *h >= 480)
-            .unwrap_or((940, 780));
+            .map(|(w, h)| (w.max(min_w), h.max(min_h)))
+            .unwrap_or((940.max(min_w), 780.max(min_h)));
         let nav = Self::nav_width(values.get("nav_width"));
         Prefs {
             file: file.to_path_buf(),
             values,
-            window_w: window_w.max(720),
-            window_h: window_h.max(540),
+            window_w,
+            window_h,
             nav_width: nav,
         }
     }
@@ -232,8 +252,8 @@ mod tests {
         let p = std::env::temp_dir().join(format!("pdprefs2-{}.conf", std::process::id()));
         std::fs::write(&p, "[General]\nwindow_size=100x50\n").unwrap();
         let pr = Prefs::load(&p);
-        // below the 700x480 acceptance threshold -> the default size
-        assert_eq!((pr.window_w, pr.window_h), (940, 780));
+        // a bogus tiny save is clamped to the layout floor, not discarded
+        assert_eq!((pr.window_w, pr.window_h), (720, 400));
         assert!(pr.close_to_tray());
         assert_eq!(pr.theme(), Theme::System);
         // a small-but-accepted size is kept, down to the layout floor
@@ -246,7 +266,15 @@ mod tests {
         // Below the floor still clamps up, so old tiny saves stay usable.
         std::fs::write(&p, "[General]\nwindow_size=710x500\n").unwrap();
         let pr = Prefs::load(&p);
-        assert_eq!((pr.window_w, pr.window_h), (720, 540));
+        assert_eq!((pr.window_w, pr.window_h), (720, 500));
+        // The floor follows the interface scale: 200% needs twice the pixels.
+        std::fs::write(&p, "[General]\nui_scale=200\nwindow_size=700x500\n").unwrap();
+        let pr = Prefs::load(&p);
+        assert_eq!((pr.window_w, pr.window_h), (1440, 800));
+        // 50% keeps a deliberately small physical window instead of rejecting it.
+        std::fs::write(&p, "[General]\nui_scale=50\nwindow_size=360x200\n").unwrap();
+        let pr = Prefs::load(&p);
+        assert_eq!((pr.window_w, pr.window_h), (360, 200));
         std::fs::remove_file(&p).ok();
     }
 
@@ -256,15 +284,22 @@ mod tests {
         std::fs::write(&p, "[General]\ntheme=dark\n").unwrap();
         // no key yet -> the default size
         let pr = Prefs::load(&p);
-        assert_eq!(pr.ui_scale(), UiScale::Default);
+        assert_eq!(pr.ui_scale(), UiScale::default());
+        assert_eq!(pr.ui_scale().percent(), 100);
         assert_eq!(pr.ui_scale().factor(), 1.0);
-        // a saved choice survives a reload, unknown values fall back
+        // Saved percentages survive; legacy names migrate.
         let mut pr = pr;
         pr.set("ui_scale", "compact");
-        assert_eq!(Prefs::load(&p).ui_scale(), UiScale::Compact);
-        assert!(Prefs::load(&p).ui_scale().factor() < 1.0);
+        assert_eq!(Prefs::load(&p).ui_scale().percent(), 85);
+        pr.set("ui_scale", "112");
+        assert_eq!(Prefs::load(&p).ui_scale().percent(), 112);
+        assert!((Prefs::load(&p).ui_scale().factor() - 1.12).abs() < f32::EPSILON);
+        pr.set("ui_scale", "10");
+        assert_eq!(Prefs::load(&p).ui_scale().percent(), UiScale::MIN);
+        pr.set("ui_scale", "999");
+        assert_eq!(Prefs::load(&p).ui_scale().percent(), UiScale::MAX);
         pr.set("ui_scale", "gigantic");
-        assert_eq!(Prefs::load(&p).ui_scale(), UiScale::Default);
+        assert_eq!(Prefs::load(&p).ui_scale(), UiScale::default());
         std::fs::remove_file(&p).ok();
     }
     #[test]

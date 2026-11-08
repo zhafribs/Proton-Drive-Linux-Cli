@@ -1,3 +1,18 @@
+## 3.20.44 — 2026-11-08
+
+- **Interface size is now fully adjustable.** Appearance offers five presets
+  (Compact 85%, Small 93%, Default 100%, Large 110%, Extra large 120%) and a
+  custom **50%-200%** slider in 5% steps, with a live preview, a visible
+  percentage, and **Reset** to 100%. The saved value is a percentage; old
+  `compact`/`default`/`large` settings migrate automatically.
+- **Large sizes stay usable.** Choosing a larger interface grows the window to
+  the smallest layout that still fits every page, and the minimum window size
+  follows the current scale. Window sizes are stored physically, so changing
+  the scale and restarting no longer shrinks the window.
+- **The Appearance controls no longer run off the card.** Presets and the
+  slider sit on separate rows, so the percentage and Reset stay visible at
+  narrow widths.
+
 ## 3.20.43 — 2026-11-08
 
 - **Home shows your cloud storage.** A new **Cloud storage** card reports

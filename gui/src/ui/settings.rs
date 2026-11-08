@@ -48,7 +48,7 @@ pub struct Draft {
     pub autostart_touched: bool,
     pub appstart_touched: bool,
     pub theme_idx: usize,
-    pub ui_scale_idx: usize,
+    pub ui_scale_pct: u16,
     pub motion: bool,
     pub updates_auto: bool,
     pub note_errors: bool,
@@ -116,11 +116,7 @@ impl Draft {
                 crate::prefs::Theme::Light => 1,
                 crate::prefs::Theme::Dark => 2,
             },
-            ui_scale_idx: match prefs.ui_scale() {
-                crate::prefs::UiScale::Compact => 0,
-                crate::prefs::UiScale::Default => 1,
-                crate::prefs::UiScale::Large => 2,
-            },
+            ui_scale_pct: prefs.ui_scale().percent(),
             motion: prefs.motion_enabled(),
             updates_auto: prefs.updates_auto(),
             note_errors: prefs.notify_errors(),
@@ -436,7 +432,7 @@ pub fn do_save(app: &mut App, ctx: &egui::Context) {
     let autostart_touched = d.autostart_touched;
     let appstart_touched = d.appstart_touched;
     let theme_idx = d.theme_idx;
-    let ui_scale_idx = d.ui_scale_idx;
+    let ui_scale_pct = d.ui_scale_pct;
     let motion = d.motion;
     let updates_auto = d.updates_auto;
     let note_errors = d.note_errors;
@@ -510,11 +506,7 @@ pub fn do_save(app: &mut App, ctx: &egui::Context) {
         _ => crate::prefs::Theme::System,
     };
     app.prefs.set("theme", theme.as_str());
-    let scale = match ui_scale_idx {
-        0 => crate::prefs::UiScale::Compact,
-        2 => crate::prefs::UiScale::Large,
-        _ => crate::prefs::UiScale::Default,
-    };
+    let scale = crate::prefs::UiScale::from_percent(ui_scale_pct);
     app.prefs.set("ui_scale", scale.as_str());
     app.style_dirty = true;
     ctx.set_zoom_factor(scale.factor());
@@ -989,25 +981,62 @@ fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
         }
         ui.add_space(4.0);
         labeled_control(ui, "Interface size", |ui| {
-            const SCALES: [&str; 3] = ["Compact", "Default", "Large"];
-            egui::ComboBox::from_id_salt("ui_scale")
-                .selected_text(SCALES[app.draft.ui_scale_idx.min(2)])
-                .show_ui(ui, |ui| {
-                    for (i, s) in SCALES.iter().enumerate() {
-                        if ui
-                            .selectable_value(&mut app.draft.ui_scale_idx, i, *s)
-                            .changed()
-                        {
-                            let scale = match i {
-                                0 => crate::prefs::UiScale::Compact,
-                                2 => crate::prefs::UiScale::Large,
-                                _ => crate::prefs::UiScale::Default,
-                            };
-                            app.preview_scale = Some(scale);
-                            ui.ctx().set_zoom_factor(scale.factor());
+            ui.vertical(|ui| {
+                const PRESETS: [(&str, u16); 5] = [
+                    ("Compact", 85),
+                    ("Small", 93),
+                    ("Default", 100),
+                    ("Large", 110),
+                    ("Extra large", 120),
+                ];
+                let mut pct = app.draft.ui_scale_pct;
+                let mut changed = false;
+
+                ui.horizontal_wrapped(|ui| {
+                    for (name, preset) in PRESETS {
+                        let selected = pct == preset;
+                        if ui.selectable_label(selected, name).clicked() {
+                            pct = preset;
+                            changed = true;
                         }
                     }
                 });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    // A fixed rail keeps the value and Reset inside the card
+                    // at every window width; available_width here is the
+                    // page's, not the card's.
+                    ui.spacing_mut().slider_width = 160.0;
+                    let slider = egui::Slider::new(
+                        &mut pct,
+                        crate::prefs::UiScale::MIN..=crate::prefs::UiScale::MAX,
+                    )
+                    .step_by(5.0)
+                    .show_value(false)
+                    .trailing_fill(true);
+                    if ui.add(slider).changed() {
+                        changed = true;
+                    }
+                    ui.add_sized(
+                        [42.0, 20.0],
+                        egui::Label::new(egui::RichText::new(format!("{pct}%")).strong()),
+                    );
+                    if ui
+                        .small_button("Reset")
+                        .on_hover_text("Reset to 100%.")
+                        .clicked()
+                    {
+                        pct = crate::prefs::UiScale::DEFAULT;
+                        changed = true;
+                    }
+                });
+                if changed {
+                    app.draft.ui_scale_pct = pct;
+                    let scale = crate::prefs::UiScale::from_percent(pct);
+                    app.preview_scale = Some(scale);
+                    ui.ctx().set_zoom_factor(scale.factor());
+                }
+            });
         });
     });
 }
