@@ -1,0 +1,33 @@
+# Baseline evidence — 2026-11-08
+
+Commit: 0032355 + G1 working tree
+Toolchain: rustc 1.99.1 (58cf8f9c3 2026-10-13)
+Cargo: cargo 1.99.1 (5f94df478 2026-08-27)
+GUI_VERSION: 3.20.44
+
+## cargo test --workspace
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 129 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.20s
+test result: ok. 107 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.56s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+## cargo clippy --release --workspace --all-targets -- -D warnings
+    Checking proton-drive-gui v0.1.0 (/home/zhafrisbs/Projects/Proton-Drive-Linux-Cli/gui)
+    Finished `release` profile [optimized] target(s) in 1.10s
+
+## release-gate fixtures
+check-release fixtures: 12/12 passed
+
+## frozen G0 release
+tag=v0.9.0-gui3.20.43 assets=ProtonDrive-CLI-0.9.0-GUI-3.20.43-x86_64.AppImage, SHA256SUMS, SHA256SUMS.sig
+
+## formatter status
+cargo fmt --check: not usable yet; the existing tree is not rustfmt-clean (F-004).
+
+## layout evidence
+docs/audit/layout/ contains Home, Files, Photos, Activity, Settings tabs,
+About and the Shortcuts dialog at 50%, 100%, 150% and 200%.
