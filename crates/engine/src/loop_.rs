@@ -276,6 +276,9 @@ fn ensure_sync_roots_at(dir: &std::path::Path, local_root: &str, remote_root: &s
     match std::fs::read_to_string(&path) {
         Ok(old) if old == want => Ok(()),
         Ok(_) => {
+            if let Err(e) = proton_core::state_snapshot::create(dir, "root-change") {
+                eprintln!("WARN could not snapshot state before the root change: {e}");
+            }
             let stamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
@@ -399,11 +402,19 @@ pub fn run_once_cycle(
         approved_mass_delete: false,
     };
     let mut result = plan_cycle(&remote, &local, &st, &config);
+    let mut approved_mass_delete = false;
     if let Some(approval) = approval
         && approval_matches(&approval, &result, local_root, remote_root)
     {
+        approved_mass_delete = true;
         config.approved_mass_delete = true;
         result = plan_cycle(&remote, &local, &st, &config);
+    }
+    if approved_mass_delete
+        && !result.actions.is_empty()
+        && let Err(e) = proton_core::state_snapshot::create(&state_dir(), "mass-delete")
+    {
+        eprintln!("WARN could not snapshot state before the approved mass delete: {e}");
     }
 
     if !result.actions.is_empty() {

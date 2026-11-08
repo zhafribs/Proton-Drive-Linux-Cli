@@ -113,10 +113,14 @@ pub enum Back {
     RecoveryLoaded(Result<Vec<proton_core::local_trash::Entry>, String>),
     /// Recovery: the conflict scan finished.
     ConflictsLoaded(Result<Vec<recovery::ConflictRow>, String>),
+    /// Recovery: the state-snapshot listing finished.
+    SnapshotsLoaded(Result<Vec<proton_core::state_snapshot::SnapshotInfo>, String>),
     /// Recovery: a restore or permanent delete finished.
     RecoveryResult { ok: bool, message: String },
     /// Recovery: a conflict action finished.
     ConflictResult { ok: bool, message: String },
+    /// Recovery: a snapshot create/restore finished.
+    SnapshotResult { ok: bool, message: String },
     /// Cloud browser: the move-to picker's folder listing landed.
     PickerFolders {
         parent: String,
@@ -1386,11 +1390,15 @@ impl App {
                 Back::CloudPickFailed(msg) => self.toast_error(msg),
                 Back::RecoveryLoaded(result) => recovery::on_loaded(self, result),
                 Back::ConflictsLoaded(result) => recovery::on_conflicts_loaded(self, result),
+                Back::SnapshotsLoaded(result) => recovery::on_snapshots_loaded(self, result),
                 Back::RecoveryResult { ok, message } => {
                     recovery::on_result(self, ok, message)
                 }
                 Back::ConflictResult { ok, message } => {
                     recovery::on_conflict_result(self, ok, message)
+                }
+                Back::SnapshotResult { ok, message } => {
+                    recovery::on_snapshot_result(self, ok, message)
                 }
                 Back::PickerFolders { parent, folders } => {
                     cloud::on_picker_folders(self, parent, folders)

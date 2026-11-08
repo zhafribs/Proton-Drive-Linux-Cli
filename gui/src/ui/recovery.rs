@@ -10,6 +10,7 @@ use eframe::egui;
 use proton_core::conflict::{self, Conflict};
 use proton_core::local_trash::{self, Entry};
 use proton_core::state;
+use proton_core::state_snapshot::{self, SnapshotInfo};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -44,6 +45,14 @@ pub struct RecoveryState {
     pub conflict_status: String,
     /// `(conflict_rel, choice)` waiting for a confirmation click.
     pub confirm_conflict: Option<(String, ConflictChoice)>,
+    // State snapshots.
+    pub snapshots: Vec<SnapshotInfo>,
+    pub snapshots_loaded: bool,
+    pub snapshots_loading: bool,
+    pub snapshot_busy: bool,
+    pub snapshot_error: Option<String>,
+    pub snapshot_status: String,
+    pub confirm_snapshot: Option<PathBuf>,
 }
 
 pub fn draw(app: &mut App, ui: &mut egui::Ui) {
@@ -56,6 +65,12 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
     {
         refresh_conflicts(app);
     }
+    if !app.recovery.snapshots_loaded
+        && !app.recovery.snapshots_loading
+        && app.recovery.snapshot_error.is_none()
+    {
+        refresh_snapshots(app);
+    }
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -66,7 +81,9 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                     let busy = app.recovery.busy
                         || app.recovery.loading
                         || app.recovery.conflict_busy
-                        || app.recovery.conflicts_loading;
+                        || app.recovery.conflicts_loading
+                        || app.recovery.snapshot_busy
+                        || app.recovery.snapshots_loading;
                     if ui
                         .add_enabled(!busy, egui::Button::new("Refresh"))
                         .on_hover_text("Re-read conflict copies and the local trash")
@@ -74,6 +91,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                     {
                         refresh_trash(app);
                         refresh_conflicts(app);
+                        refresh_snapshots(app);
                     }
                 });
             });
@@ -88,6 +106,8 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
             ui.add_space(14.0);
 
             draw_conflicts(app, ui);
+            ui.add_space(16.0);
+            draw_snapshots(app, ui);
             ui.add_space(16.0);
             draw_trash(app, ui);
         });
@@ -301,6 +321,205 @@ fn conflict_card(app: &mut App, ui: &mut egui::Ui, row: &ConflictRow) {
         });
 }
 
+fn draw_snapshots(app: &mut App, ui: &mut egui::Ui) {
+    widgets::section_label(ui, "State snapshots");
+    ui.add_space(3.0);
+    ui.label(
+        egui::RichText::new(
+            "A snapshot preserves the last-synced history, not your files. One is taken automatically before a root change, an approved mass delete, or an update.",
+        )
+        .size(12.0)
+        .weak(),
+    );
+    ui.add_space(6.0);
+
+    if !app.recovery.snapshot_status.is_empty() {
+        ui.label(
+            egui::RichText::new(&app.recovery.snapshot_status)
+                .size(12.5)
+                .color(crate::theme::success_text(ui.visuals())),
+        );
+        ui.add_space(6.0);
+    }
+
+    if let Some(error) = app.recovery.snapshot_error.clone() {
+        let load_failed = app.recovery.snapshots.is_empty();
+        widgets::card(
+            ui,
+            Some(if load_failed {
+                "Snapshots could not be read"
+            } else {
+                "Snapshot action failed"
+            }),
+            |ui| {
+                ui.label(egui::RichText::new(error).size(12.5));
+                ui.add_space(8.0);
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .button(if load_failed { "Try again" } else { "Dismiss" })
+                        .clicked()
+                    {
+                        app.recovery.snapshot_error = None;
+                        app.recovery.snapshots_loaded = false;
+                        if load_failed {
+                            refresh_snapshots(app);
+                        }
+                    }
+                });
+            },
+        );
+        ui.add_space(10.0);
+        if load_failed {
+            return;
+        }
+    }
+
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .add_enabled(
+                !app.recovery.snapshot_busy,
+                egui::Button::new("Create snapshot"),
+            )
+            .on_hover_text("Save the current sync history as a restore point.")
+            .clicked()
+        {
+            start_snapshot_create(app);
+        }
+        if ui.button("Open snapshot folder").clicked() {
+            open_snapshot_folder(app);
+        }
+        let count = app.recovery.snapshots.len();
+        ui.label(
+            egui::RichText::new(if count == 1 {
+                "1 snapshot".to_string()
+            } else {
+                format!("{count} snapshots")
+            })
+            .size(12.0)
+            .weak(),
+        );
+    });
+    ui.add_space(6.0);
+
+    if app.recovery.snapshots_loading {
+        ui.horizontal(|ui| {
+            widgets::busy_spinner(ui, app.prefs.motion_enabled());
+            ui.label(egui::RichText::new("Loading snapshots\u{2026}").weak());
+        });
+        return;
+    }
+
+    let snapshots = app.recovery.snapshots.clone();
+    if snapshots.is_empty() {
+        widgets::card(ui, None, |ui| {
+            ui.label(
+                egui::RichText::new(
+                    "No snapshots yet. Create one before a risky change, or wait for the automatic snapshot before a root change, mass delete or update.",
+                )
+                .size(12.5)
+                .weak(),
+            );
+        });
+        return;
+    }
+
+    for snapshot in &snapshots {
+        snapshot_card(app, ui, snapshot);
+        ui.add_space(8.0);
+    }
+}
+
+fn snapshot_card(app: &mut App, ui: &mut egui::Ui, snap: &SnapshotInfo) {
+    egui::Frame::new()
+        .fill(crate::theme::glass_fill(ui.visuals()))
+        .stroke(crate::theme::glass_stroke(ui.visuals()))
+        .corner_radius(egui::CornerRadius::same(12))
+        .inner_margin(egui::Margin::symmetric(14, 11))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            let when = chrono::DateTime::<chrono::Utc>::from_timestamp(snap.created_at as i64, 0)
+                .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string())
+                .unwrap_or_else(|| "unknown time".into());
+            let reason = snap.reason.replace('-', " ");
+            ui.add(
+                egui::Label::new(egui::RichText::new(when).strong().size(13.5)).truncate(),
+            );
+            let size = super::cloud::fmt_size(snap.bytes);
+            let mut meta = format!(
+                "{} entries \u{b7} {}{} \u{b7} {}",
+                snap.entries,
+                if size.is_empty() { "0 B".to_string() } else { size },
+                if snap.valid { "" } else { " \u{b7} checksum mismatch" },
+                reason
+            );
+            if !snap.valid || !snap.roots_match {
+                meta.push_str(" \u{b7} not restorable");
+            }
+            ui.add(egui::Label::new(egui::RichText::new(meta).size(11.5).weak()).truncate());
+            if !snap.roots_match {
+                ui.label(
+                    egui::RichText::new(
+                        "This history belongs to different sync roots. Switch back to those roots before restoring it.",
+                    )
+                    .size(11.5)
+                    .color(crate::theme::warning_text(ui.visuals())),
+                );
+            }
+            ui.add_space(7.0);
+
+            if app.recovery.confirm_snapshot.as_deref() == Some(snap.path.as_path()) {
+                ui.label(
+                    egui::RichText::new(
+                        "Restore this snapshot? The current state is snapshotted first, then the engine re-plans before any transfer.",
+                    )
+                    .size(12.0),
+                );
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .add_enabled(
+                            !app.recovery.snapshot_busy,
+                            egui::Button::new("Restore this snapshot"),
+                        )
+                        .clicked()
+                    {
+                        app.recovery.confirm_snapshot = None;
+                        start_snapshot_restore(app, snap.clone());
+                    }
+                    if ui.button("Cancel").clicked() {
+                        app.recovery.confirm_snapshot = None;
+                    }
+                });
+                return;
+            }
+
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(
+                        snap.valid && snap.roots_match && !app.recovery.snapshot_busy,
+                        egui::Button::new("Restore"),
+                    )
+                    .on_hover_text(
+                        "Put this sync history back, then let the engine plan against the current files.",
+                    )
+                    .clicked()
+                {
+                    app.recovery.confirm_snapshot = Some(snap.path.clone());
+                }
+                if ui
+                    .add_enabled(
+                        !app.recovery.snapshot_busy,
+                        egui::Button::new("Delete"),
+                    )
+                    .on_hover_text("Delete this restore point. Your files are not touched.")
+                    .clicked()
+                {
+                    start_snapshot_delete(app, snap.path.clone());
+                }
+            });
+        });
+}
+
 fn draw_trash(app: &mut App, ui: &mut egui::Ui) {
     widgets::section_label(ui, "Local trash");
     ui.add_space(3.0);
@@ -491,6 +710,70 @@ fn entry_card(app: &mut App, ui: &mut egui::Ui, entry: &Entry) {
         });
 }
 
+fn refresh_snapshots(app: &mut App) {
+    app.recovery.snapshots_loading = true;
+    app.recovery.snapshot_error = None;
+    let state_dir = app.paths.state_dir.clone();
+    let tx = app.tx.clone();
+    std::thread::spawn(move || {
+        let result = Ok(state_snapshot::list(&state_dir));
+        let _ = tx.send(Back::SnapshotsLoaded(result));
+    });
+}
+
+fn start_snapshot_create(app: &mut App) {
+    let state_dir = app.paths.state_dir.clone();
+    let tx = app.tx.clone();
+    app.recovery.snapshot_busy = true;
+    app.recovery.snapshot_error = None;
+    std::thread::spawn(move || {
+        let result = state_snapshot::create(&state_dir, "manual");
+        let (ok, message) = match result {
+            Ok(Some(snapshot)) => (
+                true,
+                format!("Snapshot created with {} entries.", snapshot.entries),
+            ),
+            Ok(None) => (true, "There is no sync history to snapshot yet.".to_string()),
+            Err(error) => (false, error),
+        };
+        let _ = tx.send(Back::SnapshotResult { ok, message });
+    });
+}
+
+fn start_snapshot_restore(app: &mut App, snap: SnapshotInfo) {
+    let state_dir = app.paths.state_dir.clone();
+    let tx = app.tx.clone();
+    let wake = app.paths.wake_file.clone();
+    app.recovery.snapshot_busy = true;
+    app.recovery.snapshot_error = None;
+    std::thread::spawn(move || {
+        let result = state_snapshot::restore(&state_dir, &snap);
+        let (ok, message) = match result {
+            Ok(()) => {
+                let _ = std::fs::write(&wake, b"");
+                (true, "State restored. The engine will re-plan against the current files.".to_string())
+            }
+            Err(error) => (false, error),
+        };
+        let _ = tx.send(Back::SnapshotResult { ok, message });
+    });
+}
+
+fn start_snapshot_delete(app: &mut App, path: PathBuf) {
+    let state_dir = app.paths.state_dir.clone();
+    let tx = app.tx.clone();
+    app.recovery.snapshot_busy = true;
+    app.recovery.snapshot_error = None;
+    std::thread::spawn(move || {
+        let result = state_snapshot::remove(&state_dir, &path);
+        let (ok, message) = match result {
+            Ok(()) => (true, "Snapshot deleted.".to_string()),
+            Err(error) => (false, error),
+        };
+        let _ = tx.send(Back::SnapshotResult { ok, message });
+    });
+}
+
 fn refresh_trash(app: &mut App) {
     app.recovery.loading = true;
     app.recovery.error = None;
@@ -576,6 +859,36 @@ pub fn on_result(app: &mut App, ok: bool, message: String) {
     } else {
         app.recovery.status.clear();
         app.recovery.error = Some(message);
+    }
+}
+
+pub fn on_snapshots_loaded(
+    app: &mut App,
+    result: Result<Vec<SnapshotInfo>, String>,
+) {
+    app.recovery.snapshots_loading = false;
+    app.recovery.snapshots_loaded = true;
+    match result {
+        Ok(snapshots) => {
+            app.recovery.snapshots = snapshots;
+            app.recovery.snapshot_error = None;
+        }
+        Err(error) => {
+            app.recovery.snapshots.clear();
+            app.recovery.snapshot_error = Some(error);
+        }
+    }
+}
+
+pub fn on_snapshot_result(app: &mut App, ok: bool, message: String) {
+    app.recovery.snapshot_busy = false;
+    if ok {
+        app.recovery.snapshot_status = message;
+        app.recovery.snapshots_loaded = false;
+        app.recovery.snapshot_error = None;
+    } else {
+        app.recovery.snapshot_status.clear();
+        app.recovery.snapshot_error = Some(message);
     }
 }
 
@@ -698,6 +1011,13 @@ fn open_parent(app: &App, rel: &str) {
         let path = root.join(rel);
         let dir = path.parent().unwrap_or(&root);
         let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
+    }
+}
+
+fn open_snapshot_folder(app: &App) {
+    let path = app.paths.state_dir.join("snapshots");
+    if std::fs::create_dir_all(&path).is_ok() {
+        let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
     }
 }
 

@@ -1021,6 +1021,10 @@ pub fn install_update_and_restart(
             });
     }
 
+    let state_dir = crate::paths::resolve().state_dir;
+    if let Err(e) = proton_core::state_snapshot::create(&state_dir, "update-swap") {
+        eprintln!("update snapshot: {e}");
+    }
     let mark = serde_json::json!({
         "old": old.to_string_lossy(),
         "new": target.to_string_lossy(),
