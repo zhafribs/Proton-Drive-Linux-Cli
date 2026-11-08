@@ -28,7 +28,7 @@ The audit was performed by four councils:
 
 | Gate | Release | Scope |
 |---|---|---|
-| G0 Baseline | — | Inventory, ledgers, baseline tests/clippy/gate |
+| G0 Baseline | `v0.9.0-gui3.20.43` | Inventory, ledgers, baseline tests/clippy/gate |
 | G1 Interface size | `v0.9.0-gui3.20.44` | Five presets, 50–200% slider, migration, scale-aware window |
 | G1 patch | `v0.9.0-gui3.20.45` | Slider zoom on release, not mid-drag |
 | G2 UI/frontend | `v0.9.0-gui3.20.46` | Keyboard/contrast/selection/layout audit |
