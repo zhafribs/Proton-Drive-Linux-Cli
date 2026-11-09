@@ -1,3 +1,16 @@
+## 3.25.0 — 2026-11-09
+
+### M2–M4 consolidation
+
+- **Supervisor mode no longer shows a misleading login toggle.** Without
+  systemd, Settings explains that sync starts with the app and leaves
+  "Open Proton Drive when I log in" as the login control.
+- **Update-key rotation tooling.** `scripts/new-update-key.sh` generates an
+  offline Ed25519 successor key, prints its public hex and the rotation steps.
+  It does not publish or overwrite anything.
+- The M2 supervisor, M3 trust path and M4 path-safety features remain in this
+  build; this release only closes the remaining honesty/tooling gaps.
+
 ## 3.24.1 — 2026-11-09
 
 - **A GUI-owned engine now stops when the GUI quits.** Closing to the tray

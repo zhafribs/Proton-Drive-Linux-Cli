@@ -13,7 +13,9 @@ this repository.
 
 ## Rotation
 
-1. Generate a new Ed25519 key offline and back it up.
+1. Generate a new Ed25519 key offline with
+   `./scripts/new-update-key.sh ~/Backup/proton-update-successor-key.pem`
+   and back it up.
 2. Add its **public** key to `UPDATE_PUBLIC_KEYS` in a release signed by the
    current key.
 3. After users have had time to install that release, sign new releases with

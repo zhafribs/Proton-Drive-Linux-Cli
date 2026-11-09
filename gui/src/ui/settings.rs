@@ -1076,10 +1076,20 @@ fn background_card(app: &mut App, ui: &mut egui::Ui) {
             app.draft.start_tray = v;
         }
 
-        let mut v = app.draft.autostart;
-        if ui.checkbox(&mut v, "Start syncing when I log in").changed() {
-            app.draft.autostart = v;
-            app.draft.autostart_touched = true;
+        if service::uses_supervisor() {
+            ui.label(
+                egui::RichText::new(
+                    "Without systemd, sync starts when the app opens. Use \"Open Proton Drive when I log in\" to start it at login.",
+                )
+                .size(11.5)
+                .weak(),
+            );
+        } else {
+            let mut v = app.draft.autostart;
+            if ui.checkbox(&mut v, "Start syncing when I log in").changed() {
+                app.draft.autostart = v;
+                app.draft.autostart_touched = true;
+            }
         }
 
         let mut v = app.draft.appstart;
