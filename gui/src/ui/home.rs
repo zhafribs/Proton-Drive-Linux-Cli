@@ -33,7 +33,7 @@ fn draw_inner(app: &mut App, ui: &mut egui::Ui) {
         signing_in,
     );
 
-    let animate = app.prefs.motion_enabled();
+    let animate = app.ctx.prefs.motion_enabled();
     ui.add_space(14.0);
     widgets::card(ui, None, |ui| {
         ui.horizontal(|ui| {
@@ -47,16 +47,15 @@ fn draw_inner(app: &mut App, ui: &mut egui::Ui) {
                     if app.now() < *at {
                         text.clone()
                     } else {
-                        health::hero_sub(status, &app.health)
+                        health::hero_sub(status, &app.ctx.health)
                     }
                 } else {
-                    health::hero_sub(status, &app.health)
+                    health::hero_sub(status, &app.ctx.health)
                 };
                 ui.label(egui::RichText::new(sub).size(12.5).weak());
 
                 if (signed_out || needs_login) && !signing_in {
-                    let local = app
-                        .conf
+                    let local = app.ctx.conf
                         .get("PROTON_SYNC_LOCAL")
                         .filter(|s| !s.is_empty())
                         .cloned()
@@ -91,8 +90,8 @@ fn draw_inner(app: &mut App, ui: &mut egui::Ui) {
                     });
                 }
 
-                if app.health.audit_pending == Some(true) {
-                    let note = if app.health.audit_phase.as_deref() == Some("error") {
+                if app.ctx.health.audit_pending == Some(true) {
+                    let note = if app.ctx.health.audit_phase.as_deref() == Some("error") {
                         "Background check failed - deletes and existing-file edits stay held for safety."
                     } else {
                         "Deletes and edits to existing files are held until the background check finishes."
@@ -100,7 +99,7 @@ fn draw_inner(app: &mut App, ui: &mut egui::Ui) {
                     ui.label(egui::RichText::new(note).size(11.5).weak());
                 }
                 if status == health::UiStatus::DeletesHeld {
-                    if app.health.deletes_wipe_guard {
+                    if app.ctx.health.deletes_wipe_guard {
                         ui.label(
                             egui::RichText::new(
                                 "Nothing will be deleted while one side looks empty. Restore the \
@@ -115,25 +114,25 @@ fn draw_inner(app: &mut App, ui: &mut egui::Ui) {
                         "Review the files that would be removed, then approve this batch only.",
                     ) {
                         app.dialog = Some(Dialog::ConfirmHeldDeletes {
-                            local: app.health.deletes_held_local,
-                            cloud: app.health.deletes_held_cloud,
-                            local_digest: app.health.deletes_held_local_digest.clone().unwrap_or_default(),
-                            cloud_digest: app.health.deletes_held_cloud_digest.clone().unwrap_or_default(),
-                            sample: app.health.deletes_held_sample.clone(),
+                            local: app.ctx.health.deletes_held_local,
+                            cloud: app.ctx.health.deletes_held_cloud,
+                            local_digest: app.ctx.health.deletes_held_local_digest.clone().unwrap_or_default(),
+                            cloud_digest: app.ctx.health.deletes_held_cloud_digest.clone().unwrap_or_default(),
+                            sample: app.ctx.health.deletes_held_sample.clone(),
                         });
                     }
                 }
-                if app.health.transfer_active == Some(true)
-                    && app.health.transfer_total.unwrap_or(0) > 0
+                if app.ctx.health.transfer_active == Some(true)
+                    && app.ctx.health.transfer_total.unwrap_or(0) > 0
                 {
-                    let done = app.health.transfer_done.unwrap_or(0) as f32;
-                    let total = app.health.transfer_total.unwrap_or(0) as f32;
+                    let done = app.ctx.health.transfer_done.unwrap_or(0) as f32;
+                    let total = app.ctx.health.transfer_total.unwrap_or(0) as f32;
                     ui.add_space(4.0);
                     ui.label(
                         egui::RichText::new(format!(
                             "Transferring {} / {} files",
-                            app.health.transfer_done.unwrap_or(0),
-                            app.health.transfer_total.unwrap_or(0)
+                            app.ctx.health.transfer_done.unwrap_or(0),
+                            app.ctx.health.transfer_total.unwrap_or(0)
                         ))
                         .size(11.5)
                         .weak(),
@@ -143,7 +142,7 @@ fn draw_inner(app: &mut App, ui: &mut egui::Ui) {
                             .desired_width(220.0)
                             .show_percentage(),
                     );
-                    for q in app.health.queue.iter().take(5) {
+                    for q in app.ctx.health.queue.iter().take(5) {
                         let (glyph, rel) = match q.split_once(':') {
                             Some(("up", r)) => ("\u{2191}", r),
                             Some(("down", r)) => ("\u{2193}", r),
@@ -270,8 +269,7 @@ fn metrics(app: &App, ui: &mut egui::Ui) {
         .stats
         .map(|(_, b)| service::human_size(b))
         .unwrap_or_else(|| "\u{2014}".to_string());
-    let last = app
-        .health
+    let last = app.ctx.health
         .last_audit_dt()
         .map(|dt| util::rel_time(Some(dt)))
         .unwrap_or_else(|| "Not yet".to_string());
@@ -284,7 +282,7 @@ fn metrics(app: &App, ui: &mut egui::Ui) {
 }
 
 fn cloud_storage(app: &App, ui: &mut egui::Ui) {
-    let quota = cloud::quota_usage(&app.paths.state_dir.join("quota.json"));
+    let quota = cloud::quota_usage(&app.ctx.paths.state_dir.join("quota.json"));
     widgets::card(ui, Some("Cloud storage"), |ui| {
         let Some((used, total, drive, fetched)) = quota else {
             ui.label(
@@ -296,7 +294,7 @@ fn cloud_storage(app: &App, ui: &mut egui::Ui) {
                 .size(12.0)
                 .weak(),
             );
-            if let Some((drive_bytes, _, _)) = cloud::snapshot_usage(&app.paths.snapshot_file) {
+            if let Some((drive_bytes, _, _)) = cloud::snapshot_usage(&app.ctx.paths.snapshot_file) {
                 ui.add_space(6.0);
                 ui.label(
                     egui::RichText::new(format!(
@@ -354,17 +352,15 @@ fn storage_stat(ui: &mut egui::Ui, label: &str, value: &str, sub: &str) {
 }
 
 fn sync_details(app: &mut App, ui: &mut egui::Ui) {
-    let next = app
-        .health
+    let next = app.ctx.health
         .next_poll_dt()
         .map(next_check_label)
         .unwrap_or_else(|| "Not scheduled".to_string());
-    let cloud_walk = cloud::snapshot_usage(&app.paths.snapshot_file)
+    let cloud_walk = cloud::snapshot_usage(&app.ctx.paths.snapshot_file)
         .and_then(|(_, _, ts)| chrono::DateTime::from_timestamp(ts as i64, 0))
         .map(|dt| util::rel_time(Some(dt.fixed_offset())))
         .unwrap_or_else(|| "Not yet".to_string());
-    let engine = app
-        .health
+    let engine = app.ctx.health
         .build
         .clone()
         .unwrap_or_else(|| crate::GUI_VERSION.to_string());
@@ -373,8 +369,7 @@ fn sync_details(app: &mut App, ui: &mut egui::Ui) {
     } else {
         app.draft.remote.clone()
     };
-    let interval = app
-        .health
+    let interval = app.ctx.health
         .interval
         .filter(|s| *s > 0)
         .map(interval_label)

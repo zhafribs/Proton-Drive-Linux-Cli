@@ -105,7 +105,7 @@ fn local_dir_from(conf: &BTreeMap<String, String>) -> std::path::PathBuf {
 }
 
 pub fn local_dir(app: &App) -> std::path::PathBuf {
-    local_dir_from(&app.conf)
+    local_dir_from(&app.ctx.conf)
 }
 
 /// Show upload exceptions at the top of the scroll area, so a long list can
@@ -336,7 +336,7 @@ fn render_summary(app: &mut App, s: &SyncSummary) -> String {
 }
 
 fn read_summary(app: &mut App) -> String {
-    let path = app.paths.state_dir.join("photos-sync.json");
+    let path = app.ctx.paths.state_dir.join("photos-sync.json");
     let Ok(text) = std::fs::read_to_string(&path) else {
         clear_summary(&mut app.photos);
         return String::new();
@@ -374,7 +374,7 @@ pub fn refresh(app: &mut App) {
     } else {
         String::new()
     };
-    let tx = app.tx.clone();
+    let tx = app.ctx.tx.clone();
     std::thread::spawn(move || {
         let _ = tx.send(super::Back::Photos(cli::fetch_photos()));
     });
@@ -428,17 +428,17 @@ pub fn request_sync(app: &mut App, uid: Option<&str>) {
         };
         return;
     }
-    if app.conf.get("PROTON_SYNC_PHOTOS").is_some_and(|v| v == "0") {
+    if app.ctx.conf.get("PROTON_SYNC_PHOTOS").is_some_and(|v| v == "0") {
         app.photos.status = "Photo sync is off in Settings.".to_string();
         return;
     }
-    let _ = std::fs::create_dir_all(&app.paths.state_dir);
-    let req = app.paths.state_dir.join("photos-request");
+    let _ = std::fs::create_dir_all(&app.ctx.paths.state_dir);
+    let req = app.ctx.paths.state_dir.join("photos-request");
     if let Err(e) = std::fs::write(&req, uid.unwrap_or("")) {
         app.photos.error = format!("Could not ask the engine to sync photos: {e}");
         return;
     }
-    let _ = std::fs::write(&app.paths.wake_file, b"");
+    let _ = std::fs::write(&app.ctx.paths.wake_file, b"");
     app.photos.error.clear();
     app.photos.checking_at = Some(app.now());
     app.photos.status = "Checking for new photos...".to_string();
@@ -448,7 +448,7 @@ pub fn download(app: &mut App, uids: Vec<String>) {
     if uids.is_empty() || app.photos.busy || app.photos.deleting {
         return;
     }
-    if app.health.status == "syncing" || app.health.phase.as_deref() == Some("photos") {
+    if app.ctx.health.status == "syncing" || app.ctx.health.phase.as_deref() == Some("photos") {
         app.photos.status = "Wait for the current check to finish, then download.".to_string();
         return;
     }
@@ -460,7 +460,7 @@ pub fn download(app: &mut App, uids: Vec<String>) {
         uids.len(),
         dir.display()
     );
-    let tx = app.tx.clone();
+    let tx = app.ctx.tx.clone();
     std::thread::spawn(move || {
         let r = cli::download_photos(&uids, &dir);
         let _ = tx.send(super::Back::PhotosDownloaded(r));
@@ -504,7 +504,7 @@ pub fn delete(app: &mut App, uids: Vec<String>) {
     app.photos.deleting = true;
     app.photos.error.clear();
     app.photos.status = format!("Moving {} photo(s) to the trash...", uids.len());
-    let tx = app.tx.clone();
+    let tx = app.ctx.tx.clone();
     std::thread::spawn(move || {
         let r = cli::trash_photos(&uids).inspect(|_| {
             for name in &names {
@@ -568,7 +568,7 @@ pub fn tick(app: &mut App) {
     // A new engine summary always updates the line and clears a pending
     // "checking" state; only a real transfer or a changed cloud size re-lists
     // the timeline, so an error or a no-op pass does not flicker the page.
-    let summary = std::fs::read_to_string(app.paths.state_dir.join("photos-sync.json"))
+    let summary = std::fs::read_to_string(app.ctx.paths.state_dir.join("photos-sync.json"))
         .ok()
         .and_then(|t| serde_json::from_str::<SyncSummary>(&t).ok());
     match summary {
@@ -730,7 +730,7 @@ fn request_thumb(app: &mut App, name: &str, path: std::path::PathBuf, stamp: f64
         return;
     }
     app.photos.in_flight.insert(name.to_string());
-    let tx = app.tx.clone();
+    let tx = app.ctx.tx.clone();
     let name = name.to_string();
     std::thread::spawn(move || {
         let result = std::fs::read(&path)
@@ -748,9 +748,9 @@ fn request_thumb(app: &mut App, name: &str, path: std::path::PathBuf, stamp: f64
 /// RTL layout: Open folder sits on the right, Sync photos on the left.
 fn photo_actions(app: &mut App, ui: &mut egui::Ui) {
     let dir = local_dir(app);
-    let photo_sync_on = app.conf.get("PROTON_SYNC_PHOTOS").is_none_or(|v| v != "0");
+    let photo_sync_on = app.ctx.conf.get("PROTON_SYNC_PHOTOS").is_none_or(|v| v != "0");
     let syncing =
-        app.health.status == "syncing" || app.health.phase.as_deref() == Some("photos");
+        app.ctx.health.status == "syncing" || app.ctx.health.phase.as_deref() == Some("photos");
     let ready = !app.photos.busy && !app.photos.deleting && !syncing;
     let signing_in = matches!(app.ui_status(), crate::health::UiStatus::SigningIn);
     let login_error = crate::health::is_login_error(&app.photos.sync_error);
@@ -847,9 +847,9 @@ fn photo_hero(app: &App, ui: &mut egui::Ui) {
     let needs_login = matches!(status, crate::health::UiStatus::NeedsLogin);
     let paused = matches!(status, crate::health::UiStatus::Paused);
     let starting = matches!(status, crate::health::UiStatus::Starting);
-    let photo_sync_on = app.conf.get("PROTON_SYNC_PHOTOS").is_none_or(|v| v != "0");
+    let photo_sync_on = app.ctx.conf.get("PROTON_SYNC_PHOTOS").is_none_or(|v| v != "0");
     let syncing =
-        app.health.status == "syncing" || app.health.phase.as_deref() == Some("photos");
+        app.ctx.health.status == "syncing" || app.ctx.health.phase.as_deref() == Some("photos");
     let cloud = if app.photos.cloud_count > 0 {
         app.photos.cloud_count
     } else {
@@ -864,7 +864,7 @@ fn photo_hero(app: &App, ui: &mut egui::Ui) {
     let needs_login = needs_login || (login_error && !signing_in);
     let needs_signin = signed_out || needs_login;
     let attention = app.photos.attention;
-    let photos_phase = app.health.phase.as_deref() == Some("photos");
+    let photos_phase = app.ctx.health.phase.as_deref() == Some("photos");
     let (key, label, title, sub): (&str, &str, &str, String) = if signing_in {
         (
             "signing_in",
@@ -973,7 +973,7 @@ fn photo_hero(app: &App, ui: &mut egui::Ui) {
             ),
         )
     };
-    let animate = app.prefs.motion_enabled();
+    let animate = app.ctx.prefs.motion_enabled();
     widgets::card(ui, None, |ui| {
         // Top-align the copy with the status pill; centering a two-line block
         // against the 72 px orb left the title visibly lower than the pill.
@@ -1036,9 +1036,9 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
     }
     app.photos.thumb_gen = app.photos.thumb_gen.wrapping_add(1);
 
-    let photo_sync_on = app.conf.get("PROTON_SYNC_PHOTOS").is_none_or(|v| v != "0");
+    let photo_sync_on = app.ctx.conf.get("PROTON_SYNC_PHOTOS").is_none_or(|v| v != "0");
     let syncing =
-        app.health.status == "syncing" || app.health.phase.as_deref() == Some("photos");
+        app.ctx.health.status == "syncing" || app.ctx.health.phase.as_deref() == Some("photos");
     let ready = !app.photos.busy && !app.photos.deleting && !syncing;
     let signed_out = matches!(
         app.ui_status(),
@@ -1147,9 +1147,9 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
         ui.add_space(8.0);
         widgets::card(ui, None, |ui| {
             ui.horizontal(|ui| {
-                widgets::busy_spinner(ui, app.prefs.motion_enabled());
+                widgets::busy_spinner(ui, app.ctx.prefs.motion_enabled());
                 ui.label(
-                    egui::RichText::new(if app.health.phase.as_deref() == Some("photos") {
+                    egui::RichText::new(if app.ctx.health.phase.as_deref() == Some("photos") {
                         "Syncing photos\u{2026}"
                     } else {
                         "Waiting for the file sync to finish\u{2026}"

@@ -20,3 +20,6 @@ gui/target/
 
 # Isolated git worktrees
 .worktrees/
+
+# graphify generated artifacts
+graphify-out/

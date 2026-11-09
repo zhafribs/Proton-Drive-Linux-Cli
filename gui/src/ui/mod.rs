@@ -257,16 +257,23 @@ pub struct UpdateUi {
     pub next_check: Option<std::time::Instant>,
 }
 
-pub struct App {
+/// Shared infrastructure every page needs. Kept separate from the page
+/// state so a page can be handed only what it should touch.
+pub struct AppCtx {
     pub paths: Paths,
     pub prefs: prefs::Prefs,
     pub conf: BTreeMap<String, String>,
     pub conf_extras: Vec<String>,
     pub tx: mpsc::Sender<Back>,
     pub rx: mpsc::Receiver<Back>,
+    pub health: health::Health,
+    pub identity: Option<cli::Identity>,
+}
+
+pub struct App {
+    pub ctx: AppCtx,
     pub _lock: std::fs::File,
 
-    pub health: health::Health,
     pub active: bool,
     pub enabled: bool,
     pub page: Page,
@@ -280,7 +287,6 @@ pub struct App {
     /// Activity tab) is on screen the journal refreshes on the live cadence.
     pub journal_open: Arc<AtomicBool>,
 
-    pub identity: Option<cli::Identity>,
     /// Re-probe sign-in after the engine reports a keyring problem: a locked
     /// keyring makes the CLI look "not signed in" until it is unlocked.
     pub identity_retry: Option<std::time::Instant>,
@@ -805,23 +811,28 @@ impl App {
         let tray = tray::spawn(tx.clone(), icon_rgba, icon_w);
 
         let nav_width = prefs.nav_width;
+        let hide_on_start = prefs.start_in_tray();
+        let prefs_baseline = Some(prefs.clone());
         let paused_by_user = paths.state_dir.join("paused").exists();
         let last_email = std::fs::read_to_string(paths.state_dir.join("last-email"))
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
         Ok(Box::new(App {
-            hide_on_start: prefs.start_in_tray(),
-            prefs_baseline: Some(prefs.clone()),
+            ctx: AppCtx {
+                paths,
+                prefs,
+                conf,
+                conf_extras,
+                tx,
+                rx,
+                health: health::Health::default(),
+                identity: None,
+            },
+            hide_on_start,
+            prefs_baseline,
             settings_tab: 0,
-            prefs,
-            paths,
-            conf,
-            conf_extras,
-            tx,
-            rx,
             _lock: lock,
-            health: health::Health::default(),
             active: false,
             enabled: false,
             page: Page::Home,
@@ -830,7 +841,6 @@ impl App {
             nav_drag: false,
             journal_open: journal.clone(),
 
-            identity: None,
             identity_retry: None,
             last_email,
             paused_by_user,
@@ -885,7 +895,7 @@ impl App {
         let pref = self
             .preview_theme
             .clone()
-            .unwrap_or_else(|| self.prefs.theme());
+            .unwrap_or_else(|| self.ctx.prefs.theme());
         system_theme::resolve(&pref, &self.system_theme)
     }
 
@@ -896,27 +906,25 @@ impl App {
             .login_started
             .is_some_and(|t| t.elapsed() < Duration::from_secs(300))
             && !self.logged_in();
-        let session_error = self
-            .identity
+        let session_error = self.ctx.identity
             .as_ref()
             .and_then(|i| i.error.as_deref())
             .is_some_and(health::is_login_error);
         // A busy lock, locked keyring or network error is not a sign-out.
         // Leave the identity unknown so the orb shows Starting/Synced instead
         // of the welcome screen; `needs_login` from the engine still wins.
-        let transient_identity_error = self
-            .identity
+        let transient_identity_error = self.ctx.identity
             .as_ref()
             .and_then(|i| i.error.as_deref())
             .is_some_and(|e| !health::is_login_error(e));
         let identity = if transient_identity_error {
             None
         } else {
-            self.identity.as_ref().map(|i| i.logged_in)
+            self.ctx.identity.as_ref().map(|i| i.logged_in)
         };
         health::derive_status(
             self.active,
-            &self.health.status,
+            &self.ctx.health.status,
             identity,
             signing_in,
             self.paused_by_user,
@@ -936,7 +944,7 @@ impl App {
     }
 
     pub fn logged_in(&self) -> bool {
-        self.identity.as_ref().is_some_and(|i| i.logged_in)
+        self.ctx.identity.as_ref().is_some_and(|i| i.logged_in)
     }
 
     /// Account-scoped actions need a session. An unresolved probe is treated
@@ -993,8 +1001,8 @@ impl App {
             });
             return;
         }
-        let _ = std::fs::create_dir_all(&self.paths.state_dir);
-        let _ = std::fs::write(&self.paths.wake_file, b"");
+        let _ = std::fs::create_dir_all(&self.ctx.paths.state_dir);
+        let _ = std::fs::write(&self.ctx.paths.wake_file, b"");
         self.sub_override = Some((
             "On it - checking for new changes...".into(),
             self.now() + 8.0,
@@ -1003,7 +1011,7 @@ impl App {
 
     pub fn action_open_folder(&self) {
         let root = expand_user(
-            self.conf
+            self.ctx.conf
                 .get("PROTON_SYNC_LOCAL")
                 .map(String::as_str)
                 .unwrap_or(""),
@@ -1022,7 +1030,7 @@ impl App {
     /// the sync root when the target is gone).
     pub fn action_open_sync_path(&self, rel: &str) {
         let root = expand_user(
-            self.conf
+            self.ctx.conf
                 .get("PROTON_SYNC_LOCAL")
                 .map(String::as_str)
                 .unwrap_or(""),
@@ -1079,7 +1087,7 @@ impl App {
                         .spawn();
                 });
                 // Qt re-checked identity 10 s after opening the terminal.
-                let tx = self.tx.clone();
+                let tx = self.ctx.tx.clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(Duration::from_secs(10));
                     if let Some(c) = cli::resolve_cli() {
@@ -1103,9 +1111,9 @@ impl App {
         // screen, not "session expired".
         self.last_email = None;
         self.login_started = None;
-        let _ = std::fs::remove_file(self.paths.state_dir.join("last-email"));
-        let tx = self.tx.clone();
-        let state_dir = self.paths.state_dir.clone();
+        let _ = std::fs::remove_file(self.ctx.paths.state_dir.join("last-email"));
+        let tx = self.ctx.tx.clone();
+        let state_dir = self.ctx.paths.state_dir.clone();
         std::thread::spawn(move || {
             if let Some(c) = cli::resolve_cli() {
                 match cli::logout(&c) {
@@ -1140,8 +1148,8 @@ impl App {
     pub fn action_pause(&mut self, secs: Option<u64>) {
         self.paused_by_user = true;
         self.paused_at = Some(Instant::now());
-        let _ = std::fs::create_dir_all(&self.paths.state_dir);
-        let _ = std::fs::write(self.paths.state_dir.join("paused"), b"1");
+        let _ = std::fs::create_dir_all(&self.ctx.paths.state_dir);
+        let _ = std::fs::write(self.ctx.paths.state_dir.join("paused"), b"1");
         std::thread::spawn(move || {
             let _ = service::pause_for(secs);
         });
@@ -1150,8 +1158,8 @@ impl App {
     pub fn action_resume(&mut self) {
         self.paused_by_user = false;
         self.paused_at = None;
-        let _ = std::fs::remove_file(self.paths.state_dir.join("paused"));
-        let appimage = self.paths.appimage.clone();
+        let _ = std::fs::remove_file(self.ctx.paths.state_dir.join("paused"));
+        let appimage = self.ctx.paths.appimage.clone();
         std::thread::spawn(move || {
             let _ = service::ensure_service_unit(appimage.as_deref(), false);
             let _ = service::resume();
@@ -1161,9 +1169,9 @@ impl App {
     pub fn action_restart_service(&mut self) {
         self.paused_by_user = false;
         self.paused_at = None;
-        let _ = std::fs::remove_file(self.paths.state_dir.join("paused"));
-        let appimage = self.paths.appimage.clone();
-        let tx = self.tx.clone();
+        let _ = std::fs::remove_file(self.ctx.paths.state_dir.join("paused"));
+        let appimage = self.ctx.paths.appimage.clone();
+        let tx = self.ctx.tx.clone();
         std::thread::spawn(move || {
             let _ = service::ensure_service_unit(appimage.as_deref(), false);
             // Report the real outcome: `systemctl` can fail (no unit, no
@@ -1179,8 +1187,8 @@ impl App {
         }
         self.upd.checking = true;
         self.upd.label = "Checking for updates...".into();
-        let paths = self.paths.clone();
-        let tx = self.tx.clone();
+        let paths = self.ctx.paths.clone();
+        let tx = self.ctx.tx.clone();
         std::thread::spawn(move || {
             // The installed CLI version is read HERE, in the worker: the
             // identity fetch waits for a full cloud listing (up to two
@@ -1211,7 +1219,7 @@ impl App {
         }
         self.upd.downloading = true;
         self.upd.label = "Downloading and verifying the update...".into();
-        let tx = self.tx.clone();
+        let tx = self.ctx.tx.clone();
         // x86_64 / aarch64, the release filenames' arch (uname -m).
         let arch = std::env::consts::ARCH;
         std::thread::spawn(move || {
@@ -1236,7 +1244,7 @@ impl App {
     // ------------------------------------------------------------- draining
 
     fn drain(&mut self, ctx: &egui::Context) {
-        while let Ok(back) = self.rx.try_recv() {
+        while let Ok(back) = self.ctx.rx.try_recv() {
             match back {
                 Back::Poll {
                     health,
@@ -1256,11 +1264,11 @@ impl App {
                     // service already runs its first cycle on its own).
                     let was_signing_in = self.login_started.is_some();
                     let signed_in_now =
-                        id.logged_in && self.identity.as_ref().is_some_and(|i| !i.logged_in);
+                        id.logged_in && self.ctx.identity.as_ref().is_some_and(|i| !i.logged_in);
                     if id.logged_in {
                         self.login_started = None;
                         if let Some(email) = id.email.clone() {
-                            let _ = std::fs::write(self.paths.state_dir.join("last-email"), &email);
+                            let _ = std::fs::write(self.ctx.paths.state_dir.join("last-email"), &email);
                             self.last_email = Some(email);
                         }
                         if was_signing_in || signed_in_now {
@@ -1268,7 +1276,7 @@ impl App {
                             // when interval=0 left the engine waiting. Restart
                             // an active service so it picks up the fresh CLI
                             // session; never start one the user paused.
-                            let _ = std::fs::write(&self.paths.wake_file, b"");
+                            let _ = std::fs::write(&self.ctx.paths.wake_file, b"");
                             if !self.paused_by_user {
                                 std::thread::spawn(|| {
                                     if service::can_start() {
@@ -1278,7 +1286,7 @@ impl App {
                             }
                         }
                     }
-                    self.identity = Some(id);
+                    self.ctx.identity = Some(id);
                     // Keep probing while the sign-in terminal is open - after
                     // each result, not on a blind timer, so probes never stack
                     // up behind the engine's CLI lock.
@@ -1400,19 +1408,33 @@ impl App {
                 }
                 Back::CloudPicked(p) => cloud::on_picked(self, p),
                 Back::CloudPickFailed(msg) => self.toast_error(msg),
-                Back::RecoveryLoaded(result) => recovery::on_loaded(self, result),
-                Back::ConflictsLoaded(result) => recovery::on_conflicts_loaded(self, result),
-                Back::SnapshotsLoaded(result) => recovery::on_snapshots_loaded(self, result),
+                Back::RecoveryLoaded(result) => {
+                    recovery::on_loaded(&mut self.recovery, result)
+                }
+                Back::ConflictsLoaded(result) => {
+                    recovery::on_conflicts_loaded(&mut self.recovery, result)
+                }
+                Back::SnapshotsLoaded(result) => {
+                    recovery::on_snapshots_loaded(&mut self.recovery, result)
+                }
                 Back::RecoveryResult { ok, message } => {
-                    recovery::on_result(self, ok, message)
+                    recovery::on_result(&mut self.recovery, ok, message)
                 }
                 Back::ConflictResult { ok, message } => {
-                    recovery::on_conflict_result(self, ok, message)
+                    recovery::on_conflict_result(&mut self.recovery, ok, message)
                 }
                 Back::SnapshotResult { ok, message } => {
-                    recovery::on_snapshot_result(self, ok, message)
+                    recovery::on_snapshot_result(&mut self.recovery, ok, message)
                 }
-                Back::RecoveryCheckDone(result) => recovery::on_check_done(self, result),
+                Back::RecoveryCheckDone(result) => {
+                    let now = self.now();
+                    recovery::on_check_done(
+                        &mut self.recovery,
+                        &mut self.toasts,
+                        now,
+                        result,
+                    )
+                }
                 Back::SymlinkScan(result) => settings::on_symlink_scan(self, result),
                 Back::PickerFolders { parent, folders } => {
                     cloud::on_picker_folders(self, parent, folders)
@@ -1502,7 +1524,7 @@ impl App {
             return;
         }
         self.system_theme = theme.clone();
-        if matches!(self.prefs.theme(), prefs::Theme::System) {
+        if matches!(self.ctx.prefs.theme(), prefs::Theme::System) {
             theme::force(ctx, &theme);
             ctx.request_repaint();
         }
@@ -1513,7 +1535,7 @@ impl App {
         if self.prev_hstatus == "syncing"
             && health.status == "ok"
             && (health.uploaded > 0 || health.downloaded > 0)
-            && self.prefs.notify_complete()
+            && self.ctx.prefs.notify_complete()
             && self.cool.cool_ok("done", 60)
         {
             notify::send(
@@ -1538,13 +1560,13 @@ impl App {
         // unlocked the keyring and is syncing): the first identity probe was
         // answered while the keyring was still locked.
         let engine_signed_in = matches!(health.status.as_str(), "ok" | "syncing");
-        let identity_error = self.identity.as_ref().and_then(|i| i.error.as_deref());
+        let identity_error = self.ctx.identity.as_ref().and_then(|i| i.error.as_deref());
         // A timeout/lock error is not a sign-out: retry it even when the
         // engine is not running, or a transient probe failure would leave a
         // signed-in user on the welcome screen for the whole session.
         let transient_error =
             identity_error.is_some_and(|e| !health::is_login_error(e));
-        let probe_retryable = self.identity.as_ref().is_some_and(|i| {
+        let probe_retryable = self.ctx.identity.as_ref().is_some_and(|i| {
             i.error
                 .as_deref()
                 .is_none_or(|e| !health::is_login_error(e))
@@ -1556,7 +1578,7 @@ impl App {
         {
             self.identity_retry = Some(Instant::now() + Duration::from_secs(15));
         }
-        self.health = health;
+        self.ctx.health = health;
         self.active = active;
         self.enabled = enabled;
         // A timed pause auto-resumes (or the user starts it elsewhere): clear
@@ -1570,7 +1592,7 @@ impl App {
         {
             self.paused_by_user = false;
             self.paused_at = None;
-            let _ = std::fs::remove_file(self.paths.state_dir.join("paused"));
+            let _ = std::fs::remove_file(self.ctx.paths.state_dir.join("paused"));
         }
     }
 
@@ -1586,7 +1608,7 @@ impl App {
             let name = journal::change_name(body);
             let verb = body.split_whitespace().next().unwrap_or("");
             if verb == "CONFLICT"
-                && self.prefs.notify_conflicts()
+                && self.ctx.prefs.notify_conflicts()
                 && self.cool.cool_ok("conflict", 30)
             {
                 notify::send(
@@ -1594,7 +1616,7 @@ impl App {
                     &format!("'{name}' changed in two places - both copies are safe."),
                 );
             } else if matches!(verb, "ERROR" | "FAILED" | "REFUSE")
-                && self.prefs.notify_errors()
+                && self.ctx.prefs.notify_errors()
                 && self.cool.cool_ok("error", 30)
             {
                 let short: String = body.chars().take(150).collect();
@@ -1624,8 +1646,8 @@ impl App {
             // keeps the same physical window across zoom changes.
             let zoom = ctx.zoom_factor();
             let (w, h) = ((sz.x * zoom).round() as u32, (sz.y * zoom).round() as u32);
-            if w != self.prefs.window_w || h != self.prefs.window_h {
-                self.prefs.set_window_size(w, h);
+            if w != self.ctx.prefs.window_w || h != self.ctx.prefs.window_h {
+                self.ctx.prefs.set_window_size(w, h);
             }
         }
     }
@@ -1785,8 +1807,7 @@ impl App {
                             );
                         });
                         ui.add_space(2.0);
-                        let when = self
-                            .health
+                        let when = self.ctx.health
                             .ts_dt()
                             .map(|dt| {
                                 format!("Updated {}", util::rel_time(Some(dt)))
@@ -1847,14 +1868,13 @@ impl App {
     /// identity at the very bottom; the pages themselves live as rows in the
     /// nav list above.
     fn account_row(&mut self, ui: &mut egui::Ui) {
-        let email = self
-            .identity
+        let email = self.ctx.identity
             .as_ref()
             .and_then(|i| i.email.clone())
             .or_else(|| self.last_email.clone());
         let label = if let Some(email) = email.as_deref() {
             email
-        } else if self.identity.is_some() {
+        } else if self.ctx.identity.is_some() {
             "Signed out"
         } else {
             "Checking\u{2026}"
@@ -2018,7 +2038,19 @@ impl App {
                 Page::Activity => activity::draw(self, ui, "Activity"),
                 Page::Settings => settings::draw(self, ui),
                 Page::About => about::draw(self, ui),
-                Page::Recovery => recovery::draw(self, ui),
+                Page::Recovery => {
+                    let now = self.now();
+                    let mut ctx = recovery::RecoveryCtx {
+                        state: &mut self.recovery,
+                        paths: &self.ctx.paths,
+                        conf: &self.ctx.conf,
+                        tx: &self.ctx.tx,
+                        motion: self.ctx.prefs.motion_enabled(),
+                        toasts: &mut self.toasts,
+                        now,
+                    };
+                    recovery::draw(&mut ctx, ui);
+                }
             });
     }
 
@@ -2048,7 +2080,7 @@ impl App {
             front.error,
         );
         let age = (t - since) as f32;
-        let animate = self.prefs.motion_enabled();
+        let animate = self.ctx.prefs.motion_enabled();
         // Errors stay until dismissed; info slides in and fades out. With
         // motion off the toast appears and leaves without the slide/fade.
         let (fade, slide) = if error || !animate {
@@ -2589,7 +2621,7 @@ impl App {
                     });
             }
             Dialog::CloudMove => {
-                let root = cloud::remote_root(&self.conf);
+                let root = cloud::remote_root(&self.ctx.conf);
                 egui::Window::new("Move to")
                     .collapsible(false)
                     .order(egui::Order::Foreground)
@@ -2727,21 +2759,19 @@ impl App {
                     local_digest,
                     cloud_digest,
                     created_at: proton_core::delete_approval::now_secs(),
-                    local_root: self
-                        .conf
+                    local_root: self.ctx.conf
                         .get("PROTON_SYNC_LOCAL")
                         .cloned()
                         .unwrap_or_default(),
-                    remote_root: self
-                        .conf
+                    remote_root: self.ctx.conf
                         .get("PROTON_SYNC_REMOTE")
                         .cloned()
                         .unwrap_or_default(),
                 };
-                let path = self.paths.state_dir.join("deletes-approval.json");
+                let path = self.ctx.paths.state_dir.join("deletes-approval.json");
                 match proton_core::delete_approval::write(&path, &approval) {
                     Ok(()) => {
-                        let _ = std::fs::write(&self.paths.wake_file, b"");
+                        let _ = std::fs::write(&self.ctx.paths.wake_file, b"");
                         self.toast(format!(
                             "Approved {} deletion(s) once. Syncing now.",
                             local + cloud
@@ -2764,7 +2794,7 @@ impl App {
             }
             DlgAct::ClearCache => {
                 self.dialog = None;
-                match service::clear_snapshot_cache(&self.paths) {
+                match service::clear_snapshot_cache(&self.ctx.paths) {
                     Ok(()) => self.toast("Snapshot cache cleared. The next start will scan fully."),
                     Err(e) => self.toast_error(format!("Could not clear the snapshot cache: {e}")),
                 }
@@ -2819,7 +2849,7 @@ impl eframe::App for App {
             && Instant::now() >= t
         {
             self.identity_retry = None;
-            let tx = self.tx.clone();
+            let tx = self.ctx.tx.clone();
             let waiting = self
                 .login_started
                 .is_some_and(|t| t.elapsed() < Duration::from_secs(300))
@@ -2856,7 +2886,7 @@ impl eframe::App for App {
             && std::time::Instant::now() >= t
         {
             self.upd.next_check = Some(std::time::Instant::now() + Duration::from_secs(6 * 3600));
-            if self.prefs.updates_auto() {
+            if self.ctx.prefs.updates_auto() {
                 self.action_check_updates();
             }
         }
@@ -2883,7 +2913,7 @@ impl eframe::App for App {
 
         if ctx.input(|i| i.viewport().close_requested()) && !self.quitting {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            if hides_to_tray(self.prefs.close_to_tray(), self.tray.is_some()) {
+            if hides_to_tray(self.ctx.prefs.close_to_tray(), self.tray.is_some()) {
                 self.hide_to_tray(ctx);
             } else {
                 self.quit(ctx);
@@ -2897,11 +2927,11 @@ impl eframe::App for App {
             let pref = self
                 .preview_theme
                 .clone()
-                .unwrap_or_else(|| self.prefs.theme());
+                .unwrap_or_else(|| self.ctx.prefs.theme());
             if pref == prefs::Theme::System {
                 self.system_theme = system_theme::detect();
             }
-            theme::apply(ctx, &pref, self.prefs.motion_enabled());
+            theme::apply(ctx, &pref, self.ctx.prefs.motion_enabled());
             theme::force(ctx, &self.resolved_theme());
             self.style_dirty = false;
         }
@@ -2909,7 +2939,7 @@ impl eframe::App for App {
         // Keep the interface scale in sync with the live preview or the pref.
         let want_zoom = self
             .preview_scale
-            .unwrap_or_else(|| self.prefs.ui_scale())
+            .unwrap_or_else(|| self.ctx.prefs.ui_scale())
             .factor();
         if (ctx.zoom_factor() - want_zoom).abs() > 0.001 {
             ctx.set_zoom_factor(want_zoom);
@@ -3037,7 +3067,7 @@ impl eframe::App for App {
             let w = prect.width();
             if (w - self.nav_width).abs() > 0.5 {
                 self.nav_width = w;
-                self.prefs.set_nav_width(w);
+                self.ctx.prefs.set_nav_width(w);
             }
             self.nav_drag = false;
         }

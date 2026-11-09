@@ -201,7 +201,7 @@ fn update_pill(app: &App, ui: &mut egui::Ui) {
 
 fn cli_version(app: &App) -> String {
     cli_version_from(
-        app.identity
+        app.ctx.identity
             .as_ref()
             .map(|i| i.version.as_str())
             .unwrap_or(""),
@@ -389,7 +389,7 @@ fn updates(app: &mut App, ui: &mut egui::Ui) {
         let checking = app.upd.checking;
         let downloading = app.upd.downloading;
         let status = app.upd.label.clone();
-        let has_update = release.is_some() && app.paths.appimage.is_some();
+        let has_update = release.is_some() && app.ctx.paths.appimage.is_some();
 
         if !status.is_empty() {
             let short = status.split(" (").next().unwrap_or(&status).to_string();
@@ -443,20 +443,19 @@ fn details(app: &mut App, ui: &mut egui::Ui) {
         .id_salt("about-details")
         .show(ui, |ui| {
             let cli = cli_version(app);
-            let engine = app
-                .health
+            let engine = app.ctx.health
                 .build
                 .clone()
                 .unwrap_or_else(|| GUI_VERSION.to_string());
-            let install = if app.paths.appimage.is_some() {
+            let install = if app.ctx.paths.appimage.is_some() {
                 "AppImage"
             } else {
                 "Development build"
             };
-            let conf = short_home(&app.paths.conf_file);
-            let conf_full = app.paths.conf_file.display().to_string();
-            let state = short_home(&app.paths.state_dir);
-            let state_full = app.paths.state_dir.display().to_string();
+            let conf = short_home(&app.ctx.paths.conf_file);
+            let conf_full = app.ctx.paths.conf_file.display().to_string();
+            let state = short_home(&app.ctx.paths.state_dir);
+            let state_full = app.ctx.paths.state_dir.display().to_string();
 
             detail_row(ui, "GUI", GUI_VERSION, None);
             detail_row(ui, "Proton CLI", &cli, None);
@@ -466,7 +465,7 @@ fn details(app: &mut App, ui: &mut egui::Ui) {
             detail_row(ui, "State", &state, Some(&state_full));
             if !app.recovery.check_loaded {
                 app.recovery.last_check =
-                    super::recovery::load_check(&app.paths.state_dir);
+                    super::recovery::load_check(&app.ctx.paths.state_dir);
                 app.recovery.check_loaded = true;
             }
             let (check, check_detail) = match &app.recovery.last_check {

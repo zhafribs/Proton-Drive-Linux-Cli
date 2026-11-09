@@ -88,7 +88,7 @@ pub fn remote_root(conf: &std::collections::BTreeMap<String, String>) -> String 
 pub fn reset(app: &mut App) {
     app.cloud = CloudState::default();
     app.cloud.opened = false;
-    let _ = std::fs::remove_file(&app.paths.cloud_cache_file);
+    let _ = std::fs::remove_file(&app.ctx.paths.cloud_cache_file);
 }
 
 // ------------------------------------------------------------------ navigation
@@ -98,7 +98,7 @@ pub fn on_shown(app: &mut App) {
     app.cloud.opened = true;
     if !app.cloud.disk_loaded {
         app.cloud.disk_loaded = true;
-        app.cloud.disk = load_disk_cache(&app.paths.cloud_cache_file);
+        app.cloud.disk = load_disk_cache(&app.ctx.paths.cloud_cache_file);
     }
     if app.cloud.trash_view {
         load_trash(app, true);
@@ -163,7 +163,7 @@ fn load_inner(app: &mut App, rel: String, push: bool, announce: bool, paint: boo
         .get(&rel)
         .cloned()
         .or_else(|| app.cloud.disk.get(&rel).map(|d| d.entries.clone()))
-        .or_else(|| seed_entries(&app.paths.snapshot_file, &rel));
+        .or_else(|| seed_entries(&app.ctx.paths.snapshot_file, &rel));
     let have_cached = cached.is_some();
     if paint && let Some(src) = cached {
         fill(app, src);
@@ -207,9 +207,9 @@ fn load_inner(app: &mut App, rel: String, push: bool, announce: bool, paint: boo
         return;
     }
 
-    let root = remote_root(&app.conf);
+    let root = remote_root(&app.ctx.conf);
     let serial = app.cloud.serial;
-    let tx = app.tx.clone();
+    let tx = app.ctx.tx.clone();
     std::thread::spawn(move || {
         let result = cli::fetch_remote_entries(&root, &rel);
         let _ = tx.send(Back::CloudEntries { key: rel, serial, result });
@@ -257,7 +257,7 @@ pub fn load_trash(app: &mut App, announce: bool) {
         return;
     }
     let serial = app.cloud.serial;
-    let tx = app.tx.clone();
+    let tx = app.ctx.tx.clone();
     std::thread::spawn(move || {
         let result = cli::fetch_trash_entries();
         let _ = tx.send(Back::CloudEntries { key: TRASH_KEY.to_string(), serial, result });
@@ -387,7 +387,7 @@ pub fn mutate(
     app.cloud.busy = true;
     app.cloud.status = status.to_string();
     app.cloud.status_tip.clear();
-    let tx = app.tx.clone();
+    let tx = app.ctx.tx.clone();
     std::thread::spawn(move || {
         let res = run_cli(&args, 600);
         let msg = match res {
@@ -432,11 +432,11 @@ fn refresh_current(app: &mut App) {
     app.cloud.session.remove(&key);
     app.cloud.disk.remove(&key);
     app.cloud.fetched.remove(&key);
-    save_disk_cache(&app.paths.cloud_cache_file, &app.cloud.disk);
+    save_disk_cache(&app.ctx.paths.cloud_cache_file, &app.cloud.disk);
     if app.cloud.trash_view {
         app.cloud.serial += 1;
         let serial = app.cloud.serial;
-        let tx = app.tx.clone();
+        let tx = app.ctx.tx.clone();
         std::thread::spawn(move || {
             let result = cli::fetch_trash_entries();
             let _ = tx.send(Back::CloudEntries { key: TRASH_KEY.to_string(), serial, result });
@@ -484,7 +484,7 @@ pub fn action_rename(app: &mut App, old_rel: String, name: String) {
         app.toast_error("Refusing an unsafe remote path.");
         return;
     }
-    let root = remote_root(&app.conf);
+    let root = remote_root(&app.ctx.conf);
     mutate(
         app,
         vec!["fs".into(), "rename".into(), cli::rpath(&root, &old_rel), name.clone()],
@@ -499,7 +499,7 @@ pub fn action_new_folder(app: &mut App, name: String) {
     if name.is_empty() || name.contains('/') {
         return;
     }
-    let root = remote_root(&app.conf);
+    let root = remote_root(&app.ctx.conf);
     mutate(
         app,
         vec![
@@ -523,7 +523,7 @@ pub fn action_move(app: &mut App, target_rel: String) {
         app.toast_error("Refusing an unsafe destination path.");
         return;
     }
-    let root = remote_root(&app.conf);
+    let root = remote_root(&app.ctx.conf);
     let mut args = vec!["fs".to_string(), "move".to_string()];
     for s in &app.cloud.sel {
         args.push(cli::rpath(&root, s));
@@ -537,7 +537,7 @@ pub fn action_trash(app: &mut App) {
     if n == 0 || refuse_unsafe(app) {
         return;
     }
-    let root = remote_root(&app.conf);
+    let root = remote_root(&app.ctx.conf);
     let mut args = vec!["fs".to_string(), "trash".to_string()];
     for s in &app.cloud.sel {
         args.push(cli::rpath(&root, s));
@@ -596,7 +596,7 @@ pub fn action_duplicate(app: &mut App) {
     let Some(rel) = app.cloud.sel.first().cloned() else {
         return;
     };
-    let root = remote_root(&app.conf);
+    let root = remote_root(&app.ctx.conf);
     let parent = rel.rsplit_once('/').map(|(p, _)| p.to_string()).unwrap_or_default();
     let name = rel.rsplit('/').next().unwrap_or(&rel).to_string();
     let copy_name = format!("{name} copy");
@@ -624,7 +624,7 @@ pub fn pick_upload_files(app: &mut App) {
         return;
     }
     let target = app.cloud.rel.clone();
-    let tx = app.tx.clone();
+    let tx = app.ctx.tx.clone();
     std::thread::spawn(move || {
         let picked = match portal::open_files() {
             portal::PickResult::Done(paths) => {
@@ -649,7 +649,7 @@ pub fn pick_upload_folder(app: &mut App) {
         return;
     }
     let target = app.cloud.rel.clone();
-    let tx = app.tx.clone();
+    let tx = app.ctx.tx.clone();
     std::thread::spawn(move || {
         let picked = match portal::open_dir("Upload folder") {
             portal::PickResult::Done(dir) => {
@@ -690,7 +690,7 @@ pub fn pick_download(app: &mut App) {
     if plain.is_empty() {
         return;
     }
-    let root = remote_root(&app.conf);
+    let root = remote_root(&app.ctx.conf);
     if plain.len() == 1 {
         let rel = plain[0].clone();
         let is_dir = app
@@ -702,7 +702,7 @@ pub fn pick_download(app: &mut App) {
         if !is_dir {
             let name = rel.rsplit('/').next().unwrap_or(&rel).to_string();
             let rpath = cli::rpath(&root, &rel);
-            let tx = app.tx.clone();
+            let tx = app.ctx.tx.clone();
             std::thread::spawn(move || {
                 let picked = match portal::save_file(&name) {
                     portal::PickResult::Done(dest) => {
@@ -724,7 +724,7 @@ pub fn pick_download(app: &mut App) {
     }
     let rpaths: Vec<String> = plain.iter().map(|r| cli::rpath(&root, r)).collect();
     let n = rpaths.len();
-    let tx = app.tx.clone();
+    let tx = app.ctx.tx.clone();
     std::thread::spawn(move || {
         let picked = match portal::open_dir("Save to folder") {
             portal::PickResult::Done(dest) => {
@@ -749,7 +749,7 @@ pub fn on_picked(app: &mut App, picked: Option<super::Picked>) {
         None => {} // cancelled: no state change
         Some(Picked::UploadFiles { paths, target }) => {
             let n = paths.len();
-            let root = remote_root(&app.conf);
+            let root = remote_root(&app.ctx.conf);
             let mut args = vec!["fs".to_string(), "upload".to_string()];
             for p in &paths {
                 match p.to_str() {
@@ -782,7 +782,7 @@ pub fn on_picked(app: &mut App, picked: Option<super::Picked>) {
                 );
                 return;
             };
-            let root = remote_root(&app.conf);
+            let root = remote_root(&app.ctx.conf);
             let body = name.clone();
             mutate(
                 app,
@@ -800,7 +800,7 @@ pub fn on_picked(app: &mut App, picked: Option<super::Picked>) {
         Some(Picked::DownloadSave { rpath, dest }) => {
             app.cloud.busy = true;
             app.cloud.status = "Downloading...".to_string();
-            let tx = app.tx.clone();
+            let tx = app.ctx.tx.clone();
             std::thread::spawn(move || {
                 let res = fetch_one(&rpath, &dest);
                 let _ = tx.send(Back::CloudDownload {
@@ -817,7 +817,7 @@ pub fn on_picked(app: &mut App, picked: Option<super::Picked>) {
         Some(Picked::DownloadDir { rpaths, dest, n }) => {
             app.cloud.busy = true;
             app.cloud.status = format!("Downloading {n} item(s)...");
-            let tx = app.tx.clone();
+            let tx = app.ctx.tx.clone();
             std::thread::spawn(move || {
                 let (ok, got, err) = match fetch_all(&rpaths, &dest) {
                     Ok(n) => (true, n, String::new()),
@@ -1036,8 +1036,8 @@ pub fn picker_expand(app: &mut App, rel: String) {
     }
     picker.expand_req = Some(rel);
     let Some(rel) = picker.expand_req.clone() else { return };
-    let root = remote_root(&app.conf);
-    let tx = app.tx.clone();
+    let root = remote_root(&app.ctx.conf);
+    let tx = app.ctx.tx.clone();
     std::thread::spawn(move || {
         let folders = cli::fetch_remote_folders(&root, &rel);
         let _ = tx.send(Back::PickerFolders { parent: rel, folders });
@@ -1249,7 +1249,7 @@ fn persist_cache(app: &mut App) {
         return;
     }
     app.cloud.last_save = now;
-    save_disk_cache(&app.paths.cloud_cache_file, &app.cloud.disk);
+    save_disk_cache(&app.ctx.paths.cloud_cache_file, &app.cloud.disk);
 }
 
 // ------------------------------------------------------------------ sorting
@@ -1778,7 +1778,7 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
                         ui.add_space(26.0);
                         ui.vertical_centered(|ui| {
                             if loading {
-                                widgets::busy_spinner(ui, app.prefs.motion_enabled());
+                                widgets::busy_spinner(ui, app.ctx.prefs.motion_enabled());
                                 ui.add_space(8.0);
                                 ui.label(egui::RichText::new("Loading files\u{2026}").weak());
                             } else if query_active {
@@ -2706,7 +2706,7 @@ fn children(app: &App, rel: &str) -> Option<Vec<cli::RemoteEntry>> {
         .get(rel)
         .cloned()
         .or_else(|| app.cloud.disk.get(rel).map(|d| d.entries.clone()))
-        .or_else(|| seed_entries(&app.paths.snapshot_file, rel))
+        .or_else(|| seed_entries(&app.ctx.paths.snapshot_file, rel))
 }
 
 /// Kick off a background listing for `rel` if we don't have it yet.
@@ -2721,10 +2721,10 @@ fn ensure_children(app: &mut App, rel: &str) {
         app.cloud.tree_failed.remove(rel);
     }
     app.cloud.tree_loading.insert(rel.to_string());
-    let root = remote_root(&app.conf);
+    let root = remote_root(&app.ctx.conf);
     let key = rel.to_string();
     let at = epoch_now();
-    let tx = app.tx.clone();
+    let tx = app.ctx.tx.clone();
     std::thread::spawn(move || {
         let result = cli::fetch_remote_entries(&root, &key);
         let _ = tx.send(Back::TreeEntries { key, at, result });
@@ -2778,7 +2778,7 @@ fn go_trash(app: &mut App) {
 pub fn nav_ui(app: &mut App, ui: &mut egui::Ui) {
     if !app.cloud.disk_loaded {
         app.cloud.disk_loaded = true;
-        app.cloud.disk = load_disk_cache(&app.paths.cloud_cache_file);
+        app.cloud.disk = load_disk_cache(&app.ctx.paths.cloud_cache_file);
     }
     if widgets::nav_row(ui, widgets::NavIcon::Home, "Home", app.page == super::Page::Home) {
         app.page = super::Page::Home;

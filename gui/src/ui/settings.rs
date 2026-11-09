@@ -398,7 +398,7 @@ fn request_save(app: &mut App) {
     app.save_checking = true;
     app.save_hint = "Checking the new folder for symlinks\u{2026}".into();
     let root = super::expand_user(&app.draft.local);
-    let tx = app.tx.clone();
+    let tx = app.ctx.tx.clone();
     std::thread::spawn(move || {
         let _ = tx.send(super::Back::SymlinkScan(scan_symlinks(&root)));
     });
@@ -409,7 +409,7 @@ fn start_symlink_check(app: &mut App) {
         return;
     }
     let root = super::expand_user(&app.draft.local);
-    let tx = app.tx.clone();
+    let tx = app.ctx.tx.clone();
     app.save_hint = "Checking the folder for symlinks\u{2026}".into();
     std::thread::spawn(move || {
         let _ = tx.send(super::Back::SymlinkScan(scan_symlinks(&root)));
@@ -528,30 +528,30 @@ fn discard(app: &mut App) {
     if let Some(base) = app.prefs_baseline.clone() {
         // Window size and sidebar width are layout state, not settings; they
         // change while the user works and must not snap back on Discard.
-        let (w, h, nav) = (app.prefs.window_w, app.prefs.window_h, app.prefs.nav_width);
-        app.prefs = base;
-        app.prefs.set_window_size(w, h);
-        app.prefs.set_nav_width(nav);
-        app.prefs.save();
+        let (w, h, nav) = (app.ctx.prefs.window_w, app.ctx.prefs.window_h, app.ctx.prefs.nav_width);
+        app.ctx.prefs = base;
+        app.ctx.prefs.set_window_size(w, h);
+        app.ctx.prefs.set_nav_width(nav);
+        app.ctx.prefs.save();
     }
-    let values = conf::read(&app.paths.conf_file);
-    let extras = conf::read_extras(&app.paths.conf_file);
-    app.conf = values.clone();
-    app.conf_extras = extras.clone();
+    let values = conf::read(&app.ctx.paths.conf_file);
+    let extras = conf::read_extras(&app.ctx.paths.conf_file);
+    app.ctx.conf = values.clone();
+    app.ctx.conf_extras = extras.clone();
     app.style_dirty = true;
     app.preview_theme = None;
     app.preview_scale = None;
-    app.draft = Draft::load(&values, &extras, &app.prefs, &app.paths);
+    app.draft = Draft::load(&values, &extras, &app.ctx.prefs, &app.ctx.paths);
     app.draft.autostart = app.enabled;
-    app.draft.appstart = desktop::autostart_installed(&app.paths);
+    app.draft.appstart = desktop::autostart_installed(&app.ctx.paths);
     app.save_hint.clear();
 }
 
 /// True when Save would change either sync root. The confirmation dialog
 /// uses this to warn that history is archived and cloud caches are dropped.
 pub fn root_change_pending(app: &App) -> bool {
-    app.conf.get("PROTON_SYNC_LOCAL") != Some(&app.draft.local)
-        || app.conf.get("PROTON_SYNC_REMOTE") != Some(&app.draft.remote)
+    app.ctx.conf.get("PROTON_SYNC_LOCAL") != Some(&app.draft.local)
+        || app.ctx.conf.get("PROTON_SYNC_REMOTE") != Some(&app.draft.remote)
 }
 
 /// Write conf + restart flow (worker-side; the hint lands via SaveHint).
@@ -614,10 +614,10 @@ pub fn do_save(app: &mut App, ctx: &egui::Context) {
         .map(str::to_string)
         .collect();
 
-    let conf_changed = values.iter().any(|(k, v)| app.conf.get(k) != Some(v))
-        || extras != app.conf_extras;
+    let conf_changed = values.iter().any(|(k, v)| app.ctx.conf.get(k) != Some(v))
+        || extras != app.ctx.conf_extras;
     let root_changed = root_change_pending(app);
-    conf::write(&app.paths.conf_file, &values, &extras);
+    conf::write(&app.ctx.paths.conf_file, &values, &extras);
     if root_changed {
         // The engine archives state.json on its next start; drop the GUI's
         // cloud cache and old-account rows now.
@@ -632,14 +632,14 @@ pub fn do_save(app: &mut App, ctx: &egui::Context) {
 
     // Apply the staged preferences now. Nothing on the Settings page writes
     // these directly; Save and Discard are the only exit paths.
-    app.prefs.set_bool("always_on_top", top);
-    app.prefs.set_bool("close_to_tray", close_tray);
-    app.prefs.set_bool("start_in_tray", start_tray);
-    app.prefs.set_bool("notify_errors", note_errors);
-    app.prefs.set_bool("notify_conflicts", note_conflicts);
-    app.prefs.set_bool("notify_complete", note_done);
-    app.prefs.set_bool("motion", motion);
-    app.prefs.set_bool("updates_auto", updates_auto);
+    app.ctx.prefs.set_bool("always_on_top", top);
+    app.ctx.prefs.set_bool("close_to_tray", close_tray);
+    app.ctx.prefs.set_bool("start_in_tray", start_tray);
+    app.ctx.prefs.set_bool("notify_errors", note_errors);
+    app.ctx.prefs.set_bool("notify_conflicts", note_conflicts);
+    app.ctx.prefs.set_bool("notify_complete", note_done);
+    app.ctx.prefs.set_bool("motion", motion);
+    app.ctx.prefs.set_bool("updates_auto", updates_auto);
     if updates_auto {
         if app.upd.next_check.is_none() {
             app.upd.next_check = Some(
@@ -654,9 +654,9 @@ pub fn do_save(app: &mut App, ctx: &egui::Context) {
         2 => crate::prefs::Theme::Dark,
         _ => crate::prefs::Theme::System,
     };
-    app.prefs.set("theme", theme.as_str());
+    app.ctx.prefs.set("theme", theme.as_str());
     let scale = crate::prefs::UiScale::from_percent(ui_scale_pct);
-    app.prefs.set("ui_scale", scale.as_str());
+    app.ctx.prefs.set("ui_scale", scale.as_str());
     app.style_dirty = true;
     ctx.set_zoom_factor(scale.factor());
     app.preview_theme = None;
@@ -670,11 +670,11 @@ pub fn do_save(app: &mut App, ctx: &egui::Context) {
         egui::WindowLevel::Normal
     }));
     if appstart_touched {
-        let _ = desktop::set_autostart(&app.paths, appstart);
+        let _ = desktop::set_autostart(&app.ctx.paths, appstart);
     }
-    app.prefs_baseline = Some(app.prefs.clone());
-    app.conf = conf::read(&app.paths.conf_file);
-    app.conf_extras = conf::read_extras(&app.paths.conf_file);
+    app.prefs_baseline = Some(app.ctx.prefs.clone());
+    app.ctx.conf = conf::read(&app.ctx.paths.conf_file);
+    app.ctx.conf_extras = conf::read_extras(&app.ctx.paths.conf_file);
     app.draft.initial_selection = selection;
 
     let restart_needed = conf_changed || autostart_touched;
@@ -686,12 +686,12 @@ pub fn do_save(app: &mut App, ctx: &egui::Context) {
     }
     app.save_hint = "Saving...".into();
 
-    let appimage = app.paths.appimage.clone();
-    let tx = app.tx.clone();
+    let appimage = app.ctx.paths.appimage.clone();
+    let tx = app.ctx.tx.clone();
     // `systemctl restart` also starts an inactive unit. Saving while paused
     // must update the unit and conf but leave the engine stopped; otherwise a
     // settings save silently resumes the deletions the user paused.
-    let paused = app.paused_by_user || app.paths.state_dir.join("paused").exists();
+    let paused = app.paused_by_user || app.ctx.paths.state_dir.join("paused").exists();
     std::thread::spawn(move || {
         let r = service::ensure_service_unit(appimage.as_deref(), false);
         let autostart_ok = if autostart_touched {
@@ -1007,7 +1007,7 @@ fn performance_card(app: &mut App, ui: &mut egui::Ui) {
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
             if ui.button("Run full check now").clicked() {
-                match service::request_full_check(&app.paths) {
+                match service::request_full_check(&app.ctx.paths) {
                     Ok(()) => app.toast("Full check requested - checking now."),
                     Err(e) => app.toast_error(format!("Could not request a full check: {e}")),
                 }
@@ -1254,7 +1254,7 @@ fn updates_card(app: &mut App, ui: &mut egui::Ui) {
             ui.label(egui::RichText::new(app.upd.label.clone()).size(12.0).weak());
         }
         ui.add_space(6.0);
-        let has_update = app.upd.available.is_some() && app.paths.appimage.is_some();
+        let has_update = app.upd.available.is_some() && app.ctx.paths.appimage.is_some();
         ui.horizontal_wrapped(|ui| {
             if ui.button("Check now").clicked() {
                 app.action_check_updates();
@@ -1278,7 +1278,7 @@ fn updates_card(app: &mut App, ui: &mut egui::Ui) {
 
 fn install_card(app: &mut App, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Installing on Linux"), |ui| {
-        let installed = desktop::menu_installed(&app.paths);
+        let installed = desktop::menu_installed(&app.ctx.paths);
         ui.label(
             egui::RichText::new(if installed {
                 "Installed in your app menu."
@@ -1291,14 +1291,14 @@ fn install_card(app: &mut App, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
             if ui.button("Add to my app menu").clicked() {
-                if desktop::set_menu(&app.paths, true) {
+                if desktop::set_menu(&app.ctx.paths, true) {
                     app.toast("Added to your app menu.");
                 } else {
                     app.toast_error("Could not add the app-menu entry.");
                 }
             }
             if ui.button("Remove from app menu").clicked() {
-                if desktop::set_menu(&app.paths, false) {
+                if desktop::set_menu(&app.ctx.paths, false) {
                     app.toast("Removed from your app menu.");
                 } else {
                     app.toast_error("Could not remove the app-menu entry.");
@@ -1332,7 +1332,7 @@ fn troubleshooting_card(app: &mut App, ui: &mut egui::Ui) {
                 app.action_restart_service();
             }
             if ui.button("Open settings file").clicked() {
-                let p = app.paths.conf_file.clone();
+                let p = app.ctx.paths.conf_file.clone();
                 App::open_url(&p.to_string_lossy());
             }
             if ui.button("Copy the log command").clicked() {
@@ -1360,7 +1360,7 @@ fn env_card(app: &mut App, ui: &mut egui::Ui) {
 fn kick_root_load(app: &mut App) {
     if app.draft.loading.insert(String::new()) {
         let remote = app.draft.remote.clone();
-        let tx = app.tx.clone();
+        let tx = app.ctx.tx.clone();
         std::thread::spawn(move || {
             let folders = crate::cli::fetch_remote_folders(&remote, "");
             let _ = tx.send(super::Back::SelFolders {
@@ -1398,7 +1398,7 @@ fn sel_tree(app: &mut App, ui: &mut egui::Ui, parent: &str) {
                     app.draft.loading.insert(rel2.clone());
                     let remote = app.draft.remote.clone();
                     let r = rel2.clone();
-                    let tx = app.tx.clone();
+                    let tx = app.ctx.tx.clone();
                     std::thread::spawn(move || {
                         let folders = crate::cli::fetch_remote_folders(&remote, &r);
                         let _ = tx.send(super::Back::SelFolders { parent: r, folders });
