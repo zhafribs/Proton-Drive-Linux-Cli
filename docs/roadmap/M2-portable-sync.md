@@ -65,3 +65,6 @@ candidate for a later milestone.
 - Manual: supervisor started the engine with `PROTON_SYNC_SUPERVISOR=1`,
   restarted it after `kill -9`, and a new GUI adopted the running PID.
 - Evidence: `docs/audit/evidence/release-3.22.0.txt`.
+- Patch `v0.9.0-gui3.24.1`: choosing Quit (tray or Ctrl+Q) now stops the
+  supervised engine and removes `supervisor.pid`; closing to the tray keeps it
+  running. Evidence: `docs/audit/evidence/release-3.24.1.txt`.
