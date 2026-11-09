@@ -306,6 +306,8 @@ pub struct App {
     pub log_lines: Vec<String>,
     pub act: activity::ActivityState,
     pub cloud: cloud::CloudState,
+    /// Set by the Files browser when it asks for the sign-in flow.
+    cloud_login_requested: bool,
     pub photos: photos::PhotoState,
     /// Set by the Photos page when it asks for the sign-in flow.
     photo_login_requested: bool,
@@ -854,6 +856,7 @@ impl App {
             log_lines: Vec::new(),
             act: activity::ActivityState::default(),
             cloud: cloud::CloudState::default(),
+            cloud_login_requested: false,
             photos: photos::PhotoState::default(),
             photo_login_requested: false,
             recovery: recovery::RecoveryState::default(),
@@ -988,6 +991,32 @@ impl App {
         });
     }
 
+    fn cloud_view(&mut self) -> cloud::CloudView<'_> {
+        let status = self.ui_status();
+        let can_transfer = self.can_transfer();
+        let now = self.now();
+        cloud::CloudView {
+            cloud: &mut self.cloud,
+            ctx: &self.ctx,
+            page: &mut self.page,
+            status,
+            can_transfer,
+            dialog: &mut self.dialog,
+            input_buf: &mut self.input_buf,
+            input_focus: &mut self.input_focus,
+            search_focus: &mut self.search_focus,
+            toasts: &mut self.toasts,
+            login_requested: &mut self.cloud_login_requested,
+            now,
+        }
+    }
+
+    fn finish_cloud_login(&mut self) {
+        if std::mem::take(&mut self.cloud_login_requested) {
+            self.action_login();
+        }
+    }
+
     /// Borrow the Photos page's narrow view. The returned struct keeps the
     /// existing `app.photos` / `app.ctx` call shape without importing App.
     fn photo_view(&mut self) -> photos::PhotoView<'_> {
@@ -1012,6 +1041,75 @@ impl App {
     fn finish_photo_login(&mut self) {
         if std::mem::take(&mut self.photo_login_requested) {
             self.action_login();
+        }
+    }
+
+    fn settings_view<'a>(
+        &'a mut self,
+        actions: &'a mut Vec<settings::SettingsAction>,
+    ) -> settings::SettingsView<'a> {
+        let now = self.now();
+        settings::SettingsView {
+            draft: &mut self.draft,
+            ctx: &mut self.ctx,
+            dialog: &mut self.dialog,
+            save_hint: &mut self.save_hint,
+            save_checking: &mut self.save_checking,
+            settings_tab: &mut self.settings_tab,
+            prefs_baseline: &mut self.prefs_baseline,
+            style_dirty: &mut self.style_dirty,
+            preview_theme: &mut self.preview_theme,
+            preview_scale: &mut self.preview_scale,
+            upd: &mut self.upd,
+            tray_present: self.tray.is_some(),
+            system_theme: self.system_theme.clone(),
+            paused_by_user: self.paused_by_user,
+            enabled: self.enabled,
+            photos_dir_ready: &mut self.photos.dir_ready,
+            toasts: &mut self.toasts,
+            now,
+            actions,
+        }
+    }
+
+    fn apply_home_actions(&mut self, actions: Vec<home::HomeAction>) {
+        for action in actions {
+            match action {
+                home::HomeAction::Login => self.action_login(),
+                home::HomeAction::SyncNow => self.action_sync_now(),
+                home::HomeAction::OpenFolder => self.action_open_folder(),
+                home::HomeAction::Resume => self.action_resume(),
+                home::HomeAction::OpenSettings => {
+                    self.page = Page::Settings;
+                    self.settings_tab = 0;
+                }
+                home::HomeAction::OpenActivity => self.page = Page::Activity,
+            }
+        }
+    }
+
+    fn apply_about_actions(&mut self, actions: Vec<about::AboutAction>) {
+        for action in actions {
+            match action {
+                about::AboutAction::ShowShortcuts => self.show_shortcuts(),
+                about::AboutAction::CheckUpdates => self.action_check_updates(),
+                about::AboutAction::DownloadUpdate => self.action_download_update(),
+                about::AboutAction::OpenSettings => {
+                    self.page = Page::Settings;
+                    self.settings_tab = 5;
+                }
+            }
+        }
+    }
+
+    fn apply_settings_actions(&mut self, actions: Vec<settings::SettingsAction>) {
+        for action in actions {
+            match action {
+                settings::SettingsAction::CheckUpdates => self.action_check_updates(),
+                settings::SettingsAction::DownloadUpdate => self.action_download_update(),
+                settings::SettingsAction::RestartService => self.action_restart_service(),
+                settings::SettingsAction::ResetCloud => cloud::reset(&mut self.cloud, &self.ctx.paths),
+            }
         }
     }
 
@@ -1260,17 +1358,6 @@ impl App {
         });
     }
 
-    pub fn open_url(url: &str) {
-        let u = url.to_string();
-        std::thread::spawn(move || {
-            let _ = std::process::Command::new("xdg-open")
-                .arg(&u)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn();
-        });
-    }
-
     // ------------------------------------------------------------- draining
 
     fn drain(&mut self, ctx: &egui::Context) {
@@ -1368,7 +1455,7 @@ impl App {
                     }
                 }
                 Back::AccountCleared => {
-                    cloud::reset(self);
+                    cloud::reset(&mut self.cloud, &self.ctx.paths);
                     self.draft.initial_selection.clear();
                     self.draft.children.clear();
                     self.draft.expanded.clear();
@@ -1435,20 +1522,36 @@ impl App {
                     key,
                     serial,
                     result,
-                } => cloud::on_entries(self, key, serial, result),
+                } => {
+                    let mut view = self.cloud_view();
+                    cloud::on_entries(&mut view, key, serial, result);
+                    self.finish_cloud_login();
+                }
                 Back::TreeEntries { key, at, result } => {
-                    cloud::on_tree_entries(self, key, at, result)
+                    let mut view = self.cloud_view();
+                    cloud::on_tree_entries(&mut view, key, at, result);
+                    self.finish_cloud_login();
                 }
                 Back::CloudMutated {
                     ok,
                     err,
                     done,
                     notify,
-                } => cloud::on_mutated(self, ok, err, done, notify),
-                Back::CloudDownload { ok, err, name, n } => {
-                    cloud::on_downloaded(self, ok, err, name, n)
+                } => {
+                    let mut view = self.cloud_view();
+                    cloud::on_mutated(&mut view, ok, err, done, notify);
+                    self.finish_cloud_login();
                 }
-                Back::CloudPicked(p) => cloud::on_picked(self, p),
+                Back::CloudDownload { ok, err, name, n } => {
+                    let mut view = self.cloud_view();
+                    cloud::on_downloaded(&mut view, ok, err, name, n);
+                    self.finish_cloud_login();
+                }
+                Back::CloudPicked(p) => {
+                    let mut view = self.cloud_view();
+                    cloud::on_picked(&mut view, p);
+                    self.finish_cloud_login();
+                }
                 Back::CloudPickFailed(msg) => self.toast_error(msg),
                 Back::RecoveryLoaded(result) => {
                     recovery::on_loaded(&mut self.recovery, result)
@@ -1477,9 +1580,16 @@ impl App {
                         result,
                     )
                 }
-                Back::SymlinkScan(result) => settings::on_symlink_scan(self, result),
+                Back::SymlinkScan(result) => settings::on_symlink_scan(
+                    &mut self.save_checking,
+                    &mut self.save_hint,
+                    &mut self.dialog,
+                    result,
+                ),
                 Back::PickerFolders { parent, folders } => {
-                    cloud::on_picker_folders(self, parent, folders)
+                    let mut view = self.cloud_view();
+                    cloud::on_picker_folders(&mut view, parent, folders);
+                    self.finish_cloud_login();
                 }
                 Back::TrayToggle => {
                     let minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
@@ -1762,12 +1872,16 @@ impl App {
             && self.page == Page::Cloud
             && !self.cloud.trash_view
         {
-            cloud::select_all_visible(self);
+            let mut view = self.cloud_view();
+            cloud::select_all_visible(&mut view);
+            self.finish_cloud_login();
             return;
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
             if self.cloud.trash_view {
-                cloud::trash_toggle(self, false);
+                let mut view = self.cloud_view();
+                cloud::trash_toggle(&mut view, false);
+                self.finish_cloud_login();
             }
             self.page = Page::Cloud;
             self.search_focus = true;
@@ -1903,7 +2017,11 @@ impl App {
         egui::ScrollArea::vertical()
             .id_salt("nav-scroll")
             .auto_shrink([false, false])
-            .show(ui, |ui| cloud::nav_ui(self, ui));
+            .show(ui, |ui| {
+                let mut view = self.cloud_view();
+                cloud::nav_ui(&mut view, ui);
+                self.finish_cloud_login();
+            });
     }
 
     /// The pane's account row (Proton Drive's sidebar footer): avatar +
@@ -2074,16 +2192,68 @@ impl App {
                     .inner_margin(egui::Margin::symmetric(30, 20)),
             )
             .show(ui, |ui| match self.page {
-                Page::Home => home::draw(self, ui),
-                Page::Cloud => cloud::draw(self, ui),
+                Page::Home => {
+                    let mut actions = Vec::new();
+                    let now = self.now();
+                    let mut view = home::HomeView {
+                        ctx: &self.ctx,
+                        draft: &self.draft,
+                        active: self.active,
+                        paused_by_user: self.paused_by_user,
+                        status: self.ui_status(),
+                        logged_in: self.logged_in(),
+                        sub_override: &self.sub_override,
+                        changes: &self.changes,
+                        stats: self.stats,
+                        dialog: &mut self.dialog,
+                        now,
+                        actions: &mut actions,
+                    };
+                    home::draw(&mut view, ui);
+                    self.apply_home_actions(actions);
+                }
+                Page::Cloud => {
+                    let mut view = self.cloud_view();
+                    cloud::draw(&mut view, ui);
+                    self.finish_cloud_login();
+                }
                 Page::Photos => {
                     let mut view = self.photo_view();
                     photos::draw(&mut view, ui);
                     self.finish_photo_login();
                 }
-                Page::Activity => activity::draw(self, ui, "Activity"),
-                Page::Settings => settings::draw(self, ui),
-                Page::About => about::draw(self, ui),
+                Page::Activity => {
+                    let now = self.now();
+                    let mut view = activity::ActivityView {
+                        changes: &self.changes,
+                        log_lines: &self.log_lines,
+                        act: &mut self.act,
+                        toasts: &mut self.toasts,
+                        now,
+                    };
+                    activity::draw(&mut view, ui, "Activity");
+                }
+                Page::Settings => {
+                    let mut actions = Vec::new();
+                    let mut view = self.settings_view(&mut actions);
+                    settings::draw(&mut view, ui);
+                    self.apply_settings_actions(actions);
+                }
+                Page::About => {
+                    let mut actions = Vec::new();
+                    let now = self.now();
+                    let mut view = about::AboutView {
+                        ctx: &self.ctx,
+                        upd: &mut self.upd,
+                        recovery: &mut self.recovery,
+                        icon_tex: self.icon_tex.clone(),
+                        toasts: &mut self.toasts,
+                        now,
+                        actions: &mut actions,
+                    };
+                    about::draw(&mut view, ui);
+                    self.apply_about_actions(actions);
+                }
                 Page::Recovery => {
                     let now = self.now();
                     let mut ctx = recovery::RecoveryCtx {
@@ -2302,7 +2472,7 @@ impl App {
                     .open(&mut open)
                     .show(ctx, |ui| {
                         ui.label("Save your settings now?");
-                        if settings::root_change_pending(self) {
+                        if settings::root_change_pending(&self.ctx.conf, &self.draft) {
                             ui.add_space(6.0);
                             ui.label(
                                 egui::RichText::new(
@@ -2734,7 +2904,9 @@ impl App {
                 .button(if expanded { "\u{25be}" } else { "\u{25b8}" })
                 .clicked()
             {
-                cloud::picker_expand(self, rel.to_string());
+                let mut view = self.cloud_view();
+                cloud::picker_expand(&mut view, rel.to_string());
+                self.finish_cloud_login();
             }
             if ui.selectable_label(selected, label).clicked() {
                 *act = Some(DlgAct::MoveSel(rel.to_string()));
@@ -2765,7 +2937,10 @@ impl App {
             }
             DlgAct::Save => {
                 self.dialog = None;
-                settings::do_save(self, ctx);
+                let mut actions = Vec::new();
+                let mut view = self.settings_view(&mut actions);
+                settings::do_save(&mut view, ctx);
+                self.apply_settings_actions(actions);
             }
             DlgAct::Logout => {
                 self.dialog = None;
@@ -2782,15 +2957,27 @@ impl App {
             }
             DlgAct::CloudRename { old, name } => {
                 self.dialog = None;
-                cloud::action_rename(self, old, name);
+                {
+                    let mut view = self.cloud_view();
+                    cloud::action_rename(&mut view, old, name);
+                    self.finish_cloud_login();
+                }
             }
             DlgAct::NewFolder(name) => {
                 self.dialog = None;
-                cloud::action_new_folder(self, name);
+                {
+                    let mut view = self.cloud_view();
+                    cloud::action_new_folder(&mut view, name);
+                    self.finish_cloud_login();
+                }
             }
             DlgAct::TrashConfirm => {
                 self.dialog = None;
-                cloud::action_trash(self);
+                {
+                    let mut view = self.cloud_view();
+                    cloud::action_trash(&mut view);
+                    self.finish_cloud_login();
+                }
             }
             DlgAct::HeldDeleteConfirm {
                 local,
@@ -2834,11 +3021,19 @@ impl App {
             }
             DlgAct::DeleteConfirm => {
                 self.dialog = None;
-                cloud::action_delete_permanent(self);
+                {
+                    let mut view = self.cloud_view();
+                    cloud::action_delete_permanent(&mut view);
+                    self.finish_cloud_login();
+                }
             }
             DlgAct::EmptyTrashConfirm => {
                 self.dialog = None;
-                cloud::action_empty_trash(self);
+                {
+                    let mut view = self.cloud_view();
+                    cloud::action_empty_trash(&mut view);
+                    self.finish_cloud_login();
+                }
             }
             DlgAct::ClearCache => {
                 self.dialog = None;
@@ -2855,7 +3050,11 @@ impl App {
             DlgAct::MovePick(rel) => {
                 self.dialog = None;
                 self.cloud.picker = None;
-                cloud::action_move(self, rel);
+                {
+                    let mut view = self.cloud_view();
+                    cloud::action_move(&mut view, rel);
+                    self.finish_cloud_login();
+                }
             }
         }
     }
@@ -2918,7 +3117,9 @@ impl eframe::App for App {
         // without a nav click (e.g. it becomes the startup page one day).
         if self.page == Page::Cloud && !self.cloud.opened {
             self.cloud.opened = true;
-            cloud::on_shown(self);
+            let mut view = self.cloud_view();
+            cloud::on_shown(&mut view);
+            self.finish_cloud_login();
         }
 
         // Photos: same idea - the timeline is fetched once, on first show,
@@ -3046,13 +3247,16 @@ impl eframe::App for App {
                     .collect()
             });
             if !dropped.is_empty() {
+                let target = self.cloud.rel.clone();
+                let mut view = self.cloud_view();
                 cloud::on_picked(
-                    self,
+                    &mut view,
                     Some(Picked::UploadFiles {
                         paths: dropped,
-                        target: self.cloud.rel.clone(),
+                        target,
                     }),
                 );
+                self.finish_cloud_login();
             }
         }
         // Solid page backdrop: hierarchy comes from surfaces and borders,

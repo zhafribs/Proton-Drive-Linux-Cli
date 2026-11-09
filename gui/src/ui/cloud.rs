@@ -6,10 +6,10 @@
 //! walk (remote-snapshot.json); a fresh listing always loads behind it, so
 //! nothing ever waits on the network to be visible.
 
-use super::{widgets, App, Back};
-use crate::{cli, notify, portal, theme};
+use super::{AppCtx, Back, Dialog, Page, Toast, widgets};
+use crate::{cli, health, notify, portal, theme};
 use eframe::egui;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -75,6 +75,53 @@ pub struct CloudState {
     pub tree_root_touched: bool,
 }
 
+/// The narrow view of the app the Files browser receives.
+pub struct CloudView<'a> {
+    pub cloud: &'a mut CloudState,
+    pub ctx: &'a AppCtx,
+    pub page: &'a mut Page,
+    pub status: health::UiStatus,
+    pub can_transfer: bool,
+    pub dialog: &'a mut Option<Dialog>,
+    pub input_buf: &'a mut String,
+    pub input_focus: &'a mut bool,
+    pub search_focus: &'a mut bool,
+    pub toasts: &'a mut VecDeque<Toast>,
+    pub login_requested: &'a mut bool,
+    pub now: f64,
+}
+
+impl CloudView<'_> {
+    fn ui_status(&self) -> health::UiStatus {
+        self.status
+    }
+
+    fn can_transfer(&self) -> bool {
+        self.can_transfer
+    }
+
+    fn toast_error(&mut self, msg: impl Into<String>) {
+        self.push_toast(msg.into(), true);
+    }
+
+    fn push_toast(&mut self, msg: String, error: bool) {
+        if self.toasts.len() >= 4 {
+            let idx = self.toasts.iter().position(|t| !t.error).unwrap_or(0);
+            self.toasts.remove(idx);
+        }
+        self.toasts.push_back(Toast {
+            msg,
+            at: self.now,
+            error,
+            shown_at: None,
+        });
+    }
+
+    fn action_login(&mut self) {
+        *self.login_requested = true;
+    }
+}
+
 pub fn remote_root(conf: &std::collections::BTreeMap<String, String>) -> String {
     match conf.get("PROTON_SYNC_REMOTE").map(String::as_str) {
         Some(r) if !r.is_empty() => r.to_string(),
@@ -85,16 +132,16 @@ pub fn remote_root(conf: &std::collections::BTreeMap<String, String>) -> String 
 /// Drop every account/root-scoped listing and selection. Used on sign-out and
 /// when the sync roots change, so a new account never sees the old filenames
 /// or acts on stale rows.
-pub fn reset(app: &mut App) {
-    app.cloud = CloudState::default();
-    app.cloud.opened = false;
-    let _ = std::fs::remove_file(&app.ctx.paths.cloud_cache_file);
+pub fn reset(cloud: &mut CloudState, paths: &crate::paths::Paths) {
+    *cloud = CloudState::default();
+    cloud.opened = false;
+    let _ = std::fs::remove_file(&paths.cloud_cache_file);
 }
 
 // ------------------------------------------------------------------ navigation
 
 /// The page was shown (also on first visit): re-list, browser-style.
-pub fn on_shown(app: &mut App) {
+pub fn on_shown(app: &mut CloudView) {
     app.cloud.opened = true;
     if !app.cloud.disk_loaded {
         app.cloud.disk_loaded = true;
@@ -108,13 +155,13 @@ pub fn on_shown(app: &mut App) {
     }
 }
 
-pub fn load(app: &mut App, rel: String, push: bool, announce: bool, paint: bool) {
+pub fn load(app: &mut CloudView, rel: String, push: bool, announce: bool, paint: bool) {
     load_inner(app, rel, push, announce, paint, false);
 }
 
 /// Force a fresh listing, ignoring the cache TTL (Refresh, or after a
 /// mutation). Used for both the files view and Trash.
-pub fn reload(app: &mut App) {
+pub fn reload(app: &mut CloudView) {
     app.cloud.status = "Opening...".to_string();
     app.cloud.status_tip.clear();
     if app.cloud.trash_view {
@@ -125,7 +172,7 @@ pub fn reload(app: &mut App) {
     }
 }
 
-fn load_inner(app: &mut App, rel: String, push: bool, announce: bool, paint: bool, force: bool) {
+fn load_inner(app: &mut CloudView, rel: String, push: bool, announce: bool, paint: bool, force: bool) {
     if push {
         // Navigation: reveal the folder in the sidebar tree. Nothing is
         // forced open afterwards, so every branch can still be collapsed.
@@ -216,7 +263,7 @@ fn load_inner(app: &mut App, rel: String, push: bool, announce: bool, paint: boo
     });
 }
 
-pub fn load_trash(app: &mut App, announce: bool) {
+pub fn load_trash(app: &mut CloudView, announce: bool) {
     {
         let c = &mut app.cloud;
         if !c.trash_view {
@@ -264,21 +311,21 @@ pub fn load_trash(app: &mut App, announce: bool) {
     });
 }
 
-pub fn go_back(app: &mut App) {
+pub fn go_back(app: &mut CloudView) {
     let Some(prev) = app.cloud.hist.pop() else { return };
     app.cloud.fwd.push(app.cloud.rel.clone());
     expand_path(app, &prev);
     load(app, prev, false, true, true);
 }
 
-pub fn go_fwd(app: &mut App) {
+pub fn go_fwd(app: &mut CloudView) {
     let Some(next) = app.cloud.fwd.pop() else { return };
     app.cloud.hist.push(app.cloud.rel.clone());
     expand_path(app, &next);
     load(app, next, false, true, true);
 }
 
-pub fn trash_toggle(app: &mut App, on: bool) {
+pub fn trash_toggle(app: &mut CloudView, on: bool) {
     if on {
         if !app.cloud.trash_view {
             app.cloud.hist.push(app.cloud.rel.clone());
@@ -291,7 +338,7 @@ pub fn trash_toggle(app: &mut App, on: bool) {
     }
 }
 
-fn fill(app: &mut App, entries: Vec<cli::RemoteEntry>) {
+fn fill(app: &mut CloudView, entries: Vec<cli::RemoteEntry>) {
     app.cloud.entries = entries;
     app.cloud
         .sel
@@ -300,7 +347,7 @@ fn fill(app: &mut App, entries: Vec<cli::RemoteEntry>) {
 
 /// The listing result landed (fresh paint behind whatever was shown).
 pub fn on_entries(
-    app: &mut App,
+    app: &mut CloudView,
     key: String,
     serial: u64,
     result: Result<Vec<cli::RemoteEntry>, String>,
@@ -342,7 +389,7 @@ pub fn on_entries(
 /// A sidebar tree listing arrived: warm the caches only — never touch the
 /// visible folder, its status, or its serial.
 pub fn on_tree_entries(
-    app: &mut App,
+    app: &mut CloudView,
     key: String,
     at: f64,
     result: Result<Vec<cli::RemoteEntry>, String>,
@@ -378,7 +425,7 @@ fn run_cli(args: &[String], timeout_secs: u64) -> Result<String, String> {
 /// Run a CLI mutation on a worker (Qt `_cloud_run`): status "..." while it
 /// runs, then done-message + refresh of the current folder.
 pub fn mutate(
-    app: &mut App,
+    app: &mut CloudView,
     args: Vec<String>,
     status: &str,
     done: String,
@@ -399,7 +446,7 @@ pub fn mutate(
 }
 
 pub fn on_mutated(
-    app: &mut App,
+    app: &mut CloudView,
     ok: bool,
     err: String,
     done: String,
@@ -423,7 +470,7 @@ pub fn on_mutated(
 /// After an action: drop this folder's listings everywhere (memory, disk) so
 /// a just-renamed/deleted row can never be painted again; re-list without
 /// painting so the action's message stays on screen.
-fn refresh_current(app: &mut App) {
+fn refresh_current(app: &mut CloudView) {
     let key = if app.cloud.trash_view {
         TRASH_KEY.to_string()
     } else {
@@ -459,11 +506,11 @@ fn safe_rel(rel: &str) -> bool {
     !rel.is_empty() && rel.split('/').all(cli::valid_remote_name)
 }
 
-fn selection_safe(app: &App) -> bool {
+fn selection_safe(app: &CloudView) -> bool {
     app.cloud.sel.iter().all(|s| safe_rel(s))
 }
 
-fn refuse_unsafe(app: &mut App) -> bool {
+fn refuse_unsafe(app: &mut CloudView) -> bool {
     if selection_safe(app) {
         false
     } else {
@@ -474,7 +521,7 @@ fn refuse_unsafe(app: &mut App) -> bool {
 
 // ------------------------------------------------------------- single actions
 
-pub fn action_rename(app: &mut App, old_rel: String, name: String) {
+pub fn action_rename(app: &mut CloudView, old_rel: String, name: String) {
     let name = name.trim().to_string();
     let old_name = old_rel.rsplit('/').next().unwrap_or(&old_rel).to_string();
     if name.is_empty() || name == old_name || name.contains('/') {
@@ -494,7 +541,7 @@ pub fn action_rename(app: &mut App, old_rel: String, name: String) {
     );
 }
 
-pub fn action_new_folder(app: &mut App, name: String) {
+pub fn action_new_folder(app: &mut CloudView, name: String) {
     let name = name.trim().to_string();
     if name.is_empty() || name.contains('/') {
         return;
@@ -514,7 +561,7 @@ pub fn action_new_folder(app: &mut App, name: String) {
     );
 }
 
-pub fn action_move(app: &mut App, target_rel: String) {
+pub fn action_move(app: &mut CloudView, target_rel: String) {
     let n = app.cloud.sel.len();
     if n == 0 || refuse_unsafe(app) {
         return;
@@ -532,7 +579,7 @@ pub fn action_move(app: &mut App, target_rel: String) {
     mutate(app, args, "Moving...", format!("Moved {n} item(s)."), None);
 }
 
-pub fn action_trash(app: &mut App) {
+pub fn action_trash(app: &mut CloudView) {
     let n = app.cloud.sel.len();
     if n == 0 || refuse_unsafe(app) {
         return;
@@ -551,7 +598,7 @@ pub fn action_trash(app: &mut App) {
     );
 }
 
-pub fn action_restore(app: &mut App) {
+pub fn action_restore(app: &mut CloudView) {
     let n = app.cloud.sel.len();
     if n == 0 || refuse_unsafe(app) {
         return;
@@ -563,7 +610,7 @@ pub fn action_restore(app: &mut App) {
     mutate(app, args, "Restoring...", format!("Restored {n} item(s)."), None);
 }
 
-pub fn action_delete_permanent(app: &mut App) {
+pub fn action_delete_permanent(app: &mut CloudView) {
     let n = app.cloud.sel.len();
     if n == 0 || refuse_unsafe(app) {
         return;
@@ -581,7 +628,7 @@ pub fn action_delete_permanent(app: &mut App) {
     );
 }
 
-pub fn action_empty_trash(app: &mut App) {
+pub fn action_empty_trash(app: &mut CloudView) {
     mutate(
         app,
         vec!["fs".to_string(), "empty-trash".to_string()],
@@ -592,7 +639,7 @@ pub fn action_empty_trash(app: &mut App) {
 }
 
 /// Duplicate the single selected item into its own folder as "<name> copy".
-pub fn action_duplicate(app: &mut App) {
+pub fn action_duplicate(app: &mut CloudView) {
     let Some(rel) = app.cloud.sel.first().cloned() else {
         return;
     };
@@ -618,7 +665,7 @@ pub fn action_duplicate(app: &mut App) {
 
 // ------------------------------------------------------- uploads / downloads
 
-pub fn pick_upload_files(app: &mut App) {
+pub fn pick_upload_files(app: &mut CloudView) {
     if !app.can_transfer() {
         app.toast_error("Sign in to upload files.");
         return;
@@ -643,7 +690,7 @@ pub fn pick_upload_files(app: &mut App) {
     });
 }
 
-pub fn pick_upload_folder(app: &mut App) {
+pub fn pick_upload_folder(app: &mut CloudView) {
     if !app.can_transfer() {
         app.toast_error("Sign in to upload folders.");
         return;
@@ -668,7 +715,7 @@ pub fn pick_upload_folder(app: &mut App) {
     });
 }
 
-pub fn pick_download(app: &mut App) {
+pub fn pick_download(app: &mut CloudView) {
     if !app.can_transfer() {
         app.toast_error("Sign in to download files.");
         return;
@@ -743,7 +790,7 @@ pub fn pick_download(app: &mut App) {
     });
 }
 
-pub fn on_picked(app: &mut App, picked: Option<super::Picked>) {
+pub fn on_picked(app: &mut CloudView, picked: Option<super::Picked>) {
     use super::Picked;
     match picked {
         None => {} // cancelled: no state change
@@ -834,7 +881,7 @@ pub fn on_picked(app: &mut App, picked: Option<super::Picked>) {
     }
 }
 
-pub fn on_downloaded(app: &mut App, ok: bool, err: String, name: String, n: usize) {
+pub fn on_downloaded(app: &mut CloudView, ok: bool, err: String, name: String, n: usize) {
     app.cloud.busy = false;
     if !ok {
         app.cloud.status = "Download failed.".to_string();
@@ -1024,7 +1071,7 @@ fn fetch_all(rpaths: &[String], dest_dir: &Path) -> Result<usize, String> {
 
 // ------------------------------------------------------------------ the picker
 
-pub fn picker_expand(app: &mut App, rel: String) {
+pub fn picker_expand(app: &mut CloudView, rel: String) {
     let Some(picker) = app.cloud.picker.as_mut() else { return };
     if picker.expanded.contains(&rel) {
         picker.expanded.remove(&rel);
@@ -1044,7 +1091,7 @@ pub fn picker_expand(app: &mut App, rel: String) {
     });
 }
 
-pub fn on_picker_folders(app: &mut App, parent: String, folders: Vec<(String, String)>) {
+pub fn on_picker_folders(app: &mut CloudView, parent: String, folders: Vec<(String, String)>) {
     if let Some(picker) = app.cloud.picker.as_mut() {
         picker.expanded.insert(parent.clone());
         picker.children.insert(parent, folders);
@@ -1243,7 +1290,7 @@ pub fn save_disk_cache(path: &Path, cache: &HashMap<String, DiskEntry>) {
 
 /// Persist the disk cache, debounced so rapid browsing does not re-serialise
 /// the whole cache (up to 300 folders) on the UI thread for every listing.
-fn persist_cache(app: &mut App) {
+fn persist_cache(app: &mut CloudView) {
     let now = epoch_now();
     if now - app.cloud.last_save < 1.0 {
         return;
@@ -1289,7 +1336,7 @@ pub fn fmt_size(n: u64) -> String {
 
 // ------------------------------------------------------------------ drawing
 
-pub fn draw(app: &mut App, ui: &mut egui::Ui) {
+pub fn draw(app: &mut CloudView, ui: &mut egui::Ui) {
     page_head(app, ui);
     ui.add_space(10.0);
     top_row(app, ui);
@@ -1299,7 +1346,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
     bottom_row(app, ui);
 }
 
-fn page_head(app: &mut App, ui: &mut egui::Ui) {
+fn page_head(app: &mut CloudView, ui: &mut egui::Ui) {
     let (trash_view, busy, can_transfer) =
         (app.cloud.trash_view, app.cloud.busy, app.can_transfer());
     ui.horizontal(|ui| {
@@ -1312,7 +1359,7 @@ fn page_head(app: &mut App, ui: &mut egui::Ui) {
                         .on_hover_text("Permanently delete everything in the trash")
                         .clicked()
                 {
-                    app.dialog = Some(super::Dialog::ConfirmEmptyTrash);
+                    *app.dialog = Some(super::Dialog::ConfirmEmptyTrash);
                 }
             } else if can_transfer {
                 let upload = ui
@@ -1333,8 +1380,8 @@ fn page_head(app: &mut App, ui: &mut egui::Ui) {
                     .clicked();
                 if new_folder {
                     app.input_buf.clear();
-                    app.input_focus = true;
-                    app.dialog = Some(super::Dialog::Input {
+                    *app.input_focus = true;
+                    *app.dialog = Some(super::Dialog::Input {
                         title: "New folder".to_string(),
                         label: "Folder name:".to_string(),
                         intent: super::InputIntent::CloudNewFolder,
@@ -1350,7 +1397,7 @@ fn page_head(app: &mut App, ui: &mut egui::Ui) {
 
 /// A signed-out browser is still useful for cached names, but every action
 /// would fail against the CLI. Say why and offer the one action that works.
-fn sign_in_banner(app: &mut App, ui: &mut egui::Ui) {
+fn sign_in_banner(app: &mut CloudView, ui: &mut egui::Ui) {
     let signing_in = matches!(app.ui_status(), crate::health::UiStatus::SigningIn);
     let message = if app.cloud.trash_view {
         "Sign in to restore or permanently delete items."
@@ -1462,7 +1509,7 @@ fn collapse_segments(segs: &mut Vec<(String, String)>, crumb_w: f32) {
     }
 }
 
-fn top_row(app: &mut App, ui: &mut egui::Ui) {
+fn top_row(app: &mut CloudView, ui: &mut egui::Ui) {
     let (has_back, has_fwd, busy, trash_view) = {
         let c = &app.cloud;
         (!c.hist.is_empty(), !c.fwd.is_empty(), c.busy, c.trash_view)
@@ -1490,9 +1537,9 @@ fn top_row(app: &mut App, ui: &mut egui::Ui) {
                 egui::vec2(search_w, 28.0),
                 egui::TextEdit::singleline(&mut app.cloud.query).hint_text("Search files..."),
             );
-            if app.search_focus {
+            if *app.search_focus {
                 search.request_focus();
-                app.search_focus = false;
+                *app.search_focus = false;
             }
         });
     });
@@ -1500,7 +1547,7 @@ fn top_row(app: &mut App, ui: &mut egui::Ui) {
 
 /// "My files / a / b" with clickable ancestors and a collapsed middle when
 /// the row is too narrow. The full path is always on the hover text.
-fn breadcrumb(app: &mut App, ui: &mut egui::Ui, crumb_w: f32) {
+fn breadcrumb(app: &mut CloudView, ui: &mut egui::Ui, crumb_w: f32) {
     let segs = {
         let c = &app.cloud;
         let mut segs: Vec<String> = vec!["My files".to_string()];
@@ -1584,7 +1631,7 @@ const ROW_H: f32 = 34.0;
 /// hand-anchored text) so it is vertically centred and stays flush with the
 /// rows below. The sort direction is a small caret beside the label - the
 /// active column's title is accent-coloured, inactive ones stay muted.
-fn header_cell(app: &mut App, ui: &mut egui::Ui, w: f32, label: &str, col: usize, right: bool) {
+fn header_cell(app: &mut CloudView, ui: &mut egui::Ui, w: f32, label: &str, col: usize, right: bool) {
     let active = app.cloud.sort_col == col;
     let accent = theme::accent(ui.visuals());
     let color = if active {
@@ -1701,7 +1748,7 @@ fn column_layout(full_w: f32, gap: f32) -> (f32, bool, bool) {
     (name_w.max(NAME_MIN_W), show_size, show_mtime)
 }
 
-fn table(app: &mut App, ui: &mut egui::Ui) {
+fn table(app: &mut CloudView, ui: &mut egui::Ui) {
     // The list sits in a white card with a quiet header, like Proton Drive's
     // file list; the action/status row below gets its space reserved so the
     // card can never push it out of the panel.
@@ -1998,7 +2045,7 @@ fn table(app: &mut App, ui: &mut egui::Ui) {
                 && app.can_transfer()
                 && !app.cloud.sel.is_empty()
             {
-                app.dialog = Some(super::Dialog::ConfirmTrash { n: app.cloud.sel.len() });
+                *app.dialog = Some(super::Dialog::ConfirmTrash { n: app.cloud.sel.len() });
             }
 
             // F2 renames the one selected item, matching the desktop file
@@ -2054,7 +2101,7 @@ fn elide_fit(ui: &egui::Ui, text: &str, font: egui::FontId, max_w: f32) -> Strin
 /// parameter count is the honest shape here.
 #[allow(clippy::too_many_arguments)]
 fn row(
-    app: &mut App,
+    app: &mut CloudView,
     ui: &mut egui::Ui,
     e: &cli::RemoteEntry,
     name_w: f32,
@@ -2310,7 +2357,7 @@ fn row(
 
 /// The context menu shared by a row and each of its cells, so right-clicking
 /// the name (or the size/date text) opens the same menu as the row background.
-fn row_menu_body(app: &mut App, ui: &mut egui::Ui, menu_item: &mut Option<&'static str>) {
+fn row_menu_body(app: &mut CloudView, ui: &mut egui::Ui, menu_item: &mut Option<&'static str>) {
     let can_transfer = app.can_transfer();
     if app.cloud.trash_view {
         if ui
@@ -2446,7 +2493,7 @@ fn row_menu_body(app: &mut App, ui: &mut egui::Ui, menu_item: &mut Option<&'stat
     }
 }
 
-fn open_item(app: &mut App, rel: &str) {
+fn open_item(app: &mut CloudView, rel: &str) {
     if app.cloud.trash_view {
         return; // Qt: opening items in Trash does nothing
     }
@@ -2464,7 +2511,7 @@ fn open_item(app: &mut App, rel: &str) {
     }
 }
 
-fn apply_menu_item(app: &mut App, item: Option<&'static str>) {
+fn apply_menu_item(app: &mut CloudView, item: Option<&'static str>) {
     match item {
         None => {}
         Some("open") => {
@@ -2475,8 +2522,8 @@ fn apply_menu_item(app: &mut App, item: Option<&'static str>) {
         Some("download") => pick_download(app),
         Some("newfolder") => {
             app.input_buf.clear();
-            app.input_focus = true;
-            app.dialog = Some(super::Dialog::Input {
+            *app.input_focus = true;
+            *app.dialog = Some(super::Dialog::Input {
                 title: "New folder".to_string(),
                 label: "Folder name:".to_string(),
                 intent: super::InputIntent::CloudNewFolder,
@@ -2485,9 +2532,9 @@ fn apply_menu_item(app: &mut App, item: Option<&'static str>) {
         Some("rename") => {
             if let Some(rel) = app.cloud.sel.first().cloned() {
                 let name = rel.rsplit('/').next().unwrap_or(&rel).to_string();
-                app.input_buf = name.clone();
-                app.input_focus = true;
-                app.dialog = Some(super::Dialog::Input {
+                *app.input_buf = name.clone();
+                *app.input_focus = true;
+                *app.dialog = Some(super::Dialog::Input {
                     title: "Rename".to_string(),
                     label: "New name:".to_string(),
                     intent: super::InputIntent::CloudRename(rel),
@@ -2496,18 +2543,18 @@ fn apply_menu_item(app: &mut App, item: Option<&'static str>) {
         }
         Some("move") => {
             app.cloud.picker = Some(Picker::default());
-            app.dialog = Some(super::Dialog::CloudMove);
+            *app.dialog = Some(super::Dialog::CloudMove);
             let rel = String::new();
             picker_expand(app, rel);
         }
         Some("trash") => {
-            app.dialog = Some(super::Dialog::ConfirmTrash { n: app.cloud.sel.len() });
+            *app.dialog = Some(super::Dialog::ConfirmTrash { n: app.cloud.sel.len() });
         }
         Some("delete") => {
-            app.dialog = Some(super::Dialog::ConfirmDelete { n: app.cloud.sel.len() });
+            *app.dialog = Some(super::Dialog::ConfirmDelete { n: app.cloud.sel.len() });
         }
         Some("emptytrash") => {
-            app.dialog = Some(super::Dialog::ConfirmEmptyTrash);
+            *app.dialog = Some(super::Dialog::ConfirmEmptyTrash);
         }
         Some("duplicate") => action_duplicate(app),
         Some("selectall") => select_all_visible(app),
@@ -2521,7 +2568,7 @@ fn apply_menu_item(app: &mut App, item: Option<&'static str>) {
                     "Name: {}\nType: {}\nSize: {}\nModified: {}\nLocation: /{}",
                     it.name, kind, size, it.mtime, it.rel
                 );
-                app.dialog = Some(super::Dialog::Info {
+                *app.dialog = Some(super::Dialog::Info {
                     title: it.name.clone(),
                     body,
                 });
@@ -2537,7 +2584,7 @@ fn apply_menu_item(app: &mut App, item: Option<&'static str>) {
 
 /// Select every row the table currently shows, not the files hidden by a
 /// search. Shared by the context menu and Ctrl+A.
-pub fn select_all_visible(app: &mut App) {
+pub fn select_all_visible(app: &mut CloudView) {
     let query = app.cloud.query.trim().to_lowercase();
     app.cloud.sel = app
         .cloud
@@ -2548,7 +2595,7 @@ pub fn select_all_visible(app: &mut App) {
         .collect();
 }
 
-fn bottom_row(app: &mut App, ui: &mut egui::Ui) {
+fn bottom_row(app: &mut CloudView, ui: &mut egui::Ui) {
     let (status, status_tip, busy, trash_view) = {
         let c = &app.cloud;
         (c.status.clone(), c.status_tip.clone(), c.busy, c.trash_view)
@@ -2645,7 +2692,7 @@ fn bottom_row(app: &mut App, ui: &mut egui::Ui) {
                 })
                 .inner;
             if delete {
-                app.dialog = Some(super::Dialog::ConfirmDelete { n: sel.len() });
+                *app.dialog = Some(super::Dialog::ConfirmDelete { n: sel.len() });
             }
         } else {
             if ui
@@ -2662,7 +2709,7 @@ fn bottom_row(app: &mut App, ui: &mut egui::Ui) {
                 .on_hover_text("Move the selected items to the Proton trash")
                 .clicked()
             {
-                app.dialog = Some(super::Dialog::ConfirmTrash { n: sel.len() });
+                *app.dialog = Some(super::Dialog::ConfirmTrash { n: sel.len() });
             }
         }
         if ui
@@ -2700,7 +2747,7 @@ fn bottom_row(app: &mut App, ui: &mut egui::Ui) {
 
 /// The folders under `rel`, from warm caches only (rendering stays cheap and
 /// side-effect free).
-fn children(app: &App, rel: &str) -> Option<Vec<cli::RemoteEntry>> {
+fn children(app: &CloudView, rel: &str) -> Option<Vec<cli::RemoteEntry>> {
     app.cloud
         .session
         .get(rel)
@@ -2710,7 +2757,7 @@ fn children(app: &App, rel: &str) -> Option<Vec<cli::RemoteEntry>> {
 }
 
 /// Kick off a background listing for `rel` if we don't have it yet.
-fn ensure_children(app: &mut App, rel: &str) {
+fn ensure_children(app: &mut CloudView, rel: &str) {
     if app.cloud.tree_loading.contains(rel) || children(app, rel).is_some() {
         return;
     }
@@ -2731,7 +2778,7 @@ fn ensure_children(app: &mut App, rel: &str) {
     });
 }
 
-fn toggle_tree(app: &mut App, rel: &str) {
+fn toggle_tree(app: &mut CloudView, rel: &str) {
     if rel.is_empty() {
         app.cloud.tree_root_touched = true; // remember an explicit root toggle
     }
@@ -2746,7 +2793,7 @@ fn toggle_tree(app: &mut App, rel: &str) {
 /// Expand the tree down to `rel`: the root section and every ancestor go
 /// into `tree_open`, so navigation lands with the path visible. Nothing is
 /// forced open later - any branch can still be collapsed by its caret.
-fn expand_path(app: &mut App, rel: &str) {
+fn expand_path(app: &mut CloudView, rel: &str) {
     app.cloud.tree_open.insert(String::new());
     let mut prefix = String::new();
     for part in rel.split('/').filter(|p| !p.is_empty()) {
@@ -2760,14 +2807,14 @@ fn expand_path(app: &mut App, rel: &str) {
 }
 
 /// Browser-style navigation from the pane: history push + fresh listing.
-fn go(app: &mut App, rel: String) {
-    app.page = super::Page::Cloud;
+fn go(app: &mut CloudView, rel: String) {
+    *app.page = super::Page::Cloud;
     app.cloud.opened = true;
     load(app, rel, true, true, true);
 }
 
-fn go_trash(app: &mut App) {
-    app.page = super::Page::Cloud;
+fn go_trash(app: &mut CloudView) {
+    *app.page = super::Page::Cloud;
     app.cloud.opened = true;
     trash_toggle(app, true);
 }
@@ -2775,13 +2822,13 @@ fn go_trash(app: &mut App) {
 /// The pane's nav list, in the product's left-rail order: Home, Activity,
 /// "My files" with its lazy tree, Settings, Trash, About (the "+ New" pill
 /// is drawn by the caller above it).
-pub fn nav_ui(app: &mut App, ui: &mut egui::Ui) {
+pub fn nav_ui(app: &mut CloudView, ui: &mut egui::Ui) {
     if !app.cloud.disk_loaded {
         app.cloud.disk_loaded = true;
         app.cloud.disk = load_disk_cache(&app.ctx.paths.cloud_cache_file);
     }
-    if widgets::nav_row(ui, widgets::NavIcon::Home, "Home", app.page == super::Page::Home) {
-        app.page = super::Page::Home;
+    if widgets::nav_row(ui, widgets::NavIcon::Home, "Home", *app.page == super::Page::Home) {
+        *app.page = super::Page::Home;
     }
     ui.add_space(8.0);
     // Proton's sidebar shows "My files" open by default once its folders are
@@ -2798,30 +2845,30 @@ pub fn nav_ui(app: &mut App, ui: &mut egui::Ui) {
         ui,
         widgets::NavIcon::Photos,
         "Photos",
-        app.page == super::Page::Photos,
+        *app.page == super::Page::Photos,
     ) {
-        app.page = super::Page::Photos;
+        *app.page = super::Page::Photos;
     }
     ui.add_space(8.0);
     if widgets::nav_row(
         ui,
         widgets::NavIcon::Activity,
         "Activity",
-        app.page == super::Page::Activity,
+        *app.page == super::Page::Activity,
     ) {
-        app.page = super::Page::Activity;
+        *app.page = super::Page::Activity;
     }
     ui.add_space(8.0);
     if widgets::nav_row(
         ui,
         widgets::NavIcon::Settings,
         "Settings",
-        app.page == super::Page::Settings,
+        *app.page == super::Page::Settings,
     ) {
-        app.page = super::Page::Settings;
+        *app.page = super::Page::Settings;
     }
     ui.add_space(6.0);
-    let trash_active = app.page == super::Page::Cloud && app.cloud.trash_view;
+    let trash_active = *app.page == super::Page::Cloud && app.cloud.trash_view;
     if widgets::nav_row(ui, widgets::NavIcon::Trash, "Trash", trash_active) && !app.cloud.busy {
         go_trash(app);
     }
@@ -2830,20 +2877,20 @@ pub fn nav_ui(app: &mut App, ui: &mut egui::Ui) {
         ui,
         widgets::NavIcon::Recovery,
         "Recovery",
-        app.page == super::Page::Recovery,
+        *app.page == super::Page::Recovery,
     ) {
-        app.page = super::Page::Recovery;
+        *app.page = super::Page::Recovery;
     }
     ui.add_space(6.0);
-    if widgets::nav_row(ui, widgets::NavIcon::About, "About", app.page == super::Page::About) {
-        app.page = super::Page::About;
+    if widgets::nav_row(ui, widgets::NavIcon::About, "About", *app.page == super::Page::About) {
+        *app.page = super::Page::About;
     }
 }
 
 /// "My files": click the row to go to the root, click the right-hand caret
 /// to open the folder tree — DonnieDice/Proton's section row.
-fn my_files_row(app: &mut App, ui: &mut egui::Ui, root_open: bool) {
-    let active = app.page == super::Page::Cloud && !app.cloud.trash_view;
+fn my_files_row(app: &mut CloudView, ui: &mut egui::Ui, root_open: bool) {
+    let active = *app.page == super::Page::Cloud && !app.cloud.trash_view;
     let (rect, resp) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), 36.0),
         egui::Sense::click(),
@@ -2942,7 +2989,7 @@ fn my_files_row(app: &mut App, ui: &mut egui::Ui, root_open: bool) {
 
 /// One level of the folder tree: indented rows with a left caret; the open
 /// folder wears the accent pill (Proton highlights where you are).
-fn tree_rows(app: &mut App, ui: &mut egui::Ui, parent: &str, depth: usize) {
+fn tree_rows(app: &mut CloudView, ui: &mut egui::Ui, parent: &str, depth: usize) {
     let Some(kids) = children(app, parent) else {
         let indent = 16.0 + depth as f32 * 14.0;
         if app.cloud.tree_loading.contains(parent) {
@@ -2958,7 +3005,7 @@ fn tree_rows(app: &mut App, ui: &mut egui::Ui, parent: &str, depth: usize) {
     };
     let mut dirs: Vec<cli::RemoteEntry> = kids.into_iter().filter(|e| e.dir).collect();
     dirs.sort_by_key(|a| a.name.to_lowercase());
-    let in_files = app.page == super::Page::Cloud && !app.cloud.trash_view;
+    let in_files = *app.page == super::Page::Cloud && !app.cloud.trash_view;
     for e in &dirs {
         let r = e.rel.trim_end_matches('/').to_string();
         let open = app.cloud.tree_open.contains(&r);

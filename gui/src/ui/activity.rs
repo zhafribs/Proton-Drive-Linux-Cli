@@ -1,9 +1,11 @@
 //! The Home feed: the friendly "Files moved" list and the raw technical log,
 //! exactly the two segments the PyQt app offered.
 
-use super::{widgets, App};
-use crate::{journal::Dir, theme};
+use super::{Toast, widgets};
+use crate::journal::{ChangeRow, Dir};
+use crate::theme;
 use eframe::egui;
+use std::collections::VecDeque;
 
 #[derive(Default)]
 pub struct ActivityState {
@@ -15,11 +17,40 @@ pub struct ActivityState {
 
 const KINDS: [&str; 4] = ["Everything", "Uploaded", "Downloaded", "Other"];
 
+pub struct ActivityView<'a> {
+    pub changes: &'a [ChangeRow],
+    pub log_lines: &'a [String],
+    pub act: &'a mut ActivityState,
+    pub toasts: &'a mut VecDeque<Toast>,
+    pub now: f64,
+}
+
+impl ActivityView<'_> {
+    fn toast(&mut self, msg: impl Into<String>) {
+        if self.toasts.len() >= 4 {
+            let idx = self.toasts.iter().position(|t| !t.error).unwrap_or(0);
+            self.toasts.remove(idx);
+        }
+        self.toasts.push_back(Toast {
+            msg: msg.into(),
+            at: self.now,
+            error: false,
+            shown_at: None,
+        });
+    }
+}
+
 /// Compact Home preview: newest rows plus a link to the full Activity page.
-pub fn draw_preview(app: &mut App, ui: &mut egui::Ui, title: &str, max: usize) {
+pub fn draw_preview(
+    changes: &[ChangeRow],
+    ui: &mut egui::Ui,
+    title: &str,
+    max: usize,
+) -> bool {
+    let mut open = false;
     widgets::card(ui, Some(title), |ui| {
         let mut shown = 0usize;
-        for row in app.changes.iter().rev() {
+        for row in changes.iter().rev() {
             if shown >= max {
                 break;
             }
@@ -36,12 +67,13 @@ pub fn draw_preview(app: &mut App, ui: &mut egui::Ui, title: &str, max: usize) {
         }
         ui.add_space(6.0);
         if ui.link("View all activity").clicked() {
-            app.page = super::Page::Activity;
+            open = true;
         }
     });
+    open
 }
 
-pub fn draw(app: &mut App, ui: &mut egui::Ui, title: &str) {
+pub fn draw(app: &mut ActivityView, ui: &mut egui::Ui, title: &str) {
     ui.horizontal(|ui| {
         widgets::page_title(ui, title);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -85,7 +117,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui, title: &str) {
     }
 }
 
-fn files_tab(app: &mut App, ui: &mut egui::Ui) {
+fn files_tab(app: &mut ActivityView, ui: &mut egui::Ui) {
     // Search + list live on a white card; the count line stays inside it,
     // with the scroll height reserved so it can never be pushed out.
     widgets::card(ui, None, |ui| {
@@ -165,7 +197,7 @@ fn files_tab(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
-fn log_tab(app: &mut App, ui: &mut egui::Ui) {
+fn log_tab(app: &mut ActivityView, ui: &mut egui::Ui) {
     let query = app.act.log_query.trim().to_lowercase();
     widgets::card(ui, None, |ui| {
         ui.horizontal_wrapped(|ui| {

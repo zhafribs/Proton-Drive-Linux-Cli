@@ -1,12 +1,69 @@
 //! About: product identity, versions, updates, details, credits and legal.
 
-use super::{widgets, App};
+use super::{AppCtx, Toast, UpdateUi, recovery::RecoveryState, widgets};
 use crate::paths::{RELEASE_PAGE, REPO_URL};
 use crate::{GUI_VERSION, theme, util};
 use eframe::egui;
+use std::collections::VecDeque;
 use std::path::Path;
 
-pub fn draw(app: &mut App, ui: &mut egui::Ui) {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AboutAction {
+    ShowShortcuts,
+    CheckUpdates,
+    DownloadUpdate,
+    OpenSettings,
+}
+
+pub struct AboutView<'a> {
+    pub ctx: &'a AppCtx,
+    pub upd: &'a mut UpdateUi,
+    pub recovery: &'a mut RecoveryState,
+    pub icon_tex: Option<egui::TextureHandle>,
+    pub toasts: &'a mut VecDeque<Toast>,
+    pub now: f64,
+    pub actions: &'a mut Vec<AboutAction>,
+}
+
+impl AboutView<'_> {
+    fn show_shortcuts(&mut self) {
+        self.actions.push(AboutAction::ShowShortcuts);
+    }
+
+    fn action_check_updates(&mut self) {
+        self.actions.push(AboutAction::CheckUpdates);
+    }
+
+    fn action_download_update(&mut self) {
+        self.actions.push(AboutAction::DownloadUpdate);
+    }
+
+    fn toast(&mut self, msg: impl Into<String>) {
+        if self.toasts.len() >= 4 {
+            let idx = self.toasts.iter().position(|t| !t.error).unwrap_or(0);
+            self.toasts.remove(idx);
+        }
+        self.toasts.push_back(Toast {
+            msg: msg.into(),
+            at: self.now,
+            error: false,
+            shown_at: None,
+        });
+    }
+}
+
+fn open_url(url: &str) {
+    let u = url.to_string();
+    std::thread::spawn(move || {
+        let _ = std::process::Command::new("xdg-open")
+            .arg(&u)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    });
+}
+
+pub fn draw(app: &mut AboutView, ui: &mut egui::Ui) {
     egui::ScrollArea::vertical()
         .id_salt("about-scroll")
         .show(ui, |ui| {
@@ -55,7 +112,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
         });
 }
 
-fn page_head(app: &mut App, ui: &mut egui::Ui) {
+fn page_head(app: &mut AboutView, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         let title = ui.label(egui::RichText::new("About").strong().size(24.0));
         title.widget_info(|| {
@@ -78,7 +135,7 @@ fn page_head(app: &mut App, ui: &mut egui::Ui) {
                         "GitHub repository",
                         "Open the project on GitHub.",
                     ) {
-                        App::open_url(REPO_URL);
+                        open_url(REPO_URL);
                     }
                 },
             );
@@ -86,7 +143,7 @@ fn page_head(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
-fn hero(app: &App, ui: &mut egui::Ui) {
+fn hero(app: &AboutView, ui: &mut egui::Ui) {
     widgets::card(ui, None, |ui| {
         ui.horizontal_top(|ui| {
             if let Some(tex) = &app.icon_tex {
@@ -163,7 +220,7 @@ fn tags(ui: &mut egui::Ui) {
     });
 }
 
-fn update_state(app: &App) -> (&'static str, &'static str) {
+fn update_state(app: &AboutView) -> (&'static str, &'static str) {
     update_state_for(
         app.upd.checking,
         app.upd.available.is_some(),
@@ -194,12 +251,12 @@ fn update_state_for(
     }
 }
 
-fn update_pill(app: &App, ui: &mut egui::Ui) {
+fn update_pill(app: &AboutView, ui: &mut egui::Ui) {
     let (key, label) = update_state(app);
     widgets::status_pill(ui, key, label);
 }
 
-fn cli_version(app: &App) -> String {
+fn cli_version(app: &AboutView) -> String {
     cli_version_from(
         app.ctx.identity
             .as_ref()
@@ -230,7 +287,7 @@ fn cli_version_from(raw: &str) -> String {
     }
 }
 
-fn versions(app: &App, ui: &mut egui::Ui) {
+fn versions(app: &AboutView, ui: &mut egui::Ui) {
     let cli = cli_version(app);
     ui.columns(3, |cols| {
         widgets::metric(&mut cols[0], "App version", GUI_VERSION, "GUI build");
@@ -383,7 +440,7 @@ fn bullet(ui: &mut egui::Ui, text: &str) {
     ui.add_space(6.0);
 }
 
-fn updates(app: &mut App, ui: &mut egui::Ui) {
+fn updates(app: &mut AboutView, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Updates"), |ui| {
         let release = app.upd.available.clone();
         let checking = app.upd.checking;
@@ -425,17 +482,16 @@ fn updates(app: &mut App, ui: &mut egui::Ui) {
                 app.action_download_update();
             }
             if ui.button("Open download page").clicked() {
-                App::open_url(RELEASE_PAGE);
+                open_url(RELEASE_PAGE);
             }
             if ui.button("Update settings").clicked() {
-                app.page = super::Page::Settings;
-                app.settings_tab = 5;
+                app.actions.push(AboutAction::OpenSettings);
             }
         });
     });
 }
 
-fn details(app: &mut App, ui: &mut egui::Ui) {
+fn details(app: &mut AboutView, ui: &mut egui::Ui) {
     widgets::card(ui, None, |ui| {
         egui::CollapsingHeader::new(
             egui::RichText::new("Technical details").strong().size(13.5),
@@ -569,7 +625,7 @@ fn credits(ui: &mut egui::Ui) {
 
 fn link(ui: &mut egui::Ui, text: &str, url: &str) {
     if ui.link(egui::RichText::new(text).size(12.0)).clicked() {
-        App::open_url(url);
+        open_url(url);
     }
 }
 

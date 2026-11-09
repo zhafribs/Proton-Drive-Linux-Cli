@@ -1,11 +1,66 @@
 //! Home: the status hero, three honest metrics, a compact activity preview,
 //! and the actions people actually use.
 
-use super::{App, Dialog, activity, cloud, widgets};
+use super::{AppCtx, Dialog, activity, cloud, settings::Draft, widgets};
 use crate::{health, service, util};
 use eframe::egui;
 
-pub fn draw(app: &mut App, ui: &mut egui::Ui) {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HomeAction {
+    Login,
+    SyncNow,
+    OpenFolder,
+    Resume,
+    OpenSettings,
+    OpenActivity,
+}
+
+pub struct HomeView<'a> {
+    pub ctx: &'a AppCtx,
+    pub draft: &'a Draft,
+    pub active: bool,
+    pub paused_by_user: bool,
+    pub status: health::UiStatus,
+    pub logged_in: bool,
+    pub sub_override: &'a Option<(String, f64)>,
+    pub changes: &'a [crate::journal::ChangeRow],
+    pub stats: Option<(u64, u64)>,
+    pub dialog: &'a mut Option<Dialog>,
+    pub now: f64,
+    pub actions: &'a mut Vec<HomeAction>,
+}
+
+impl HomeView<'_> {
+    fn ui_status(&self) -> health::UiStatus {
+        self.status
+    }
+
+    fn logged_in(&self) -> bool {
+        self.logged_in
+    }
+
+    fn now(&self) -> f64 {
+        self.now
+    }
+
+    fn action_login(&mut self) {
+        self.actions.push(HomeAction::Login);
+    }
+
+    fn action_sync_now(&mut self) {
+        self.actions.push(HomeAction::SyncNow);
+    }
+
+    fn action_open_folder(&mut self) {
+        self.actions.push(HomeAction::OpenFolder);
+    }
+
+    fn action_resume(&mut self) {
+        self.actions.push(HomeAction::Resume);
+    }
+}
+
+pub fn draw(app: &mut HomeView, ui: &mut egui::Ui) {
     egui::ScrollArea::vertical()
         .id_salt("home-scroll")
         .auto_shrink([false, false])
@@ -15,7 +70,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
         });
 }
 
-fn draw_inner(app: &mut App, ui: &mut egui::Ui) {
+fn draw_inner(app: &mut HomeView, ui: &mut egui::Ui) {
     let status = app.ui_status();
     let (title, _) = health::status_text(status);
     let key = status.key();
@@ -84,8 +139,7 @@ fn draw_inner(app: &mut App, ui: &mut egui::Ui) {
                             )
                         });
                         if change.clicked() {
-                            app.page = super::Page::Settings;
-                            app.settings_tab = 0;
+                            app.actions.push(HomeAction::OpenSettings);
                         }
                     });
                 }
@@ -113,7 +167,7 @@ fn draw_inner(app: &mut App, ui: &mut egui::Ui) {
                         "Review and allow once",
                         "Review the files that would be removed, then approve this batch only.",
                     ) {
-                        app.dialog = Some(Dialog::ConfirmHeldDeletes {
+                        *app.dialog = Some(Dialog::ConfirmHeldDeletes {
                             local: app.ctx.health.deletes_held_local,
                             cloud: app.ctx.health.deletes_held_cloud,
                             local_digest: app.ctx.health.deletes_held_local_digest.clone().unwrap_or_default(),
@@ -173,7 +227,9 @@ fn draw_inner(app: &mut App, ui: &mut egui::Ui) {
 
     let full = ui.available_width();
     if full < 640.0 {
-        activity::draw_preview(app, ui, "Recent activity", 4);
+        if activity::draw_preview(app.changes, ui, "Recent activity", 4) {
+            app.actions.push(HomeAction::OpenActivity);
+        }
         ui.add_space(12.0);
         sync_details(app, ui);
     } else {
@@ -183,7 +239,11 @@ fn draw_inner(app: &mut App, ui: &mut egui::Ui) {
             ui.allocate_ui_with_layout(
                 egui::vec2(left, 0.0),
                 egui::Layout::top_down(egui::Align::Min),
-                |ui| activity::draw_preview(app, ui, "Recent activity", 4),
+                |ui| {
+                    if activity::draw_preview(app.changes, ui, "Recent activity", 4) {
+                        app.actions.push(HomeAction::OpenActivity);
+                    }
+                },
             );
             ui.add_space(14.0);
             ui.allocate_ui_with_layout(
@@ -196,7 +256,7 @@ fn draw_inner(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn page_head(
-    app: &mut App,
+    app: &mut HomeView,
     ui: &mut egui::Ui,
     logged_in: bool,
     needs_login: bool,
@@ -250,7 +310,7 @@ fn page_head(
                 };
                 if widgets::secondary_button_hint(ui, pause_label, pause_hint) {
                     if app.active {
-                        app.dialog = Some(Dialog::PauseMenu);
+                        *app.dialog = Some(Dialog::PauseMenu);
                     } else {
                         app.action_resume();
                     }
@@ -260,7 +320,7 @@ fn page_head(
     });
 }
 
-fn metrics(app: &App, ui: &mut egui::Ui) {
+fn metrics(app: &HomeView, ui: &mut egui::Ui) {
     let files = app
         .stats
         .map(|(f, _)| util::thousands(f))
@@ -281,7 +341,7 @@ fn metrics(app: &App, ui: &mut egui::Ui) {
     });
 }
 
-fn cloud_storage(app: &App, ui: &mut egui::Ui) {
+fn cloud_storage(app: &HomeView, ui: &mut egui::Ui) {
     let quota = cloud::quota_usage(&app.ctx.paths.state_dir.join("quota.json"));
     widgets::card(ui, Some("Cloud storage"), |ui| {
         let Some((used, total, drive, fetched)) = quota else {
@@ -351,7 +411,7 @@ fn storage_stat(ui: &mut egui::Ui, label: &str, value: &str, sub: &str) {
     ui.label(egui::RichText::new(sub).size(11.0).weak());
 }
 
-fn sync_details(app: &mut App, ui: &mut egui::Ui) {
+fn sync_details(app: &mut HomeView, ui: &mut egui::Ui) {
     let next = app.ctx.health
         .next_poll_dt()
         .map(next_check_label)

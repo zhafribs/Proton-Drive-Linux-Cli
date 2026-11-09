@@ -2,10 +2,90 @@
 //! updates, install helpers, advanced tuning - plus the conf/unit write flow
 //! (`do_save`), all with the PyQt app's exact labels and validations.
 
-use super::{App, Dialog, widgets};
+use super::{AppCtx, Dialog, Toast, UpdateUi, widgets};
 use crate::{conf, desktop, service, theme};
 use eframe::egui;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+
+/// One app-level action a Settings card asked for. Applied by `App` after
+/// the page has released its borrow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsAction {
+    CheckUpdates,
+    DownloadUpdate,
+    RestartService,
+    ResetCloud,
+}
+
+fn open_url(url: &str) {
+    let u = url.to_string();
+    std::thread::spawn(move || {
+        let _ = std::process::Command::new("xdg-open")
+            .arg(&u)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    });
+}
+
+/// The narrow view of the app the Settings page receives. The existing card
+/// code keeps its `app.draft` / `app.ctx` shape without importing `App`.
+pub struct SettingsView<'a> {
+    pub draft: &'a mut Draft,
+    pub ctx: &'a mut AppCtx,
+    pub dialog: &'a mut Option<Dialog>,
+    pub save_hint: &'a mut String,
+    pub save_checking: &'a mut bool,
+    pub settings_tab: &'a mut usize,
+    pub prefs_baseline: &'a mut Option<crate::prefs::Prefs>,
+    pub style_dirty: &'a mut bool,
+    pub preview_theme: &'a mut Option<crate::prefs::Theme>,
+    pub preview_scale: &'a mut Option<crate::prefs::UiScale>,
+    pub upd: &'a mut UpdateUi,
+    pub tray_present: bool,
+    pub system_theme: crate::prefs::Theme,
+    pub paused_by_user: bool,
+    pub enabled: bool,
+    pub photos_dir_ready: &'a mut bool,
+    pub toasts: &'a mut VecDeque<Toast>,
+    pub now: f64,
+    pub actions: &'a mut Vec<SettingsAction>,
+}
+
+impl SettingsView<'_> {
+    fn toast(&mut self, msg: impl Into<String>) {
+        self.push_toast(msg.into(), false);
+    }
+
+    fn toast_error(&mut self, msg: impl Into<String>) {
+        self.push_toast(msg.into(), true);
+    }
+
+    fn push_toast(&mut self, msg: String, error: bool) {
+        if self.toasts.len() >= 4 {
+            let idx = self.toasts.iter().position(|t| !t.error).unwrap_or(0);
+            self.toasts.remove(idx);
+        }
+        self.toasts.push_back(Toast {
+            msg,
+            at: self.now,
+            error,
+            shown_at: None,
+        });
+    }
+
+    fn action_check_updates(&mut self) {
+        self.actions.push(SettingsAction::CheckUpdates);
+    }
+
+    fn action_download_update(&mut self) {
+        self.actions.push(SettingsAction::DownloadUpdate);
+    }
+
+    fn action_restart_service(&mut self) {
+        self.actions.push(SettingsAction::RestartService);
+    }
+}
 
 pub struct Draft {
     // --- conf-backed (Save writes these) ---
@@ -247,7 +327,7 @@ impl Draft {
 
 // ---------------------------------------------------------------- page ----
 
-type CardFn = fn(&mut App, &mut egui::Ui);
+type CardFn = fn(&mut SettingsView, &mut egui::Ui);
 
 const TAB_LABELS: [&str; 6] = [
     "General",
@@ -280,7 +360,7 @@ const TAB_CARDS: [&[CardFn]; 6] = [
     &[updates_card, install_card],
 ];
 
-fn draw_cards(app: &mut App, ui: &mut egui::Ui, cards: &[CardFn]) {
+fn draw_cards(app: &mut SettingsView, ui: &mut egui::Ui, cards: &[CardFn]) {
     for (i, card) in cards.iter().enumerate() {
         if i > 0 {
             ui.add_space(12.0);
@@ -289,11 +369,11 @@ fn draw_cards(app: &mut App, ui: &mut egui::Ui, cards: &[CardFn]) {
     }
 }
 
-fn tab_bar(app: &mut App, ui: &mut egui::Ui) {
+fn tab_bar(app: &mut SettingsView, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
         for (i, label) in TAB_LABELS.iter().enumerate() {
-            let selected = app.settings_tab == i;
+            let selected = *app.settings_tab == i;
             let resp = ui.add(
                 egui::Button::new(egui::RichText::new(*label).size(13.0))
                     .selected(selected)
@@ -313,16 +393,16 @@ fn tab_bar(app: &mut App, ui: &mut egui::Ui) {
                         i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space)
                     }))
             {
-                app.settings_tab = i;
+                *app.settings_tab = i;
             }
         }
     });
 }
 
-fn save_bar(app: &mut App, ui: &mut egui::Ui) {
+fn save_bar(app: &mut SettingsView, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         let save = ui
-            .add_enabled_ui(!app.save_checking, |ui| {
+            .add_enabled_ui(!*app.save_checking, |ui| {
                 widgets::primary_button_hint(
                     ui,
                     "  Save all changes",
@@ -345,7 +425,7 @@ fn save_bar(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
-pub fn draw(app: &mut App, ui: &mut egui::Ui) {
+pub fn draw(app: &mut SettingsView, ui: &mut egui::Ui) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
@@ -363,7 +443,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                     tab_bar(app, ui);
                     ui.add_space(10.0);
 
-                    let tab = app.settings_tab.min(TAB_LABELS.len() - 1);
+                    let tab = (*app.settings_tab).min(TAB_LABELS.len() - 1);
                     ui.add_space(12.0);
 
                     draw_cards(app, ui, TAB_CARDS[tab]);
@@ -380,23 +460,23 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
 /// Save starts with the cheap validations. A changed sync root gets a
 /// symlink preflight first, because the engine fails the whole cycle on one
 /// link; showing it now is better than a red health line after the first run.
-fn request_save(app: &mut App) {
-    if app.save_checking {
+fn request_save(app: &mut SettingsView) {
+    if *app.save_checking {
         return;
     }
     if let Some((title, body)) = validate(app) {
         if title == "Folder missing" {
-            app.settings_tab = 0;
+            *app.settings_tab = 0;
         }
-        app.dialog = Some(Dialog::Info { title, body });
+        *app.dialog = Some(Dialog::Info { title, body });
         return;
     }
-    if !root_change_pending(app) {
-        app.dialog = Some(Dialog::ConfirmSave);
+    if !root_change_pending(&app.ctx.conf, app.draft) {
+        *app.dialog = Some(Dialog::ConfirmSave);
         return;
     }
-    app.save_checking = true;
-    app.save_hint = "Checking the new folder for symlinks\u{2026}".into();
+    *app.save_checking = true;
+    *app.save_hint = "Checking the new folder for symlinks\u{2026}".into();
     let root = super::expand_user(&app.draft.local);
     let tx = app.ctx.tx.clone();
     std::thread::spawn(move || {
@@ -404,13 +484,13 @@ fn request_save(app: &mut App) {
     });
 }
 
-fn start_symlink_check(app: &mut App) {
-    if app.save_checking {
+fn start_symlink_check(app: &mut SettingsView) {
+    if *app.save_checking {
         return;
     }
     let root = super::expand_user(&app.draft.local);
     let tx = app.ctx.tx.clone();
-    app.save_hint = "Checking the folder for symlinks\u{2026}".into();
+    *app.save_hint = "Checking the folder for symlinks\u{2026}".into();
     std::thread::spawn(move || {
         let _ = tx.send(super::Back::SymlinkScan(scan_symlinks(&root)));
     });
@@ -458,16 +538,21 @@ fn scan_symlinks(root: &std::path::Path) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-pub fn on_symlink_scan(app: &mut App, result: Result<Vec<String>, String>) {
-    let saving = app.save_checking;
-    app.save_checking = false;
-    app.save_hint.clear();
+pub fn on_symlink_scan(
+    save_checking: &mut bool,
+    save_hint: &mut String,
+    dialog: &mut Option<Dialog>,
+    result: Result<Vec<String>, String>,
+) {
+    let saving = *save_checking;
+    *save_checking = false;
+    save_hint.clear();
     match result {
         Ok(links) if links.is_empty() => {
             if saving {
-                app.dialog = Some(Dialog::ConfirmSave);
+                *dialog = Some(Dialog::ConfirmSave);
             } else {
-                app.dialog = Some(Dialog::Info {
+                *dialog = Some(Dialog::Info {
                     title: "No symlinks found".into(),
                     body: "The sync folder contains no symlinks.".into(),
                 });
@@ -486,13 +571,13 @@ pub fn on_symlink_scan(app: &mut App, result: Result<Vec<String>, String>) {
                     String::new()
                 }
             );
-            app.dialog = Some(Dialog::Info {
+            *dialog = Some(Dialog::Info {
                 title: "Symlinks block syncing".into(),
                 body,
             });
         }
         Err(e) => {
-            app.dialog = Some(Dialog::Info {
+            *dialog = Some(Dialog::Info {
                 title: "Could not check the folder".into(),
                 body: e,
             });
@@ -500,7 +585,7 @@ pub fn on_symlink_scan(app: &mut App, result: Result<Vec<String>, String>) {
     }
 }
 
-fn validate(app: &App) -> Option<(String, String)> {
+fn validate(app: &SettingsView) -> Option<(String, String)> {
     if !app.draft.local.starts_with('/') {
         return Some((
             "Folder missing".into(),
@@ -524,7 +609,7 @@ fn validate(app: &App) -> Option<(String, String)> {
 /// Discard: restore the prefs snapshot from the last Save/startup, persist it,
 /// then reload the conf-backed draft. Prefs setters write immediately, so
 /// re-reading disk would just load the values the user is discarding.
-fn discard(app: &mut App) {
+fn discard(app: &mut SettingsView) {
     if let Some(base) = app.prefs_baseline.clone() {
         // Window size and sidebar width are layout state, not settings; they
         // change while the user works and must not snap back on Discard.
@@ -538,10 +623,10 @@ fn discard(app: &mut App) {
     let extras = conf::read_extras(&app.ctx.paths.conf_file);
     app.ctx.conf = values.clone();
     app.ctx.conf_extras = extras.clone();
-    app.style_dirty = true;
-    app.preview_theme = None;
-    app.preview_scale = None;
-    app.draft = Draft::load(&values, &extras, &app.ctx.prefs, &app.ctx.paths);
+    *app.style_dirty = true;
+    *app.preview_theme = None;
+    *app.preview_scale = None;
+    *app.draft = Draft::load(&values, &extras, &app.ctx.prefs, &app.ctx.paths);
     app.draft.autostart = app.enabled;
     app.draft.appstart = desktop::autostart_installed(&app.ctx.paths);
     app.save_hint.clear();
@@ -549,15 +634,18 @@ fn discard(app: &mut App) {
 
 /// True when Save would change either sync root. The confirmation dialog
 /// uses this to warn that history is archived and cloud caches are dropped.
-pub fn root_change_pending(app: &App) -> bool {
-    app.ctx.conf.get("PROTON_SYNC_LOCAL") != Some(&app.draft.local)
-        || app.ctx.conf.get("PROTON_SYNC_REMOTE") != Some(&app.draft.remote)
+pub fn root_change_pending(
+    conf: &BTreeMap<String, String>,
+    draft: &Draft,
+) -> bool {
+    conf.get("PROTON_SYNC_LOCAL") != Some(&draft.local)
+        || conf.get("PROTON_SYNC_REMOTE") != Some(&draft.remote)
 }
 
 /// Write conf + restart flow (worker-side; the hint lands via SaveHint).
-pub fn do_save(app: &mut App, ctx: &egui::Context) {
+pub fn do_save(app: &mut SettingsView, ctx: &egui::Context) {
     if let Some((title, body)) = validate(app) {
-        app.dialog = Some(Dialog::Info { title, body });
+        *app.dialog = Some(Dialog::Info { title, body });
         return;
     }
     let d = &app.draft;
@@ -616,12 +704,12 @@ pub fn do_save(app: &mut App, ctx: &egui::Context) {
 
     let conf_changed = values.iter().any(|(k, v)| app.ctx.conf.get(k) != Some(v))
         || extras != app.ctx.conf_extras;
-    let root_changed = root_change_pending(app);
+    let root_changed = root_change_pending(&app.ctx.conf, app.draft);
     conf::write(&app.ctx.paths.conf_file, &values, &extras);
     if root_changed {
         // The engine archives state.json on its next start; drop the GUI's
         // cloud cache and old-account rows now.
-        super::cloud::reset(app);
+        app.actions.push(SettingsAction::ResetCloud);
         app.draft.initial_selection.clear();
         app.draft.children.clear();
         app.draft.expanded.clear();
@@ -657,13 +745,13 @@ pub fn do_save(app: &mut App, ctx: &egui::Context) {
     app.ctx.prefs.set("theme", theme.as_str());
     let scale = crate::prefs::UiScale::from_percent(ui_scale_pct);
     app.ctx.prefs.set("ui_scale", scale.as_str());
-    app.style_dirty = true;
+    *app.style_dirty = true;
     ctx.set_zoom_factor(scale.factor());
-    app.preview_theme = None;
-    app.preview_scale = None;
+    *app.preview_theme = None;
+    *app.preview_scale = None;
     // The photos folder may have changed in this save; re-ensure it next time
     // the page opens so a moved path is created too.
-    app.photos.dir_ready = false;
+    *app.photos_dir_ready = false;
     ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(if top {
         egui::WindowLevel::AlwaysOnTop
     } else {
@@ -672,7 +760,7 @@ pub fn do_save(app: &mut App, ctx: &egui::Context) {
     if appstart_touched {
         let _ = desktop::set_autostart(&app.ctx.paths, appstart);
     }
-    app.prefs_baseline = Some(app.ctx.prefs.clone());
+    *app.prefs_baseline = Some(app.ctx.prefs.clone());
     app.ctx.conf = conf::read(&app.ctx.paths.conf_file);
     app.ctx.conf_extras = conf::read_extras(&app.ctx.paths.conf_file);
     app.draft.initial_selection = selection;
@@ -681,10 +769,10 @@ pub fn do_save(app: &mut App, ctx: &egui::Context) {
     app.draft.autostart_touched = false;
     app.draft.appstart_touched = false;
     if !restart_needed {
-        app.save_hint = "Saved.".into();
+        *app.save_hint = "Saved.".into();
         return;
     }
-    app.save_hint = "Saving...".into();
+    *app.save_hint = "Saving...".into();
 
     let appimage = app.ctx.paths.appimage.clone();
     let tx = app.ctx.tx.clone();
@@ -758,7 +846,7 @@ fn flag(b: bool) -> String {
 
 // --------------------------------------------------------------- cards ----
 
-fn folder_card(app: &mut App, ui: &mut egui::Ui) {
+fn folder_card(app: &mut SettingsView, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Where your files live"), |ui| {
         ui.horizontal(|ui| {
             let (r, _) =
@@ -781,7 +869,7 @@ fn folder_card(app: &mut App, ui: &mut egui::Ui) {
                     } else {
                         dirs::home_dir().unwrap_or_default()
                     };
-                    app.dialog = Some(Dialog::DirBrowse { cwd: start });
+                    *app.dialog = Some(Dialog::DirBrowse { cwd: start });
                 }
                 if ui
                     .button("Check folder")
@@ -795,7 +883,7 @@ fn folder_card(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
-fn what_syncs_card(app: &mut App, ui: &mut egui::Ui) {
+fn what_syncs_card(app: &mut SettingsView, ui: &mut egui::Ui) {
     widgets::card(ui, Some("What gets synced"), |ui| {
         let mut selective = app.draft.selective;
         if ui
@@ -849,7 +937,7 @@ fn what_syncs_card(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
-fn photos_card(app: &mut App, ui: &mut egui::Ui) {
+fn photos_card(app: &mut SettingsView, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Photos"), |ui| {
         let mut on = app.draft.photos;
         if widgets::toggle(ui, "Sync my photos with this computer", &mut on, None) {
@@ -871,7 +959,7 @@ fn photos_card(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
-fn how_often_card(app: &mut App, ui: &mut egui::Ui) {
+fn how_often_card(app: &mut SettingsView, ui: &mut egui::Ui) {
     widgets::card(ui, Some("How often"), |ui| {
         let mut inotify = app.draft.inotify;
         if widgets::toggle(ui, "Upload my changes right away", &mut inotify, None) {
@@ -957,7 +1045,7 @@ fn number_combo(
     }
 }
 
-fn performance_card(app: &mut App, ui: &mut egui::Ui) {
+fn performance_card(app: &mut SettingsView, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Performance"), |ui| {
         let mut fast = app.draft.fast_start;
         if ui
@@ -1013,13 +1101,13 @@ fn performance_card(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
             if ui.button("Clear snapshot cache").clicked() {
-                app.dialog = Some(Dialog::ConfirmClearCache);
+                *app.dialog = Some(Dialog::ConfirmClearCache);
             }
         });
     });
 }
 
-fn notifications_card(app: &mut App, ui: &mut egui::Ui) {
+fn notifications_card(app: &mut SettingsView, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Notifications"), |ui| {
         let mut v = app.draft.note_errors;
         if ui
@@ -1051,13 +1139,13 @@ fn notifications_card(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
-fn background_card(app: &mut App, ui: &mut egui::Ui) {
+fn background_card(app: &mut SettingsView, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Running in the background"), |ui| {
         let mut v = app.draft.top;
         if widgets::toggle(ui, "Keep this window above other windows", &mut v, None) {
             app.draft.top = v;
         }
-        if app.tray.is_none() {
+        if !app.tray_present {
             ui.label(
                 egui::RichText::new(
                     "No system tray is available on this desktop. Closing quits, and \
@@ -1103,7 +1191,7 @@ fn background_card(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
-fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
+fn appearance_card(app: &mut SettingsView, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Appearance"), |ui| {
         labeled_control(ui, "Theme", |ui| {
             const THEMES: [&str; 3] = ["Match my system", "Light", "Dark"];
@@ -1122,8 +1210,8 @@ fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
                                 2 => crate::prefs::Theme::Dark,
                                 _ => crate::prefs::Theme::System,
                             };
-                            app.preview_theme = Some(theme);
-                            app.style_dirty = true;
+                            *app.preview_theme = Some(theme);
+                            *app.style_dirty = true;
                         }
                     }
                 });
@@ -1234,7 +1322,7 @@ fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
                     }
                     if apply {
                         let scale = crate::prefs::UiScale::from_percent(pct);
-                        app.preview_scale = Some(scale);
+                        *app.preview_scale = Some(scale);
                         ui.ctx().set_zoom_factor(scale.factor());
                     }
                 }
@@ -1243,7 +1331,7 @@ fn appearance_card(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
-fn updates_card(app: &mut App, ui: &mut egui::Ui) {
+fn updates_card(app: &mut SettingsView, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Updates"), |ui| {
         let mut v = app.draft.updates_auto;
         if widgets::toggle(ui, "Check for new versions automatically", &mut v, None) {
@@ -1270,13 +1358,13 @@ fn updates_card(app: &mut App, ui: &mut egui::Ui) {
                 app.action_download_update();
             }
             if ui.button("Open download page").clicked() {
-                App::open_url(crate::paths::RELEASE_PAGE);
+                open_url(crate::paths::RELEASE_PAGE);
             }
         });
     });
 }
 
-fn install_card(app: &mut App, ui: &mut egui::Ui) {
+fn install_card(app: &mut SettingsView, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Installing on Linux"), |ui| {
         let installed = desktop::menu_installed(&app.ctx.paths);
         ui.label(
@@ -1308,7 +1396,7 @@ fn install_card(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
-fn fine_tuning_card(app: &mut App, ui: &mut egui::Ui) {
+fn fine_tuning_card(app: &mut SettingsView, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Fine-tuning"), |ui| {
         // "Scan workers" in Performance owns PROTON_SYNC_WORKERS. Keeping a
         // second control here with a different label made the same setting
@@ -1325,7 +1413,7 @@ fn fine_tuning_card(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
-fn troubleshooting_card(app: &mut App, ui: &mut egui::Ui) {
+fn troubleshooting_card(app: &mut SettingsView, ui: &mut egui::Ui) {
     widgets::card(ui, Some("If something goes wrong"), |ui| {
         ui.horizontal_wrapped(|ui| {
             if ui.button("Restart syncing now").clicked() {
@@ -1333,7 +1421,7 @@ fn troubleshooting_card(app: &mut App, ui: &mut egui::Ui) {
             }
             if ui.button("Open settings file").clicked() {
                 let p = app.ctx.paths.conf_file.clone();
-                App::open_url(&p.to_string_lossy());
+                open_url(&p.to_string_lossy());
             }
             if ui.button("Copy the log command").clicked() {
                 ui.ctx()
@@ -1344,7 +1432,7 @@ fn troubleshooting_card(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
-fn env_card(app: &mut App, ui: &mut egui::Ui) {
+fn env_card(app: &mut SettingsView, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Extra environment variables"), |ui| {
         ui.add(
             egui::TextEdit::multiline(&mut app.draft.env_text)
@@ -1357,7 +1445,7 @@ fn env_card(app: &mut App, ui: &mut egui::Ui) {
 
 // ----------------------------------------------------- selective tree ----
 
-fn kick_root_load(app: &mut App) {
+fn kick_root_load(app: &mut SettingsView) {
     if app.draft.loading.insert(String::new()) {
         let remote = app.draft.remote.clone();
         let tx = app.ctx.tx.clone();
@@ -1371,14 +1459,14 @@ fn kick_root_load(app: &mut App) {
     }
 }
 
-fn refresh_roots(app: &mut App) {
+fn refresh_roots(app: &mut SettingsView) {
     app.draft.refresh_roots();
     kick_root_load(app);
 }
 
 /// One level of the picker, Qt's tree in egui rows: expand arrow, tri-state
 /// glyph, label; states cascade exactly like the QTreeWidget did.
-fn sel_tree(app: &mut App, ui: &mut egui::Ui, parent: &str) {
+fn sel_tree(app: &mut SettingsView, ui: &mut egui::Ui, parent: &str) {
     let kids = app.draft.children.get(parent).cloned().unwrap_or_default();
     if kids.is_empty() {
         if app.draft.loading.contains(parent) {
@@ -1410,7 +1498,7 @@ fn sel_tree(app: &mut App, ui: &mut egui::Ui, parent: &str) {
     }
 }
 
-fn sel_row(app: &mut App, ui: &mut egui::Ui, rel: &str, label: &str) {
+fn sel_row(app: &mut SettingsView, ui: &mut egui::Ui, rel: &str, label: &str) {
     ui.horizontal(|ui| {
         let loaded_empty = app.draft.children.get(rel).is_some_and(|k| k.is_empty());
         if !loaded_empty {
