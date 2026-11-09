@@ -31,3 +31,9 @@ on-disk trust model.
 - Tag `v0.9.0-gui3.23.0`; CI `42595328464` verify + release succeeded.
 - SHA-256, Ed25519 signature, smoke and GLIBC 2.28 verified.
 - Evidence: `docs/audit/evidence/release-3.23.0.txt`.
+
+## Consolidation
+
+`v0.9.0-gui3.25.0` adds `scripts/new-update-key.sh`, which generates an
+offline successor key and prints its public hex and the rotation steps. No key
+material is committed.

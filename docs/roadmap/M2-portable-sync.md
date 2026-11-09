@@ -68,3 +68,8 @@ candidate for a later milestone.
 - Patch `v0.9.0-gui3.24.1`: choosing Quit (tray or Ctrl+Q) now stops the
   supervised engine and removes `supervisor.pid`; closing to the tray keeps it
   running. Evidence: `docs/audit/evidence/release-3.24.1.txt`.
+
+## Consolidation
+
+`v0.9.0-gui3.25.0` hides the misleading systemd-only "Start syncing when I log
+in" toggle in supervisor mode and points the user at the app's login entry.
