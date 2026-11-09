@@ -1,3 +1,17 @@
+## 3.25.1 — 2026-11-09
+
+### Internal UI architecture
+
+- **Narrow page contexts.** Recovery, Photos, Settings, About, Home, Activity and
+  the Files browser now receive page-specific views (`RecoveryCtx`,
+  `PhotoView`, `SettingsView`, `AboutView`, `HomeView`, `ActivityView`,
+  `CloudView`) instead of the whole `App`.
+- **`AppCtx` extracted.** Paths, preferences, config, channels, health and
+  identity live in one shared context.
+- **No behavior change.** `Back` message routing is unchanged; tests, clippy,
+  release gate and page smoke checks stay green. The graph now measures
+  `App` at 75 edges (down from 229).
+
 ## 3.25.0 — 2026-11-09
 
 ### M2–M4 consolidation
