@@ -42,11 +42,14 @@ GUI restart could leave sync stopped or spawn a duplicate.
 | Tests / clippy / gate | 297 tests, clippy clean, gate 12/12 |
 | Release | Signed AppImage, smoke, GLIBC 2.28 |
 
-## Known limitation
+## Lifecycle
 
-The supervisor lives in the GUI. If the GUI is fully quit, the engine keeps
-running, but a later engine crash is not restarted until the GUI is opened
-again. A detached watchdog is a candidate for a later milestone.
+Closing to the tray keeps the GUI and the supervised engine running. Choosing
+Quit (tray or Ctrl+Q) stops the supervised engine and removes
+`supervisor.pid`; the systemd service is independent and is not stopped.
+
+A detached watchdog for the case where the GUI is killed abruptly remains a
+candidate for a later milestone.
 
 ## Non-goals
 

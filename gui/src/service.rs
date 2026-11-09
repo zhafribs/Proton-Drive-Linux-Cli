@@ -230,6 +230,20 @@ fn fallback_stop() -> bool {
     true
 }
 
+/// Stop a GUI-owned engine when the GUI is exiting. The systemd service is
+/// deliberately left alone: it is independent of the GUI. Call this after
+/// `run_native` returns, so closing to the tray (which keeps run_native alive)
+/// does not stop sync.
+pub fn shutdown() {
+    if !uses_supervisor() {
+        return;
+    }
+    DESIRED_RUN.store(false, Ordering::SeqCst);
+    AUTORESUME_GEN.fetch_add(1, Ordering::SeqCst);
+    let _lane = SERVICE_MTX.lock().unwrap();
+    let _ = fallback_stop();
+}
+
 /// Start the GUI-owned engine supervisor when systemd is unavailable. Safe to
 /// call more than once; only one monitor thread is created.
 pub fn spawn_supervisor() {

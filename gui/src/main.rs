@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// The GUI's own version (the release tag is `v<CLI>-gui<GUI>`).
-pub const GUI_VERSION: &str = "3.24.0";
+pub const GUI_VERSION: &str = "3.24.1";
 
 /// The systemd user unit path (shared with `service.rs`).
 pub fn service_unit_path() -> PathBuf {
@@ -168,6 +168,10 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(move |cc| ui::App::new(cc, lock, saved_wayland, slot)),
     );
+    // A GUI-owned engine belongs to this window: closing the window (not
+    // hiding to the tray) must stop it. The systemd service is independent
+    // and is left running.
+    service::shutdown();
     // After an in-app update the freshly swapped-in version starts here: the
     // App (and with it the single-instance lock) is dropped by now, so it
     // takes the lock instead of reporting "Already running".

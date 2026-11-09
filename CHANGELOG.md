@@ -1,3 +1,10 @@
+## 3.24.1 — 2026-11-09
+
+- **A GUI-owned engine now stops when the GUI quits.** Closing to the tray
+  keeps the window and engine alive; choosing Quit (tray or Ctrl+Q) stops the
+  supervised engine and removes `supervisor.pid`. The systemd service is
+  unaffected.
+
 ## 3.24.0 — 2026-11-09
 
 ### Path safety
