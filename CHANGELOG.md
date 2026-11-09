@@ -1,3 +1,16 @@
+## 3.24.0 — 2026-11-09
+
+### Path safety
+
+- **Symlink preflight before a sync-root change.** Saving a new local root
+  scans it first and lists symlinks instead of letting the first sync cycle
+  fail. Settings also has an on-demand **Check folder** action.
+- **Conflict scan cache.** Recovery reuses a fingerprint-checked
+  `conflicts-cache.json` for five minutes; the engine invalidates it whenever
+  it creates a conflict. Large trees no longer take a full walk on every visit.
+- **Local trash usage.** Recovery shows the total size of local trash and warns
+  above 1 GB; the recovery check includes the same figure.
+
 ## 3.23.0 — 2026-11-09
 
 ### Update trust

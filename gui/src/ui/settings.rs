@@ -321,20 +321,17 @@ fn tab_bar(app: &mut App, ui: &mut egui::Ui) {
 
 fn save_bar(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
-        if widgets::primary_button_hint(
-            ui,
-            "  Save all changes",
-            "Saves every setting on every tab.",
-        ) {
-            match validate(app) {
-                Some((title, body)) => {
-                    if title == "Folder missing" {
-                        app.settings_tab = 0;
-                    }
-                    app.dialog = Some(Dialog::Info { title, body });
-                }
-                None => app.dialog = Some(Dialog::ConfirmSave),
-            }
+        let save = ui
+            .add_enabled_ui(!app.save_checking, |ui| {
+                widgets::primary_button_hint(
+                    ui,
+                    "  Save all changes",
+                    "Saves every setting on every tab.",
+                )
+            })
+            .inner;
+        if save {
+            request_save(app);
         }
         let discard_resp = ui
             .button("Discard all changes")
@@ -378,6 +375,129 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
             });
             widgets::scroll_focused_into_view(ui);
         });
+}
+
+/// Save starts with the cheap validations. A changed sync root gets a
+/// symlink preflight first, because the engine fails the whole cycle on one
+/// link; showing it now is better than a red health line after the first run.
+fn request_save(app: &mut App) {
+    if app.save_checking {
+        return;
+    }
+    if let Some((title, body)) = validate(app) {
+        if title == "Folder missing" {
+            app.settings_tab = 0;
+        }
+        app.dialog = Some(Dialog::Info { title, body });
+        return;
+    }
+    if !root_change_pending(app) {
+        app.dialog = Some(Dialog::ConfirmSave);
+        return;
+    }
+    app.save_checking = true;
+    app.save_hint = "Checking the new folder for symlinks\u{2026}".into();
+    let root = super::expand_user(&app.draft.local);
+    let tx = app.tx.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(super::Back::SymlinkScan(scan_symlinks(&root)));
+    });
+}
+
+fn start_symlink_check(app: &mut App) {
+    if app.save_checking {
+        return;
+    }
+    let root = super::expand_user(&app.draft.local);
+    let tx = app.tx.clone();
+    app.save_hint = "Checking the folder for symlinks\u{2026}".into();
+    std::thread::spawn(move || {
+        let _ = tx.send(super::Back::SymlinkScan(scan_symlinks(&root)));
+    });
+}
+
+fn scan_symlinks(root: &std::path::Path) -> Result<Vec<String>, String> {
+    let meta = std::fs::symlink_metadata(root)
+        .map_err(|e| format!("reading {}: {e}", root.display()))?;
+    if !meta.is_dir() || meta.file_type().is_symlink() {
+        return Err(format!("{} is not a folder", root.display()));
+    }
+    let mut out = Vec::new();
+    let mut stack = vec![(root.to_path_buf(), String::new())];
+    while let Some((dir, base)) = stack.pop() {
+        let entries = std::fs::read_dir(&dir)
+            .map_err(|e| format!("reading {}: {e}", dir.display()))?;
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if name == ".proton-sync-staging" || name == ".proton-photos-trash" {
+                continue;
+            }
+            let rel = if base.is_empty() {
+                name.to_string()
+            } else {
+                format!("{base}/{name}")
+            };
+            let Ok(meta) = std::fs::symlink_metadata(entry.path()) else {
+                continue;
+            };
+            if meta.file_type().is_symlink() {
+                out.push(rel);
+                if out.len() >= 200 {
+                    out.sort();
+                    return Ok(out);
+                }
+            } else if meta.is_dir() {
+                stack.push((entry.path(), rel));
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+pub fn on_symlink_scan(app: &mut App, result: Result<Vec<String>, String>) {
+    let saving = app.save_checking;
+    app.save_checking = false;
+    app.save_hint.clear();
+    match result {
+        Ok(links) if links.is_empty() => {
+            if saving {
+                app.dialog = Some(Dialog::ConfirmSave);
+            } else {
+                app.dialog = Some(Dialog::Info {
+                    title: "No symlinks found".into(),
+                    body: "The sync folder contains no symlinks.".into(),
+                });
+            }
+        }
+        Ok(links) => {
+            let shown = links.iter().take(12).cloned().collect::<Vec<_>>().join("\n");
+            let more = links.len().saturating_sub(12);
+            let body = format!(
+                "Found {} symlink(s) in the sync folder:\n\n{}{}\n\nRemove them, or add matching names to Never sync, then Save again. The engine stops the cycle instead of guessing when it meets a symlink.",
+                links.len(),
+                shown,
+                if more > 0 {
+                    format!("\n\u{2026} and {more} more")
+                } else {
+                    String::new()
+                }
+            );
+            app.dialog = Some(Dialog::Info {
+                title: "Symlinks block syncing".into(),
+                body,
+            });
+        }
+        Err(e) => {
+            app.dialog = Some(Dialog::Info {
+                title: "Could not check the folder".into(),
+                body: e,
+            });
+        }
+    }
 }
 
 fn validate(app: &App) -> Option<(String, String)> {
@@ -662,6 +782,13 @@ fn folder_card(app: &mut App, ui: &mut egui::Ui) {
                         dirs::home_dir().unwrap_or_default()
                     };
                     app.dialog = Some(Dialog::DirBrowse { cwd: start });
+                }
+                if ui
+                    .button("Check folder")
+                    .on_hover_text("Look for symlinks before syncing.")
+                    .clicked()
+                {
+                    start_symlink_check(app);
                 }
             });
         });
@@ -1465,6 +1592,29 @@ mod tests {
             number_options(RETRIES_RANGE),
             (1..=10).collect::<Vec<i32>>()
         );
+    }
+
+    #[test]
+    fn symlink_preflight_lists_links_without_following_them() {
+        let root = std::env::temp_dir().join(format!(
+            "pd-symlink-check-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("keep.txt"), b"x").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("/tmp", root.join("outside")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("../keep.txt", root.join("sub/link.txt")).unwrap();
+        let found = scan_symlinks(&root).unwrap();
+        #[cfg(unix)]
+        {
+            assert_eq!(found, vec!["outside", "sub/link.txt"]);
+        }
+        #[cfg(not(unix))]
+        assert!(found.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -621,6 +621,7 @@ pub fn execute(
                     continue;
                 }
                 eprintln!("CONFLICT {} (kept remote copy as {})", rel, conflict_name);
+                proton_core::conflict::invalidate_cache(&state);
                 // Only now upload the untouched local revision. `-d merge`
                 // keeps the conflict copy; the canonical name is updated.
                 let parent_rpath = cli::remote_path(remote_root, &parent_of(rel));

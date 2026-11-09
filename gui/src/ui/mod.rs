@@ -123,6 +123,8 @@ pub enum Back {
     SnapshotResult { ok: bool, message: String },
     /// Recovery: the read-only recovery check finished.
     RecoveryCheckDone(Result<recovery::CheckResult, String>),
+    /// Settings: the sync-folder symlink preflight finished.
+    SymlinkScan(Result<Vec<String>, String>),
     /// Cloud browser: the move-to picker's folder listing landed.
     PickerFolders {
         parent: String,
@@ -316,6 +318,8 @@ pub struct App {
     dialog_seen: Option<std::mem::Discriminant<Dialog>>,
     dialog_focus: bool,
     pub save_hint: String,
+    /// A Save is waiting for the symlink preflight worker.
+    pub save_checking: bool,
     pub sub_override: Option<(String, f64)>,
     pub toasts: std::collections::VecDeque<Toast>,
     /// Prefs as of the last Save/startup; Discard restores this snapshot.
@@ -851,6 +855,7 @@ impl App {
             dialog_seen: None,
             dialog_focus: false,
             save_hint: String::new(),
+            save_checking: false,
             sub_override: None,
             toasts: std::collections::VecDeque::new(),
             upd: UpdateUi {
@@ -1408,6 +1413,7 @@ impl App {
                     recovery::on_snapshot_result(self, ok, message)
                 }
                 Back::RecoveryCheckDone(result) => recovery::on_check_done(self, result),
+                Back::SymlinkScan(result) => settings::on_symlink_scan(self, result),
                 Back::PickerFolders { parent, folders } => {
                     cloud::on_picker_folders(self, parent, folders)
                 }

@@ -11,14 +11,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const ACK_VERSION: u32 = 1;
 const MARKER: &str = " (conflict ";
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Conflict {
     pub conflict_rel: String,
     pub canonical_rel: String,
@@ -93,6 +93,13 @@ pub fn parse_name(rel: &str) -> Option<ParsedName> {
         canonical_rel,
         stamp: stamp.to_string(),
     })
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 fn mtime_ns(meta: &fs::Metadata) -> i64 {
@@ -172,6 +179,73 @@ pub fn scan(local_root: &Path) -> Result<Vec<Conflict>, String> {
             .then_with(|| a.conflict_rel.cmp(&b.conflict_rel))
     });
     Ok(out)
+}
+
+fn cache_path(state_dir: &Path) -> PathBuf {
+    state_dir.join("conflicts-cache.json")
+}
+
+#[derive(Serialize, Deserialize)]
+struct Cache {
+    version: u32,
+    root: String,
+    scanned_at: u64,
+    conflicts: Vec<Conflict>,
+}
+
+const CACHE_VERSION: u32 = 1;
+const CACHE_TTL: u64 = 300;
+
+fn cached(state_dir: &Path, local_root: &Path) -> Option<Vec<Conflict>> {
+    let bytes = fs::read(cache_path(state_dir)).ok()?;
+    let cache: Cache = serde_json::from_slice(&bytes).ok()?;
+    if cache.version != CACHE_VERSION
+        || cache.root != local_root.to_string_lossy()
+        || now_secs().saturating_sub(cache.scanned_at) > CACHE_TTL
+    {
+        return None;
+    }
+    if cache.conflicts.iter().all(|c| verify(local_root, c).is_ok()) {
+        Some(cache.conflicts)
+    } else {
+        None
+    }
+}
+
+fn save_cache(state_dir: &Path, local_root: &Path, conflicts: &[Conflict]) {
+    let cache = Cache {
+        version: CACHE_VERSION,
+        root: local_root.to_string_lossy().into_owned(),
+        scanned_at: now_secs(),
+        conflicts: conflicts.to_vec(),
+    };
+    let Ok(bytes) = serde_json::to_vec_pretty(&cache) else {
+        return;
+    };
+    let path = cache_path(state_dir);
+    let _ = fs::create_dir_all(state_dir);
+    let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
+    if fs::write(&tmp, bytes).is_ok() {
+        let _ = fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        let _ = fs::rename(&tmp, &path);
+    }
+}
+
+/// Remove the scan cache when the engine creates a conflict, so the next
+/// Recovery view cannot miss the new file.
+pub fn invalidate_cache(state_dir: &Path) {
+    let _ = fs::remove_file(cache_path(state_dir));
+}
+
+/// Cached scan. The cache is only trusted when it is recent, belongs to the
+/// same root, and every cached file still matches its fingerprint.
+pub fn scan_cached(state_dir: &Path, local_root: &Path) -> Result<Vec<Conflict>, String> {
+    if let Some(list) = cached(state_dir, local_root) {
+        return Ok(list);
+    }
+    let list = scan(local_root)?;
+    save_cache(state_dir, local_root, &list);
+    Ok(list)
 }
 
 fn ack_path(state_dir: &Path) -> PathBuf {
@@ -428,6 +502,28 @@ mod tests {
         let list = scan(&root).unwrap();
         fs::write(root.join("a (conflict 2026-01-02 03-04-05).txt"), b"changed").unwrap();
         assert!(keep_current(&state, &root, &list[0]).is_err());
+        let _ = fs::remove_dir_all(&state);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cache_reuses_unchanged_entries_and_invalidates_on_change() {
+        let state = temp("state-cache");
+        let root = temp("root-cache");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("a.txt"), b"local").unwrap();
+        fs::write(root.join("a (conflict 2026-01-02 03-04-05).txt"), b"remote").unwrap();
+        let first = scan_cached(&state, &root).unwrap();
+        assert_eq!(first.len(), 1);
+        assert!(cache_path(&state).is_file());
+        let cached = scan_cached(&state, &root).unwrap();
+        assert_eq!(cached[0].mtime_ns, first[0].mtime_ns);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        fs::write(root.join("a (conflict 2026-01-02 03-04-05).txt"), b"changed").unwrap();
+        let after = scan_cached(&state, &root).unwrap();
+        assert_ne!(after[0].mtime_ns, first[0].mtime_ns);
+        invalidate_cache(&state);
+        assert!(!cache_path(&state).exists());
         let _ = fs::remove_dir_all(&state);
         let _ = fs::remove_dir_all(&root);
     }

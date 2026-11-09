@@ -659,15 +659,32 @@ fn draw_trash(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
 
+    let bytes: u64 = entries.iter().map(|e| e.size).sum();
+    let total = super::cloud::fmt_size(bytes);
     ui.label(
         egui::RichText::new(if entries.len() == 1 {
-            "1 deleted item".to_string()
-        } else {
+            if total.is_empty() {
+                "1 deleted item".to_string()
+            } else {
+                format!("1 deleted item \u{b7} {total}")
+            }
+        } else if total.is_empty() {
             format!("{} deleted items", entries.len())
+        } else {
+            format!("{} deleted items \u{b7} {total}", entries.len())
         })
         .size(12.0)
         .weak(),
     );
+    if bytes >= 1 << 30 {
+        ui.label(
+            egui::RichText::new(
+                "Local trash is using more than 1 GB. Permanently delete items you no longer need.",
+            )
+            .size(11.5)
+            .color(crate::theme::warning_text(ui.visuals())),
+        );
+    }
     ui.add_space(6.0);
     for entry in &entries {
         entry_card(app, ui, entry);
@@ -982,7 +999,7 @@ fn refresh_conflicts(app: &mut App) {
     std::thread::spawn(move || {
         let result = (|| -> Result<Vec<ConflictRow>, String> {
             let acked = conflict::acked(&state_dir);
-            let mut list = conflict::scan(&root)?;
+            let mut list = conflict::scan_cached(&state_dir, &root)?;
             list.retain(|c| acked.get(&c.conflict_rel) != Some(&c.mtime_ns));
             let history = state::read(&state_dir.join("state.json"));
             Ok(list
