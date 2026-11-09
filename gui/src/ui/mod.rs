@@ -307,6 +307,8 @@ pub struct App {
     pub act: activity::ActivityState,
     pub cloud: cloud::CloudState,
     pub photos: photos::PhotoState,
+    /// Set by the Photos page when it asks for the sign-in flow.
+    photo_login_requested: bool,
     pub recovery: recovery::RecoveryState,
     /// Buffer of the open text-input dialog (rename / new folder).
     pub input_buf: String,
@@ -853,6 +855,7 @@ impl App {
             act: activity::ActivityState::default(),
             cloud: cloud::CloudState::default(),
             photos: photos::PhotoState::default(),
+            photo_login_requested: false,
             recovery: recovery::RecoveryState::default(),
             input_buf: String::new(),
             input_focus: false,
@@ -983,6 +986,33 @@ impl App {
             error,
             shown_at: None,
         });
+    }
+
+    /// Borrow the Photos page's narrow view. The returned struct keeps the
+    /// existing `app.photos` / `app.ctx` call shape without importing App.
+    fn photo_view(&mut self) -> photos::PhotoView<'_> {
+        let status = self.ui_status();
+        let can_transfer = self.can_transfer();
+        let now = self.now();
+        let photo_login_requested = &mut self.photo_login_requested;
+        photos::PhotoView {
+            photos: &mut self.photos,
+            ctx: &self.ctx,
+            active: self.active,
+            paused_by_user: self.paused_by_user,
+            status,
+            can_transfer,
+            dialog: &mut self.dialog,
+            toasts: &mut self.toasts,
+            login_requested: photo_login_requested,
+            now,
+        }
+    }
+
+    fn finish_photo_login(&mut self) {
+        if std::mem::take(&mut self.photo_login_requested) {
+            self.action_login();
+        }
     }
 
     fn now(&self) -> f64 {
@@ -1347,9 +1377,21 @@ impl App {
                     self.draft.nodes.insert(String::new(), true);
                     self.toast("Signed out. The next account starts with a fresh cache.");
                 }
-                Back::Photos(r) => photos::on_fetched(self, r),
-                Back::PhotosDownloaded(r) => photos::on_downloaded(self, r),
-                Back::PhotosDeleted(r) => photos::on_deleted(self, r),
+                Back::Photos(r) => {
+                    let mut view = self.photo_view();
+                    photos::on_fetched(&mut view, r);
+                    self.finish_photo_login();
+                }
+                Back::PhotosDownloaded(r) => {
+                    let mut view = self.photo_view();
+                    photos::on_downloaded(&mut view, r);
+                    self.finish_photo_login();
+                }
+                Back::PhotosDeleted(r) => {
+                    let mut view = self.photo_view();
+                    photos::on_deleted(&mut view, r);
+                    self.finish_photo_login();
+                }
                 Back::PhotoThumb {
                     name,
                     stamp,
@@ -2034,7 +2076,11 @@ impl App {
             .show(ui, |ui| match self.page {
                 Page::Home => home::draw(self, ui),
                 Page::Cloud => cloud::draw(self, ui),
-                Page::Photos => photos::draw(self, ui),
+                Page::Photos => {
+                    let mut view = self.photo_view();
+                    photos::draw(&mut view, ui);
+                    self.finish_photo_login();
+                }
                 Page::Activity => activity::draw(self, ui, "Activity"),
                 Page::Settings => settings::draw(self, ui),
                 Page::About => about::draw(self, ui),
@@ -2782,7 +2828,9 @@ impl App {
             }
             DlgAct::PhotoDeleteConfirm(uids) => {
                 self.dialog = None;
-                photos::delete(self, uids);
+                let mut view = self.photo_view();
+                photos::delete(&mut view, uids);
+                    self.finish_photo_login();
             }
             DlgAct::DeleteConfirm => {
                 self.dialog = None;
@@ -2876,8 +2924,10 @@ impl eframe::App for App {
         // Photos: same idea - the timeline is fetched once, on first show,
         // then re-read whenever the folder or the engine's summary changes.
         if self.page == Page::Photos {
-            photos::on_shown(self);
-            photos::tick(self);
+            let mut view = self.photo_view();
+            photos::on_shown(&mut view);
+            photos::tick(&mut view);
+            self.finish_photo_login();
         }
 
         // Updates: automatic check 5s after start, then every 6h (Qt's

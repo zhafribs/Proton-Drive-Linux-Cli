@@ -5,11 +5,11 @@
 //! groups by day and asks. JPEG and PNG thumbnails are decoded locally; other
 //! formats keep a labelled placeholder instead of a misleadingly blank tile.
 
-use super::{App, widgets};
-use crate::cli;
+use super::{AppCtx, Dialog, Toast, widgets};
+use crate::{cli, health};
 use crate::theme;
 use eframe::egui;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// One decoded thumbnail plus its cache bookkeeping.
 pub struct Thumb {
@@ -89,6 +89,67 @@ pub struct PhotoState {
     pub thumb_gen: u64,
 }
 
+/// The narrow view of the app the Photos page receives. Existing page code
+/// can keep `app.photos` / `app.ctx` while the type no longer imports `App`.
+pub struct PhotoView<'a> {
+    pub photos: &'a mut PhotoState,
+    pub ctx: &'a AppCtx,
+    pub active: bool,
+    pub paused_by_user: bool,
+    pub status: health::UiStatus,
+    pub can_transfer: bool,
+    pub dialog: &'a mut Option<Dialog>,
+    pub toasts: &'a mut VecDeque<Toast>,
+    pub login_requested: &'a mut bool,
+    pub now: f64,
+}
+
+impl PhotoView<'_> {
+    fn ui_status(&self) -> health::UiStatus {
+        self.status
+    }
+
+    fn can_transfer(&self) -> bool {
+        self.can_transfer
+    }
+
+    fn now(&self) -> f64 {
+        self.now
+    }
+
+    fn toast(&mut self, msg: impl Into<String>) {
+        push_toast(self.toasts, self.now, msg.into(), false);
+    }
+
+    fn action_login(&mut self) {
+        *self.login_requested = true;
+    }
+}
+
+fn push_toast(toasts: &mut VecDeque<Toast>, now: f64, msg: String, error: bool) {
+    if toasts.len() >= 4 {
+        let idx = toasts.iter().position(|t| !t.error).unwrap_or(0);
+        toasts.remove(idx);
+    }
+    toasts.push_back(Toast {
+        msg,
+        at: now,
+        error,
+        shown_at: None,
+    });
+}
+
+fn open_path(path: &std::path::Path) {
+    let p = path.to_path_buf();
+    std::thread::spawn(move || {
+        let _ = std::process::Command::new("xdg-open")
+            .arg(&p)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    });
+}
+
 /// Where downloaded photos land: `PROTON_SYNC_PHOTOS_LOCAL`, else
 /// `~/ProtonPhotos`.
 fn local_dir_from(conf: &BTreeMap<String, String>) -> std::path::PathBuf {
@@ -104,14 +165,14 @@ fn local_dir_from(conf: &BTreeMap<String, String>) -> std::path::PathBuf {
     }
 }
 
-pub fn local_dir(app: &App) -> std::path::PathBuf {
+pub fn local_dir(app: &PhotoView) -> std::path::PathBuf {
     local_dir_from(&app.ctx.conf)
 }
 
 /// Show upload exceptions at the top of the scroll area, so a long list can
 /// never push the grid (or this card's own actions) off the panel.
 fn draw_upload_issues(
-    app: &mut App,
+    app: &mut PhotoView,
     ui: &mut egui::Ui,
     failed: &[FileIssue],
     skipped: &[FileIssue],
@@ -201,7 +262,7 @@ fn draw_upload_issues(
                 if ui.button("Open folder").clicked() {
                     let dir = local_dir(app);
                     let _ = std::fs::create_dir_all(&dir);
-                    App::open_url(&dir.to_string_lossy());
+                    open_path(&dir);
                 }
             });
         });
@@ -219,7 +280,7 @@ fn shorten(text: &str, max: usize) -> String {
 }
 
 /// The page was shown (navigation): list the timeline the first time only.
-pub fn on_shown(app: &mut App) {
+pub fn on_shown(app: &mut PhotoView) {
     // The folder existing is what turns the engine's photo sync on, so create
     // it once per session. Re-reading the timeline comes from `tick`.
     if !app.photos.dir_ready && std::fs::create_dir_all(local_dir(app)).is_ok() {
@@ -264,7 +325,7 @@ fn existing_issues(dir: &std::path::Path, issues: &[FileIssue]) -> Vec<FileIssue
         .collect()
 }
 
-fn render_summary(app: &mut App, s: &SyncSummary) -> String {
+fn render_summary(app: &mut PhotoView, s: &SyncSummary) -> String {
     app.photos.attention = s.attention as usize;
     let dir = local_dir(app);
     let skipped = existing_issues(&dir, &s.skipped);
@@ -335,14 +396,14 @@ fn render_summary(app: &mut App, s: &SyncSummary) -> String {
     line
 }
 
-fn read_summary(app: &mut App) -> String {
+fn read_summary(app: &mut PhotoView) -> String {
     let path = app.ctx.paths.state_dir.join("photos-sync.json");
     let Ok(text) = std::fs::read_to_string(&path) else {
-        clear_summary(&mut app.photos);
+        clear_summary(app.photos);
         return String::new();
     };
     let Ok(s) = serde_json::from_str::<SyncSummary>(&text) else {
-        clear_summary(&mut app.photos);
+        clear_summary(app.photos);
         return String::new();
     };
     render_summary(app, &s)
@@ -360,7 +421,7 @@ fn clear_summary(p: &mut PhotoState) {
     p.upload_failed.clear();
 }
 
-pub fn refresh(app: &mut App) {
+pub fn refresh(app: &mut PhotoView) {
     if app.photos.loading || app.photos.busy {
         return;
     }
@@ -380,7 +441,7 @@ pub fn refresh(app: &mut App) {
     });
 }
 
-pub fn on_fetched(app: &mut App, r: Result<Vec<cli::PhotoEntry>, String>) {
+pub fn on_fetched(app: &mut PhotoView, r: Result<Vec<cli::PhotoEntry>, String>) {
     app.photos.loading = false;
     match r {
         Ok(items) => {
@@ -419,7 +480,7 @@ fn shared_and_names(items: &[cli::PhotoEntry]) -> (BTreeSet<String>, BTreeSet<St
 /// Ask the engine for a photo pass. An optional uid forces that one repair
 /// past its backoff; the request is written before the wake so the engine
 /// cannot wake and find an empty request.
-pub fn request_sync(app: &mut App, uid: Option<&str>) {
+pub fn request_sync(app: &mut PhotoView, uid: Option<&str>) {
     if !app.active {
         app.photos.status = if app.paused_by_user {
             "Paused - resume on Home.".to_string()
@@ -444,7 +505,7 @@ pub fn request_sync(app: &mut App, uid: Option<&str>) {
     app.photos.status = "Checking for new photos...".to_string();
 }
 
-pub fn download(app: &mut App, uids: Vec<String>) {
+pub fn download(app: &mut PhotoView, uids: Vec<String>) {
     if uids.is_empty() || app.photos.busy || app.photos.deleting {
         return;
     }
@@ -467,7 +528,7 @@ pub fn download(app: &mut App, uids: Vec<String>) {
     });
 }
 
-pub fn on_downloaded(app: &mut App, r: Result<usize, String>) {
+pub fn on_downloaded(app: &mut PhotoView, r: Result<usize, String>) {
     app.photos.busy = false;
     match r {
         Ok(n) => {
@@ -488,7 +549,7 @@ pub fn on_downloaded(app: &mut App, r: Result<usize, String>) {
 /// Both halves are needed: trashing only the cloud copy would let the next
 /// sync upload the local file again, and removing only the local file would
 /// download the photo back.
-pub fn delete(app: &mut App, uids: Vec<String>) {
+pub fn delete(app: &mut PhotoView, uids: Vec<String>) {
     if uids.is_empty() || app.photos.deleting || app.photos.busy {
         return;
     }
@@ -535,7 +596,7 @@ fn trash_local_photo(dir: &std::path::Path, name: &str) {
     let _ = std::fs::rename(dir.join(name), dst);
 }
 
-pub fn on_deleted(app: &mut App, r: Result<usize, String>) {
+pub fn on_deleted(app: &mut PhotoView, r: Result<usize, String>) {
     app.photos.deleting = false;
     match r {
         Ok(n) => {
@@ -554,7 +615,7 @@ pub fn on_deleted(app: &mut App, r: Result<usize, String>) {
 /// Watch for changes instead of making the user reload: the engine writes
 /// `photos-sync.json` after every photo cycle, and the folder's own mtime moves
 /// when files appear or disappear. Either one re-reads the list.
-pub fn tick(app: &mut App) {
+pub fn tick(app: &mut PhotoView) {
     let now = app.now();
     if now - app.photos.probed_at < 1.0 {
         return;
@@ -588,7 +649,7 @@ pub fn tick(app: &mut App) {
         Some(_) => {}
         None => {
             // A removed/reset summary must not leave old counts or cards.
-            clear_summary(&mut app.photos);
+            clear_summary(app.photos);
         }
     }
     if let Some(t) = app.photos.checking_at {
@@ -725,7 +786,7 @@ fn file_stamp(path: &std::path::Path) -> f64 {
 }
 
 /// Decode a photo's thumbnail in the background (max 4 at a time).
-fn request_thumb(app: &mut App, name: &str, path: std::path::PathBuf, stamp: f64) {
+fn request_thumb(app: &mut PhotoView, name: &str, path: std::path::PathBuf, stamp: f64) {
     if app.photos.in_flight.len() >= 4 || app.photos.in_flight.contains(name) {
         return;
     }
@@ -746,7 +807,7 @@ fn request_thumb(app: &mut App, name: &str, path: std::path::PathBuf, stamp: f64
 
 /// Header actions. Drawn in right-to-left order because the header uses an
 /// RTL layout: Open folder sits on the right, Sync photos on the left.
-fn photo_actions(app: &mut App, ui: &mut egui::Ui) {
+fn photo_actions(app: &mut PhotoView, ui: &mut egui::Ui) {
     let dir = local_dir(app);
     let photo_sync_on = app.ctx.conf.get("PROTON_SYNC_PHOTOS").is_none_or(|v| v != "0");
     let syncing =
@@ -759,7 +820,7 @@ fn photo_actions(app: &mut App, ui: &mut egui::Ui) {
 
     if widgets::secondary_button_hint(ui, "Open folder", "Open the local photo folder.") {
         let _ = std::fs::create_dir_all(&dir);
-        App::open_url(&dir.to_string_lossy());
+        open_path(&dir);
     }
     let download_resp = ui
         .add_enabled(
@@ -840,7 +901,7 @@ fn photo_actions(app: &mut App, ui: &mut egui::Ui) {
 
 /// Photos hero, in Home's language: status orb, plain-language title,
 /// one context line, and the same pill on the right.
-fn photo_hero(app: &App, ui: &mut egui::Ui) {
+fn photo_hero(app: &PhotoView, ui: &mut egui::Ui) {
     let status = app.ui_status();
     let signing_in = matches!(status, crate::health::UiStatus::SigningIn);
     let signed_out = matches!(status, crate::health::UiStatus::SignedOut);
@@ -1000,7 +1061,7 @@ fn photo_hero(app: &App, ui: &mut egui::Ui) {
     });
 }
 
-fn photo_metrics(app: &App, ui: &mut egui::Ui) {
+fn photo_metrics(app: &PhotoView, ui: &mut egui::Ui) {
     let cloud = if app.photos.cloud_count > 0 {
         app.photos.cloud_count
     } else {
@@ -1029,7 +1090,7 @@ fn photo_metrics(app: &App, ui: &mut egui::Ui) {
     });
 }
 
-pub fn draw(app: &mut App, ui: &mut egui::Ui) {
+pub fn draw(app: &mut PhotoView, ui: &mut egui::Ui) {
     let dir = local_dir(app);
     if app.photos.groups.is_empty() && !app.photos.items.is_empty() {
         app.photos.groups = build_groups(&app.photos.items);
@@ -1129,7 +1190,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                     .on_hover_text("Move to the Proton photos trash and remove the local copy")
                     .clicked()
                 {
-                    app.dialog = Some(super::Dialog::ConfirmPhotoDelete { uids: sel.clone() });
+                    *app.dialog = Some(super::Dialog::ConfirmPhotoDelete { uids: sel.clone() });
                 }
                 if ui.button("Clear selection").clicked() {
                     app.photos.sel.clear();
@@ -1137,7 +1198,7 @@ pub fn draw(app: &mut App, ui: &mut egui::Ui) {
                 ui.separator();
                 if ui.button("Open folder").clicked() {
                     let _ = std::fs::create_dir_all(&dir);
-                    App::open_url(&dir.to_string_lossy());
+                    open_path(&dir);
                 }
             });
         });
@@ -1382,7 +1443,13 @@ fn preview_label(unsupported: bool) -> &'static str {
     }
 }
 
-fn tile(ui: &mut egui::Ui, app: &mut App, p: &cli::PhotoEntry, dir: &std::path::Path, size: f32) {
+fn tile(
+    ui: &mut egui::Ui,
+    app: &mut PhotoView,
+    p: &cli::PhotoEntry,
+    dir: &std::path::Path,
+    size: f32,
+) {
     let path = dir.join(&p.name);
     let meta = std::fs::metadata(&path).ok();
     let local_len = meta.as_ref().filter(|m| m.is_file()).map(|m| m.len());
