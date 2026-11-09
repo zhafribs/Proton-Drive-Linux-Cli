@@ -82,11 +82,36 @@ fn verify_manifest_with(key_hex: &str, manifest: &[u8], signature: &[u8]) -> boo
         .is_ok()
 }
 
+/// Keys allowed to sign update manifests. Rotation adds a new key here in a
+/// release signed by the old one; the old key stays until the migration
+/// window ends.
+const UPDATE_PUBLIC_KEYS: &[&str] = &[UPDATE_PUBLIC_KEY_HEX];
+/// Keys revoked by a later release. A revoked key is skipped even when its
+/// signature would otherwise verify.
+const REVOKED_UPDATE_KEYS: &[&str] = &[];
+
+fn verify_manifest_with_keys(
+    keys: &[&str],
+    revoked: &[&str],
+    manifest: &[u8],
+    signature: &[u8],
+) -> bool {
+    keys.iter()
+        .filter(|key| !revoked.contains(key))
+        .any(|key| verify_manifest_with(key, manifest, signature))
+}
+
 /// An update is installable only when `SHA256SUMS.sig` is a valid signature by
-/// the project key over `SHA256SUMS`. The digest in that signed manifest is
-/// the authority; the GitHub API digest is only a consistency check.
+/// a non-revoked project key over `SHA256SUMS`. The digest in that signed
+/// manifest is the authority; the GitHub API digest is only a consistency
+/// check.
 fn verify_manifest_signature(manifest: &[u8], signature: &[u8]) -> bool {
-    verify_manifest_with(UPDATE_PUBLIC_KEY_HEX, manifest, signature)
+    verify_manifest_with_keys(
+        UPDATE_PUBLIC_KEYS,
+        REVOKED_UPDATE_KEYS,
+        manifest,
+        signature,
+    )
 }
 
 /// Accept only a 64-character SHA-256; strip the API's `sha256:` prefix and
@@ -1440,6 +1465,36 @@ mod tests {
         assert!(!verify_manifest_with("not-hex", manifest, &signature.to_bytes()));
         assert!(!verify_manifest_signature(manifest, &[0u8; 63]));
         assert!(!verify_manifest_signature(manifest, &[0u8; 65]));
+
+        // Rotation: a signature from any listed, non-revoked key is accepted;
+        // revoking that key rejects it even though the bytes still verify.
+        let other = SigningKey::from_bytes(&[9u8; 32]);
+        let other_hex: String = other
+            .verifying_key()
+            .to_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let other_sig = other.sign(manifest);
+        let keys = [key_hex.as_str(), other_hex.as_str()];
+        assert!(verify_manifest_with_keys(
+            &keys,
+            &[],
+            manifest,
+            &other_sig.to_bytes()
+        ));
+        assert!(!verify_manifest_with_keys(
+            &keys,
+            &[other_hex.as_str()],
+            manifest,
+            &other_sig.to_bytes()
+        ));
+        assert!(!verify_manifest_with_keys(
+            &[key_hex.as_str()],
+            &[],
+            manifest,
+            &other_sig.to_bytes()
+        ));
     }
 
     #[test]

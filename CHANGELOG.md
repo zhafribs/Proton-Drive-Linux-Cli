@@ -1,3 +1,17 @@
+## 3.23.0 — 2026-11-09
+
+### Update trust
+
+- **Multiple trusted update keys.** The manifest verifier accepts a signature
+  from any key in `UPDATE_PUBLIC_KEYS`, so a successor key can be added in one
+  release and used for the next.
+- **Key revocation list.** `REVOKED_UPDATE_KEYS` rejects a key even when its
+  signature is cryptographically valid. This protects users who install the
+  revoking build.
+- **Rotation procedure documented.** `docs/UPDATE-TRUST.md` covers successor
+  key generation, the migration window, revocation and the remaining
+  limitation (no remote revocation feed).
+
 ## 3.22.0 — 2026-11-09
 
 ### Portable sync
