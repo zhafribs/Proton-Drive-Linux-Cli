@@ -587,7 +587,10 @@ pub fn do_save(app: &mut App, ctx: &egui::Context) {
             "Saved, but the sync service could not be updated.".to_string()
         } else if !autostart_ok {
             "Saved, but start-at-login could not be changed.".to_string()
-        } else if service::unit_exists() && !service::unit_has_environment_file() {
+        } else if !service::uses_supervisor()
+            && service::unit_exists()
+            && !service::unit_has_environment_file()
+        {
             "Saved. Your install is from an older version - run \
              scripts/install-sync.sh once to update it."
                 .to_string()

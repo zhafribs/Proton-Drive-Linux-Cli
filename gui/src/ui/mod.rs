@@ -722,6 +722,8 @@ impl App {
         let conf = conf::read(&paths.conf_file);
         let conf_extras = conf::read_extras(&paths.conf_file);
         let draft = settings::Draft::load(&conf, &conf_extras, &prefs, &paths);
+        // Without a systemd user session the GUI supervises the engine itself.
+        service::spawn_supervisor();
         let (tx, rx) = mpsc::channel();
         let journal = Arc::new(AtomicBool::new(false));
 
@@ -1264,7 +1266,7 @@ impl App {
                             let _ = std::fs::write(&self.paths.wake_file, b"");
                             if !self.paused_by_user {
                                 std::thread::spawn(|| {
-                                    if service::unit_exists() {
+                                    if service::can_start() {
                                         let _ = service::start();
                                     }
                                 });

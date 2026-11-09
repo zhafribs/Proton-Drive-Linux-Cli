@@ -33,7 +33,8 @@ pruned automatically.
 3. **Settings → pick your sync folder → Save.** The app installs a systemd
    *user* service; from then on `~/ProtonDrive` mirrors your Drive.
 
-Works on x86_64 Linux with **glibc ≥ 2.28** and FUSE. If it won't start:
+Works on x86_64 Linux with **glibc ≥ 2.28** and FUSE, with or without a
+systemd user session. If it won't start:
 install `libfuse2` / `fuse2` / `fuse-libs`, or run with
 `APPIMAGE_EXTRACT_AND_RUN=1`.
 
@@ -92,6 +93,9 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
 - **Settings** — selective sync, never-sync patterns, instant upload, check
   intervals, notifications, light/dark/system theme, interface size, tray,
   start-at-login, menu install and **in-app updates** (SHA-256 verified).
+- **Portable sync** — the systemd user unit is used when available; without
+  it the GUI supervises the engine, restarts it after a crash and adopts the
+  running process after a GUI restart.
 - **Recovery** — a **Recovery** page lists local trash with restore/permanent
   delete, groups engine-created conflict copies with keep-current /
   use-conflict-copy / keep-both actions, and keeps checksum-verified

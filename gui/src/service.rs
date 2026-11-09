@@ -7,10 +7,13 @@
 
 use crate::exec;
 use crate::paths::JOURNAL_UNIT;
-use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
-use std::time::Duration;
+use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 const T: Duration = Duration::from_secs(30);
 
@@ -20,16 +23,257 @@ const T: Duration = Duration::from_secs(30);
 /// lock.
 static SERVICE_MTX: Mutex<()> = Mutex::new(());
 static DESIRED_RUN: AtomicBool = AtomicBool::new(true);
+static AUTORESUME_GEN: AtomicU64 = AtomicU64::new(0);
+static SYSTEMD_AVAILABLE: OnceLock<bool> = OnceLock::new();
+static SUPERVISOR_STARTED: AtomicBool = AtomicBool::new(false);
+
+/// The fallback supervisor's child and the last PID it wrote. A GUI restart
+/// can adopt a still-running engine through the PID file even though the
+/// original `Child` handle died with the previous process.
+struct Sup {
+    child: Option<Child>,
+    pid: Option<u32>,
+}
+static SUP: Mutex<Sup> = Mutex::new(Sup {
+    child: None,
+    pid: None,
+});
+
+/// True when there is no usable systemd user session and the GUI must own the
+/// engine process. `PROTON_SYNC_SUPERVISOR=1` forces the fallback for testing;
+/// `=0` forces systemd control when the unit exists.
+pub fn uses_supervisor() -> bool {
+    !*SYSTEMD_AVAILABLE.get_or_init(|| {
+        if let Ok(v) = std::env::var("PROTON_SYNC_SUPERVISOR") {
+            match v.as_str() {
+                "1" | "true" => return false, // forced fallback: no systemd
+                "0" | "false" => return true,  // forced systemd
+                _ => {}
+            }
+        }
+        let exe = which_systemctl();
+        exec::run(
+            &exe,
+            &["--user", "show-environment"],
+            Duration::from_secs(5),
+        )
+        .is_ok_and(|o| o.ok())
+    })
+}
+
+pub fn can_start() -> bool {
+    uses_supervisor() || unit_exists()
+}
+
+fn supervisor_pid_file() -> PathBuf {
+    crate::paths::resolve().state_dir.join("supervisor.pid")
+}
+
+fn supervisor_log_file() -> PathBuf {
+    crate::paths::resolve().state_dir.join("supervisor.log")
+}
+
+fn read_supervisor_pid() -> Option<u32> {
+    std::fs::read_to_string(supervisor_pid_file())
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+fn pid_is_engine(pid: u32) -> bool {
+    let Ok(cmdline) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&cmdline);
+    text.contains("proton-engine")
+        || text.contains("__sync-engine")
+        || text.contains("ProtonDrive-CLI")
+}
+
+fn write_supervisor_pid(pid: u32) {
+    if let Some(parent) = supervisor_pid_file().parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(supervisor_pid_file(), format!("{pid}\n"));
+}
+
+fn kill_pid(pid: u32) {
+    let _ = Command::new("kill").arg("-TERM").arg(pid.to_string()).status();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        if !Path::new(&format!("/proc/{pid}")).exists() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let _ = Command::new("kill").arg("-KILL").arg(pid.to_string()).status();
+}
+
+fn engine_command() -> Option<(PathBuf, Vec<&'static str>, Option<PathBuf>)> {
+    let paths = crate::paths::resolve();
+    // Prefer the engine binary next to this process. Inside an AppImage that
+    // is the mounted `usr/bin/proton-engine`, so the supervisor owns the real
+    // engine PID instead of an AppRun wrapper that may fork and exit.
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let engine = dir.join("proton-engine");
+        if is_executable_file(&engine) {
+            let drive_bin = unit_appimage(paths.appimage.as_deref());
+            return Some((engine, vec!["--loop"], drive_bin));
+        }
+    }
+    if let Some(appimage) = unit_appimage(paths.appimage.as_deref()) {
+        return Some((appimage.clone(), vec!["__sync-engine"], Some(appimage)));
+    }
+    which("proton-engine").map(|p| (PathBuf::from(p), vec!["--loop"], None))
+}
+
+fn fallback_active_locked(sup: &mut Sup) -> bool {
+    if let Some(child) = sup.child.as_mut() {
+        match child.try_wait() {
+            Ok(None) => return true,
+            _ => sup.child = None,
+        }
+    }
+    if let Some(pid) = sup.pid.or_else(read_supervisor_pid)
+        && pid_is_engine(pid)
+    {
+        sup.pid = Some(pid);
+        return true;
+    }
+    sup.pid = None;
+    let _ = std::fs::remove_file(supervisor_pid_file());
+    false
+}
+
+fn fallback_active() -> bool {
+    let mut sup = SUP.lock().unwrap();
+    fallback_active_locked(&mut sup)
+}
+
+fn fallback_start() -> bool {
+    let mut sup = SUP.lock().unwrap();
+    if fallback_active_locked(&mut sup) {
+        return true;
+    }
+    let Some((exe, args, drive_bin)) = engine_command() else {
+        eprintln!("supervisor: proton-engine was not found beside the GUI");
+        return false;
+    };
+    let log = supervisor_log_file();
+    if let Some(parent) = log.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(&log)
+        .ok();
+    let mut cmd = Command::new(&exe);
+    cmd.args(&args)
+        .stdin(Stdio::null())
+        .env("PROTON_GUI_VERSION", crate::GUI_VERSION)
+        .env("MALLOC_ARENA_MAX", "2");
+    if let Some(bin) = &drive_bin {
+        cmd.env("PROTON_DRIVE_BIN", bin);
+    }
+    if let Some(base) = crate::paths::resolve().state_dir.parent() {
+        cmd.env("XDG_STATE_HOME", base);
+    }
+    if let Some(base) = crate::paths::resolve().conf_file.parent() {
+        cmd.env("XDG_CONFIG_HOME", base);
+    }
+    if let Some(file) = log_file
+        && let Ok(err) = file.try_clone()
+    {
+        cmd.stdout(Stdio::from(file));
+        cmd.stderr(Stdio::from(err));
+    }
+    match cmd.spawn() {
+        Ok(child) => {
+            let pid = child.id();
+            let _ = writeln!(
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&log)
+                    .unwrap_or_else(|_| std::fs::File::create("/dev/null").unwrap()),
+                "supervisor: started proton-engine pid {pid}"
+            );
+            sup.child = Some(child);
+            sup.pid = Some(pid);
+            write_supervisor_pid(pid);
+            true
+        }
+        Err(e) => {
+            eprintln!("supervisor: could not start {}: {e}", exe.display());
+            false
+        }
+    }
+}
+
+fn fallback_stop() -> bool {
+    let mut sup = SUP.lock().unwrap();
+    if let Some(mut child) = sup.child.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    if let Some(pid) = sup.pid.take().or_else(read_supervisor_pid)
+        && pid_is_engine(pid)
+    {
+        kill_pid(pid);
+    }
+    let _ = std::fs::remove_file(supervisor_pid_file());
+    true
+}
+
+/// Start the GUI-owned engine supervisor when systemd is unavailable. Safe to
+/// call more than once; only one monitor thread is created.
+pub fn spawn_supervisor() {
+    if !uses_supervisor() || SUPERVISOR_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    if crate::paths::resolve().state_dir.join("paused").exists() {
+        DESIRED_RUN.store(false, Ordering::SeqCst);
+    } else {
+        let _ = fallback_start();
+    }
+    std::thread::spawn(|| {
+        loop {
+            std::thread::sleep(Duration::from_secs(3));
+            if !DESIRED_RUN.load(Ordering::SeqCst) {
+                fallback_stop();
+                continue;
+            }
+            if !fallback_active() && !fallback_start() {
+                std::thread::sleep(Duration::from_secs(5));
+            }
+        }
+    });
+}
 
 fn start_locked() -> bool {
+    if uses_supervisor() {
+        return fallback_start();
+    }
     systemctl(&["--user", "start", JOURNAL_UNIT])
 }
 
 fn stop_locked() -> bool {
+    if uses_supervisor() {
+        return fallback_stop();
+    }
     systemctl(&["--user", "stop", JOURNAL_UNIT])
 }
 
 fn restart_locked() -> bool {
+    if uses_supervisor() {
+        fallback_stop();
+        return fallback_start();
+    }
     systemctl(&["--user", "restart", JOURNAL_UNIT])
 }
 
@@ -55,10 +299,18 @@ fn which(name: &str) -> Option<String> {
 }
 
 pub fn is_active() -> bool {
+    if uses_supervisor() {
+        return fallback_active();
+    }
     systemctl(&["--user", "is-active", "--quiet", JOURNAL_UNIT])
 }
 
 pub fn is_enabled() -> bool {
+    if uses_supervisor() {
+        // The fallback has no service to enable; the app's login entry is the
+        // only thing that can start it.
+        return true;
+    }
     systemctl(&["--user", "is-enabled", "--quiet", JOURNAL_UNIT])
 }
 
@@ -98,10 +350,16 @@ pub fn restart_and_confirm() -> bool {
 }
 
 pub fn enable() -> bool {
+    if uses_supervisor() {
+        return true;
+    }
     systemctl(&["--user", "enable", JOURNAL_UNIT])
 }
 
 pub fn disable() -> bool {
+    if uses_supervisor() {
+        return true;
+    }
     systemctl(&["--user", "disable", JOURNAL_UNIT])
 }
 
@@ -112,6 +370,22 @@ pub fn pause_for(secs: Option<u64>) -> bool {
     let _lane = SERVICE_MTX.lock().unwrap();
     if DESIRED_RUN.load(Ordering::SeqCst) {
         return false; // a resume was requested while this thread waited
+    }
+    if uses_supervisor() {
+        let generation = AUTORESUME_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+        if let Some(secs) = secs {
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(secs));
+                if AUTORESUME_GEN.load(Ordering::SeqCst) == generation
+                    && !DESIRED_RUN.load(Ordering::SeqCst)
+                {
+                    DESIRED_RUN.store(true, Ordering::SeqCst);
+                    let _ = fallback_start();
+                }
+            });
+        }
+        let _ = stop_locked();
+        return true;
     }
     systemctl(&["--user", "stop", "proton-sync-autoresume.timer"]);
     systemctl(&["--user", "stop", "proton-sync-autoresume.service"]);
@@ -149,6 +423,10 @@ pub fn resume() -> bool {
     let _lane = SERVICE_MTX.lock().unwrap();
     if !DESIRED_RUN.load(Ordering::SeqCst) {
         return false; // a pause was requested while this thread waited
+    }
+    if uses_supervisor() {
+        AUTORESUME_GEN.fetch_add(1, Ordering::SeqCst);
+        return start_locked();
     }
     systemctl(&["--user", "stop", "proton-sync-autoresume.timer"]);
     start_locked()
@@ -222,6 +500,9 @@ fn unit_appimage(recorded: Option<&Path>) -> Option<std::path::PathBuf> {
 pub fn ensure_service_unit(appimage: Option<&Path>, smoke: bool) -> String {
     if smoke {
         return String::new();
+    }
+    if uses_supervisor() {
+        return "supervisor".to_string();
     }
     let exe = match unit_appimage(appimage) {
         Some(p) => p.to_string_lossy().into_owned(),
@@ -322,6 +603,12 @@ pub fn clear_snapshot_cache(paths: &crate::paths::Paths) -> std::io::Result<()> 
 
 /// `journalctl --user -u proton-sync` -n <n> (same shape the PyQt app used).
 pub fn journal_lines(n: usize) -> Vec<String> {
+    if uses_supervisor() {
+        let text = std::fs::read_to_string(supervisor_log_file()).unwrap_or_default();
+        let lines: Vec<&str> = text.lines().collect();
+        let start = lines.len().saturating_sub(n);
+        return lines[start..].iter().map(|s| s.to_string()).collect();
+    }
     let exe = match which("journalctl") {
         Some(e) => e,
         None => return Vec::new(),

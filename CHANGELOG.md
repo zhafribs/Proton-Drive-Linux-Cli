@@ -1,3 +1,26 @@
+## 3.22.0 — 2026-11-09
+
+### Portable sync
+
+- **Works without a systemd user session.** When `systemctl --user` is not
+  available, the GUI owns the engine: it starts it, keeps it under a monitor,
+  restarts it after a crash, and stops it on pause/quit. The engine's own
+  `sync.lock` still prevents a second copy.
+- **Adoption after a GUI restart.** The supervisor writes `supervisor.pid`, so
+  a new GUI instance recognises the running engine instead of spawning a
+  duplicate; pause and restart still reach it.
+- **Logs and diagnostics.** Fallback engine output goes to
+  `~/.local/state/proton-sync/supervisor.log`; the Activity journal view reads
+  that file when journalctl is unavailable.
+- **Pause timers without systemd.** Pause 15 min / 1 h resumes from an
+  in-process timer while the GUI is running. A paused marker still prevents a
+  startup from resuming.
+- **No misleading unit warnings.** In supervisor mode the app skips the
+  systemd unit write and does not report an old unit as a failure.
+
+The systemd unit remains the default and is unchanged when a user session is
+available.
+
 ## 3.21.1 — 2026-11-09
 
 - **Recovery refreshes when you open the page.** A deletion or conflict created
