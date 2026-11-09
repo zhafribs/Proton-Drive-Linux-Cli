@@ -1,6 +1,6 @@
 # Milestone M4 — Path Safety
 
-**Status:** in progress — release `v0.9.0-gui3.24.0`  
+**Status:** complete — released as `v0.9.0-gui3.24.0`  
 **Theme:** catch path problems before a sync cycle, and keep Recovery fast on
 large libraries.
 
@@ -33,3 +33,10 @@ large libraries.
 - Full `OsString` CLI argument support for non-UTF-8 upload paths.
 - A time/space retention policy that deletes trash automatically; deletion
   stays explicit by design.
+
+## Release verification
+
+- Tag `v0.9.0-gui3.24.0`; CI `42596386270` verify + release succeeded.
+- 299 tests, clippy clean, release gate 12/12.
+- SHA-256, Ed25519 signature, smoke and GLIBC 2.28 verified.
+- Evidence: `docs/audit/evidence/release-3.24.0.txt`.
