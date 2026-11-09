@@ -53,3 +53,12 @@ again. A detached watchdog is a candidate for a later milestone.
 - Replacing the systemd unit on systems that have one.
 - A system-wide daemon or root service.
 - aarch64 packaging.
+
+## Release verification
+
+- Tag: `v0.9.0-gui3.22.0` (29 releases retained).
+- CI `42594134761`: verify and release succeeded.
+- Checksum, Ed25519 signature, `--smoke`, GLIBC 2.28 verified.
+- Manual: supervisor started the engine with `PROTON_SYNC_SUPERVISOR=1`,
+  restarted it after `kill -9`, and a new GUI adopted the running PID.
+- Evidence: `docs/audit/evidence/release-3.22.0.txt`.
