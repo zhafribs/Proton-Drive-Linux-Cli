@@ -1,6 +1,6 @@
 # Milestone M3 — Update Trust
 
-**Status:** in progress — release `v0.9.0-gui3.23.0`  
+**Status:** complete — released as `v0.9.0-gui3.23.0`  
 **Theme:** make key rotation and revocation possible without changing the
 on-disk trust model.
 
@@ -25,3 +25,9 @@ on-disk trust model.
 - No remote revocation feed; a compromised key remains usable until a build
   signed by a trusted successor key is installed.
 - Key generation and offline backup remain operator procedures.
+
+## Release verification
+
+- Tag `v0.9.0-gui3.23.0`; CI `42595328464` verify + release succeeded.
+- SHA-256, Ed25519 signature, smoke and GLIBC 2.28 verified.
+- Evidence: `docs/audit/evidence/release-3.23.0.txt`.
