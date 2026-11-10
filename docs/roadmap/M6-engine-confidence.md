@@ -1,6 +1,6 @@
 # Milestone M6 — Engine Confidence
 
-**Status:** in progress — release `v0.9.0-gui3.26.0`  
+**Status:** complete — released as `v0.9.0-gui3.26.0`  
 **Theme:** prove the sync cycle end to end, not only unit by unit.
 
 ## Scope
@@ -20,3 +20,10 @@
 - Automated UI screenshots, keyboard-only CI and screen-reader checks; those
   belong to the UI confidence milestone.
 - A hard performance gate in CI; the benchmark is a repeatable local signal.
+
+## Release verification
+
+- Tag `v0.9.0-gui3.26.0`; CI `42817271289` verify + release succeeded.
+- 302 tests, clippy clean, release gate 12/12.
+- Signed AppImage, smoke and GLIBC 2.28 verified.
+- Evidence: `docs/audit/evidence/release-3.26.0.txt`.
