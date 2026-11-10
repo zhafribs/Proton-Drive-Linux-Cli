@@ -1,3 +1,15 @@
+## 3.26.0 — 2026-11-10
+
+### Engine confidence
+
+- **Full-cycle E2E test.** A stateful fake Proton CLI exercises upload,
+  download, remote-delete propagation, local-delete propagation and state in
+  one process, including the local trash manifest.
+- **Fault matrix.** A failed upload keeps the local file and does not stamp it
+  as synced; a short download never lands at the destination.
+- **Repeatable scan benchmark.** `scripts/bench-scan.sh` measures 5k/10k file
+  scans; the baseline is recorded in `docs/performance/scan-benchmark.md`.
+
 ## 3.25.1 — 2026-11-09
 
 ### Internal UI architecture
