@@ -41,4 +41,17 @@ openssl pkeyutl -verify -pubin -inkey "$VERIFY_KEY" -rawin -in "$MANIFEST" \
     -sigfile "$SIGNATURE" >/dev/null 2>&1 \
     || { rm -f "$SIGNATURE"; die "signature did not verify against $VERIFY_KEY"; }
 
+# Release revocation feed: the updater refuses a revoked tag. The file is
+# versioned in the repo and copied beside the manifest for the release assets.
+POLICY_SRC="$ROOT/revocations.json"
+POLICY="$ROOT/dist/revocations.json"
+if [ -f "$POLICY_SRC" ]; then
+    cp "$POLICY_SRC" "$POLICY"
+    openssl pkeyutl -sign -rawin -inkey "$key_file" -in "$POLICY" -out "$POLICY.sig"
+    openssl pkeyutl -verify -pubin -inkey "$VERIFY_KEY" -rawin -in "$POLICY" \
+        -sigfile "$POLICY.sig" >/dev/null 2>&1 \
+        || { rm -f "$POLICY.sig"; die "revocation feed signature did not verify"; }
+    echo "sign-release: signed revocations.json"
+fi
+
 echo "sign-release: signed $(basename "$MANIFEST")"

@@ -85,7 +85,11 @@ fn verify_manifest_with(key_hex: &str, manifest: &[u8], signature: &[u8]) -> boo
 /// Keys allowed to sign update manifests. Rotation adds a new key here in a
 /// release signed by the old one; the old key stays until the migration
 /// window ends.
-const UPDATE_PUBLIC_KEYS: &[&str] = &[UPDATE_PUBLIC_KEY_HEX];
+const UPDATE_PUBLIC_KEYS: &[&str] = &[
+    UPDATE_PUBLIC_KEY_HEX,
+    // Successor key generated 2026-11-10; private key kept offline.
+    "f0ed7f4fa4fac94e0bf72931ee0ab16fd4882867c167572c988bec85986444c1",
+];
 /// Keys revoked by a later release. A revoked key is skipped even when its
 /// signature would otherwise verify.
 const REVOKED_UPDATE_KEYS: &[&str] = &[];
@@ -112,6 +116,58 @@ fn verify_manifest_signature(manifest: &[u8], signature: &[u8]) -> bool {
         manifest,
         signature,
     )
+}
+
+/// Releases at or after this GUI version must carry a signed revocation feed.
+/// Older releases predate the feature and are accepted without one.
+const REVOCATIONS_MIN_GUI: &str = "3.27.0";
+
+fn is_revoked(tag: &str, feed: &[u8]) -> Result<bool, String> {
+    #[derive(serde::Deserialize)]
+    struct Feed {
+        #[serde(default)]
+        revoked_tags: Vec<String>,
+    }
+    let feed: Feed = serde_json::from_slice(feed)
+        .map_err(|e| format!("release revocation feed is not valid JSON: {e}"))?;
+    Ok(feed.revoked_tags.iter().any(|t| t == tag))
+}
+
+fn check_revocations(rel: &Release) -> Result<(), String> {
+    let required =
+        rel.gui == REVOCATIONS_MIN_GUI || crate::util::is_newer(REVOCATIONS_MIN_GUI, &rel.gui);
+    let Some(url) = release_asset_url(rel, "revocations.json") else {
+        return if required {
+            Err(format!("release {} has no revocation feed URL", rel.tag))
+        } else {
+            Ok(())
+        };
+    };
+    let sig_url = release_asset_url(rel, "revocations.json.sig").unwrap_or_default();
+    let feed = match http_get_text_retry(&url, 30) {
+        Ok(text) => text,
+        Err(_) if !required => return Ok(()),
+        Err(e) => {
+            return Err(format!(
+                "release {} is missing its signed revocation feed: {e}",
+                rel.tag
+            ));
+        }
+    };
+    let signature = http_get_bytes_retry(&sig_url, 30, 1024)
+        .map_err(|e| format!("release revocation signature fetch failed: {e}"))?;
+    if !verify_manifest_with_keys(
+        UPDATE_PUBLIC_KEYS,
+        REVOKED_UPDATE_KEYS,
+        feed.as_bytes(),
+        &signature,
+    ) {
+        return Err("release revocation feed has an invalid signature".into());
+    }
+    if is_revoked(&rel.tag, feed.as_bytes())? {
+        return Err(format!("release {} has been revoked", rel.tag));
+    }
+    Ok(())
 }
 
 /// Accept only a 64-character SHA-256; strip the API's `sha256:` prefix and
@@ -227,6 +283,7 @@ pub fn check(paths: &Paths) -> Result<(Release, bool), String> {
         // `releases/latest` redirect is not rate-limited, so fall back to it
         // and let the signed manifest carry the integrity data.
         if let Ok(rel) = check_via_redirect() {
+            check_revocations(&rel)?;
             return Ok((rel, false));
         }
         // Say what happened instead of a bare 403.
@@ -252,6 +309,7 @@ pub fn check(paths: &Paths) -> Result<(Release, bool), String> {
 
     if status == 304 {
         if let Some(rel) = cached.get("release").and_then(parse_release) {
+            check_revocations(&rel)?;
             return Ok((rel, true));
         }
         // fall through to a full refetch when the cache is unusable
@@ -261,9 +319,13 @@ pub fn check(paths: &Paths) -> Result<(Release, bool), String> {
             .header("Accept", "application/vnd.github+json")
             .call()
             .map_err(|e| format!("release check failed: {e}"))?;
-        return read_fresh(resp, &paths.release_cache_file);
+        let (rel, cached) = read_fresh(resp, &paths.release_cache_file)?;
+        check_revocations(&rel)?;
+        return Ok((rel, cached));
     }
-    read_fresh(resp, &paths.release_cache_file)
+    let (rel, cached) = read_fresh(resp, &paths.release_cache_file)?;
+    check_revocations(&rel)?;
+    Ok((rel, cached))
 }
 
 /// The latest release tag without the API: `releases/latest` redirects to the
@@ -1495,6 +1557,16 @@ mod tests {
             manifest,
             &other_sig.to_bytes()
         ));
+    }
+
+    #[test]
+    fn revocation_feed_rejects_a_listed_tag() {
+        let feed = br#"{"version":1,"revoked_tags":["v0.9.0-gui3.24.0"]}"#;
+        assert!(is_revoked("v0.9.0-gui3.24.0", feed).unwrap());
+        assert!(!is_revoked("v0.9.0-gui3.25.0", feed).unwrap());
+        let empty = br#"{"version":1,"revoked_tags":[]}"#;
+        assert!(!is_revoked("v0.9.0-gui3.24.0", empty).unwrap());
+        assert!(is_revoked("x", b"not json").is_err());
     }
 
     #[test]

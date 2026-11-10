@@ -97,6 +97,15 @@ openssl pkeyutl -verify -pubin -inkey "$PUBLIC_KEY" -rawin \
     -in "$DIST/SHA256SUMS" -sigfile "$DIST/SHA256SUMS.sig" >/dev/null 2>&1 \
     || die "SHA256SUMS.sig does not verify against the project public key"
 
+# A release that carries a revocation feed must carry a valid signature.
+if [ -f "$DIST/revocations.json" ]; then
+    [ -f "$DIST/revocations.json.sig" ] \
+        || die "dist/revocations.json.sig is missing - run scripts/sign-release.sh"
+    openssl pkeyutl -verify -pubin -inkey "$PUBLIC_KEY" -rawin \
+        -in "$DIST/revocations.json" -sigfile "$DIST/revocations.json.sig" >/dev/null 2>&1 \
+        || die "revocations.json.sig does not verify against the project public key"
+fi
+
 # The public key file and the key embedded in the updater must be the same.
 # Fixtures override the path with a throwaway key, so only check the real one.
 if [ -z "${CHECK_RELEASE_PUBLIC_KEY:-}" ] && [ "${ALLOW_KEY_ROTATION:-0}" != "1" ]; then

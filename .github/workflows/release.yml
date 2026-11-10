@@ -236,13 +236,15 @@ jobs:
           NOTES="$RUNNER_TEMP/release-notes.md"
           ASSETS=(dist/ProtonDrive-CLI-"${VERSION}"-GUI-"${GUI}"-x86_64.AppImage
                   dist/SHA256SUMS
-                  dist/SHA256SUMS.sig)
+                  dist/SHA256SUMS.sig
+                  dist/revocations.json
+                  dist/revocations.json.sig)
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             existing="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
             missing=0
             for name in ProtonDrive-CLI-"${VERSION}"-GUI-"${GUI}"-x86_64.AppImage \
-                        SHA256SUMS SHA256SUMS.sig; do
+                        SHA256SUMS SHA256SUMS.sig revocations.json revocations.json.sig; do
               grep -qxF "$name" <<<"$existing" || missing=1
             done
             if [ "$missing" -eq 0 ] && [ "$FORCE" != "true" ]; then
@@ -270,5 +272,7 @@ jobs:
             dist/*.AppImage
             dist/SHA256SUMS
             dist/SHA256SUMS.sig
+            dist/revocations.json
+            dist/revocations.json.sig
           if-no-files-found: error
           retention-days: 7

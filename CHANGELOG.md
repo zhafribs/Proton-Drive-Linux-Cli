@@ -1,3 +1,15 @@
+## 3.27.0 — 2026-11-10
+
+### Update trust operations
+
+- **Successor update key provisioned.** The public half is embedded alongside
+  the current key; the private key stays offline.
+- **Signed release revocation feed.** Releases from this version carry
+  `revocations.json` and `revocations.json.sig`; the updater refuses a listed
+  release tag and requires the feed for 3.27.0+.
+- **Automated release verification.** `scripts/verify-release.sh` checks both
+  signatures, the AppImage smoke test and the GLIBC 2.28 floor.
+
 ## 3.26.0 — 2026-11-10
 
 ### Engine confidence
