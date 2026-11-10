@@ -1,0 +1,26 @@
+# Release evidence — v0.9.0-gui3.27.0
+
+Tag: v0.9.0-gui3.27.0
+Scope: M7 Update Trust Operations — successor key, signed revocation feed,
+automated release verifier.
+
+  ProtonDrive-CLI-0.9.0-GUI-3.27.0-x86_64.AppImage  52742648 bytes
+  revocations.json  68 bytes
+  revocations.json.sig  64 bytes
+  SHA256SUMS  115 bytes
+  SHA256SUMS.sig  64 bytes
+
+ProtonDrive-CLI-0.9.0-GUI-3.27.0-x86_64.AppImage: OK
+signature: SHA256SUMS OK
+signature: revocations.json OK
+smoke ok: gui 3.27.0, conf keys 15, local /tmp/proton-verify.RZOT3I/smoke-home/ProtonDrive, cli true, health status 'ok', theme system (system dark)
+squashfs-root/AppRun: GLIBC_2.28
+squashfs-root/usr/bin/proton-drive-gui: GLIBC_2.28
+squashfs-root/usr/bin/proton-engine: GLIBC_2.28
+Releases retained: 36
+
+CI: run 42819252214 — verify and release both succeeded.
+Local gate: 303 tests passed, 4 ignored; clippy clean; release-gate fixtures 12/12.
+Verifier: scripts/verify-release.sh v0.9.0-gui3.27.0 passed.
+Successor public key: f0ed7f4fa4fac94e0bf72931ee0ab16fd4882867c167572c988bec85986444c1
+Successor private key: ~/Backup/proton-update-successor-key.pem (0600, offline).
