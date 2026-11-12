@@ -69,7 +69,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             librsvg2-bin desktop-file-utils appstream binutils openssl \
-            libxkbcommon-dev libwayland-dev fonts-dejavu-core
+            libxkbcommon-dev libwayland-dev fonts-dejavu-core \
+            mesa-vulkan-drivers libvulkan1 squashfs-tools
 
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install 1.99.1 --profile minimal --component clippy
@@ -87,7 +88,17 @@ jobs:
             verify-${{ runner.os }}-
 
       - name: Test
+        env:
+          PROTON_UI_SCREENSHOTS: ${{ runner.temp }}/ui-screenshots
         run: cargo test --workspace --all-targets
+
+      - name: Keep the UI audit screenshots
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ui-audit-screenshots
+          path: ${{ runner.temp }}/ui-screenshots
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Check third-party licences are current
         run: |
@@ -155,7 +166,8 @@ jobs:
       - name: Install the Rust toolchain and zig (GUI builds)
         run: |
           rustup toolchain install 1.99.1 --profile minimal \
-            --component clippy --target x86_64-unknown-linux-gnu
+            --component clippy --target x86_64-unknown-linux-gnu \
+            --target aarch64-unknown-linux-gnu
           ZIG_VERSION=0.15.2
           ZIG_SHA256=02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239
           if [ -x "$HOME/zig/zig" ] && [ "$("$HOME/zig/zig" version 2>/dev/null)" != "$ZIG_VERSION" ]; then
@@ -204,10 +216,10 @@ jobs:
           git commit -m "chore: bump Proton Drive CLI to ${{ steps.upstream.outputs.version }} [skip ci]"
           git push
 
-      - name: Build AppImages (x86_64)
+      - name: Build AppImages (x86_64 and aarch64)
         env:
           REQUIRE_GLIBC_FLOOR: "1"
-        run: SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" ./build.sh
+        run: SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" ./build.sh all
 
       # Attestation, not documentation: a second build from the same commit
       # must produce exactly the same AppImage bytes.
@@ -217,9 +229,12 @@ jobs:
         run: |
           set -euo pipefail
           cp dist/ProtonDrive-CLI-*-x86_64.AppImage "$RUNNER_TEMP/first.AppImage"
-          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" ./build.sh
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" ./build.sh x86_64
           cmp "$RUNNER_TEMP/first.AppImage" dist/ProtonDrive-CLI-*-x86_64.AppImage
           echo "reproducible: both builds are byte-identical"
+
+      - name: Build .deb packages
+        run: SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" ./scripts/build-deb.sh all
 
       - name: Sign the checksum manifest
         env:
@@ -247,6 +262,9 @@ jobs:
           TAG="v${VERSION}-gui${GUI}"
           NOTES="$RUNNER_TEMP/release-notes.md"
           ASSETS=(dist/ProtonDrive-CLI-"${VERSION}"-GUI-"${GUI}"-x86_64.AppImage
+                  dist/ProtonDrive-CLI-"${VERSION}"-GUI-"${GUI}"-aarch64.AppImage
+                  dist/proton-drive_"${VERSION}"+gui"${GUI}"_amd64.deb
+                  dist/proton-drive_"${VERSION}"+gui"${GUI}"_arm64.deb
                   dist/SHA256SUMS
                   dist/SHA256SUMS.sig
                   dist/revocations.json
@@ -256,6 +274,9 @@ jobs:
             existing="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
             missing=0
             for name in ProtonDrive-CLI-"${VERSION}"-GUI-"${GUI}"-x86_64.AppImage \
+                        ProtonDrive-CLI-"${VERSION}"-GUI-"${GUI}"-aarch64.AppImage \
+                        proton-drive_"${VERSION}"+gui"${GUI}"_amd64.deb \
+                        proton-drive_"${VERSION}"+gui"${GUI}"_arm64.deb \
                         SHA256SUMS SHA256SUMS.sig revocations.json revocations.json.sig; do
               grep -qxF "$name" <<<"$existing" || missing=1
             done
@@ -270,7 +291,7 @@ jobs:
           else
             gh release create "$TAG" \
               --target "$(git rev-parse HEAD)" \
-              --title "Proton Drive CLI ${VERSION} + GUI ${GUI} — AppImage (x86_64)" \
+              --title "Proton Drive CLI ${VERSION} + GUI ${GUI} — AppImage + deb (x86_64, aarch64)" \
               --notes-file "$NOTES" \
               "${ASSETS[@]}"
             echo "Created release $TAG."
@@ -282,6 +303,7 @@ jobs:
           name: appimages-${{ steps.upstream.outputs.version }}
           path: |
             dist/*.AppImage
+            dist/*.deb
             dist/SHA256SUMS
             dist/SHA256SUMS.sig
             dist/revocations.json

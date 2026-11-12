@@ -4,6 +4,8 @@
 
 pub mod about;
 pub mod activity;
+#[cfg(test)]
+mod audit;
 pub mod cloud;
 pub mod home;
 pub mod photos;
@@ -2613,7 +2615,7 @@ impl App {
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                     .open(&mut open)
                     .show(ctx, |ui| {
-                        ui.label(label);
+                        ui.label(label.clone());
                         ui.add_space(6.0);
                         let id = egui::Id::unique("cloud-text-input");
                         let r = ui.add(
@@ -2621,6 +2623,15 @@ impl App {
                                 .id(id)
                                 .desired_width(300.0),
                         );
+                        // The visible label is a sibling, not an AccessKit
+                        // parent; name the field so screen readers announce it.
+                        r.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::Role::TextInput,
+                                ui.is_enabled(),
+                                &label,
+                            )
+                        });
                         if self.input_focus {
                             ui.memory_mut(|m| m.request_focus(id));
                             self.input_focus = false;
@@ -3225,6 +3236,14 @@ impl eframe::App for App {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.draw(ui);
+    }
+}
+
+impl App {
+    /// The whole window without eframe's frame: shared by `eframe::App::ui`
+    /// and the headless page audit.
+    fn draw(&mut self, ui: &mut egui::Ui) {
         self.handle_shortcuts(ui.ctx());
         // A dialog owns the keyboard: disabling the page behind it keeps Tab
         // inside the dialog, and the modal blocker already owns the pointer.

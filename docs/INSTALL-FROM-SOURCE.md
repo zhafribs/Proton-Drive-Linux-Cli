@@ -24,12 +24,26 @@ Fedora/Arch users need the equivalent packages (`gcc`, `make`, `wget`,
 ## Build the AppImage
 
 ```bash
-./build.sh x86_64
+./build.sh                 # x86_64 and aarch64
+# or: ./build.sh x86_64
 ```
 
 The script downloads and SHA-512-verifies the official Proton CLI, builds the
 Rust GUI, engine and `AppRun` launcher, stages the AppDir, and packages it with
-`appimagetool` into `dist/`.
+`appimagetool` into `dist/`. Release builds set `REQUIRE_GLIBC_FLOOR=1` and use
+`cargo-zigbuild` plus zig (installed at `~/zig`) to pin glibc 2.28. Cross
+building aarch64 also needs:
+
+```bash
+rustup target add aarch64-unknown-linux-gnu
+```
+
+After the AppImages exist, build the matching Debian packages (plain `ar` and
+`tar`, no `dpkg-deb` required):
+
+```bash
+./scripts/build-deb.sh all
+```
 
 ## Run from a source checkout (development)
 

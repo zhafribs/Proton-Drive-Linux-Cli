@@ -27,8 +27,13 @@ GUI_VERSION="$(sed -n 's/^pub const GUI_VERSION: &str = "\(.*\)";$/\1/p' "$ROOT/
 [ -n "$GUI_VERSION" ] || die "gui/src/main.rs has no GUI_VERSION"
 
 APPIMAGE="$DIST/ProtonDrive-CLI-${VERSION}-GUI-${GUI_VERSION}-x86_64.AppImage"
+APPIMAGE_ARM64="$DIST/ProtonDrive-CLI-${VERSION}-GUI-${GUI_VERSION}-aarch64.AppImage"
+DEB_AMD64="$DIST/proton-drive_${VERSION}+gui${GUI_VERSION}_amd64.deb"
+DEB_ARM64="$DIST/proton-drive_${VERSION}+gui${GUI_VERSION}_arm64.deb"
 [ -f "$APPIMAGE" ] || die "missing artifact $(basename "$APPIMAGE")"
 [ -f "$DIST/SHA256SUMS" ] || die "dist/SHA256SUMS missing"
+
+elf_machine() { readelf -h "$1" 2>/dev/null | sed -n 's/^ *Machine: *//p' | head -1; }
 
 # --- changelog: the FIRST section must be this GUI version, and it must have
 # at least one bullet. A header-only section is the "Maintenance rebuild"
@@ -81,17 +86,48 @@ fi
 [ -x "$APP_DIR/AppRun" ] || die "AppRun missing from the AppDir"
 
 if [ "${CHECK_RELEASE_SKIP_SMOKE:-0}" != "1" ]; then
-    smoke="$(PROTON_SYNC_SMOKE=1 APPIMAGE_EXTRACT_AND_RUN=1 "$APP_DIR/AppRun" --smoke 2>&1)" \
-        || die "AppRun --smoke failed: ${smoke}"
+    # Run the shipped x86_64 artifact, not the last-built AppDir (which may be
+    # the aarch64 build when both architectures were produced).
+    smoke_target="$APPIMAGE"
+    [ -n "${CHECK_RELEASE_PUBLIC_KEY:-}" ] && smoke_target="$APP_DIR/AppRun"
+    smoke="$(PROTON_SYNC_SMOKE=1 APPIMAGE_EXTRACT_AND_RUN=1 "$smoke_target" --smoke 2>&1)" \
+        || die "smoke failed: ${smoke}"
     grep -q "gui ${GUI_VERSION}" <<<"$smoke" \
         || die "smoke output does not report gui ${GUI_VERSION}: ${smoke}"
+fi
+
+# The release carries every architecture and a .deb for each. Fixtures have
+# only the x86_64 AppImage, so this block is release-only.
+if [ -z "${CHECK_RELEASE_PUBLIC_KEY:-}" ]; then
+    [ "$(elf_machine "$APPIMAGE")" = "Advanced Micro Devices X86-64" ] \
+        || die "x86_64 AppImage is not an x86-64 ELF"
+    [ -f "$APPIMAGE_ARM64" ] || die "missing artifact $(basename "$APPIMAGE_ARM64")"
+    [ "$(elf_machine "$APPIMAGE_ARM64")" = "AArch64" ] \
+        || die "aarch64 AppImage is not an AArch64 ELF"
+    for pair in "$DEB_AMD64:amd64" "$DEB_ARM64:arm64"; do
+        deb="${pair%%:*}"
+        darch="${pair##*:}"
+        [ -f "$deb" ] || die "missing artifact $(basename "$deb") - run scripts/build-deb.sh all"
+        ar t "$deb" | grep -qx 'debian-binary' || die "$(basename "$deb") is not an ar archive"
+        control="$(ar p "$deb" control.tar.xz | tar -xJOf - ./control)"
+        grep -qx "Package: proton-drive" <<<"$control" || die "$(basename "$deb") has the wrong package name"
+        grep -qx "Version: ${VERSION}+gui${GUI_VERSION}" <<<"$control" || die "$(basename "$deb") has the wrong version"
+        grep -qx "Architecture: ${darch}" <<<"$control" || die "$(basename "$deb") has the wrong architecture"
+        ar p "$deb" data.tar.xz | tar -tJf - \
+            | grep -qx './usr/lib/proton-drive/ProtonDrive.AppImage' \
+            || die "$(basename "$deb") does not install the AppImage"
+    done
 fi
 
 # --- checksums and the version-bump guard.
 ( cd "$DIST" && sha256sum -c --ignore-missing SHA256SUMS >/dev/null ) \
     || die "dist/SHA256SUMS does not match the built AppImage"
-grep -q "  $(basename "$APPIMAGE")\$" "$DIST/SHA256SUMS" \
-    || die "dist/SHA256SUMS has no entry for $(basename "$APPIMAGE")"
+for artifact in "$APPIMAGE" "$APPIMAGE_ARM64" "$DEB_AMD64" "$DEB_ARM64"; do
+    if [ -f "$artifact" ]; then
+        grep -q "  $(basename "$artifact")\$" "$DIST/SHA256SUMS" \
+            || die "dist/SHA256SUMS has no entry for $(basename "$artifact")"
+    fi
+done
 
 # The updater refuses unsigned manifests; the release gate must too.
 PUBLIC_KEY="${CHECK_RELEASE_PUBLIC_KEY:-$ROOT/src/update-signing-key.pub}"

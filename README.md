@@ -1,9 +1,9 @@
-# Proton Drive for Linux — AppImage
+# Proton Drive for Linux — AppImage + deb
 
 ![Latest release](https://img.shields.io/github/v/release/zhafribs/Proton-Drive-Linux-Cli)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 ![Rust only](https://img.shields.io/badge/Rust-only-000?logo=rust)
-![Arch: x86_64](https://img.shields.io/badge/arch-x86_64-lightgrey)
+![Arch: x86_64 + aarch64](https://img.shields.io/badge/arch-x86__64%20%2B%20aarch64-lightgrey)
 ![Proton Drive CLI: 0.9.0](https://img.shields.io/badge/Proton%20Drive%20CLI-0.9.0-6D4AFF)
 
 **An unofficial Proton Drive desktop app for Linux** — two-way folder sync, a
@@ -17,24 +17,28 @@ no AUR.
 > Unofficial. Not affiliated with, endorsed, sponsored or supported by Proton
 > AG. "Proton Drive" is a trademark of Proton AG.
 
-**[Download the latest AppImage →](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/latest)**
+**[Download the latest AppImage or .deb →](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/latest)**
 
 Every published build stays on the releases page; older releases are never
 pruned automatically.
 
 ## Quick start
 
-1. Download and make it executable:
+1. Choose the **x86_64** or **aarch64** AppImage, then make it executable:
    ```bash
    chmod +x ProtonDrive-CLI-*-x86_64.AppImage
+   ```
+   On Debian or Ubuntu you can install the matching `.deb` instead:
+   ```bash
+   sudo apt install ./proton-drive_*_amd64.deb
    ```
 2. Run it and click **Sign in** in the bottom-left account pill — Proton's CLI
    opens a terminal for 2FA.
 3. **Settings → pick your sync folder → Save.** The app installs a systemd
    *user* service; from then on `~/ProtonDrive` mirrors your Drive.
 
-Works on x86_64 Linux with **glibc ≥ 2.28** and FUSE, with or without a
-systemd user session. If it won't start:
+Works on x86_64 and aarch64 Linux with **glibc ≥ 2.28** and FUSE, with or
+without a systemd user session. If it won't start:
 install `libfuse2` / `fuse2` / `fuse-libs`, or run with
 `APPIMAGE_EXTRACT_AND_RUN=1`.
 
@@ -136,7 +140,8 @@ Install Rust with [rustup](https://rustup.rs/), then `wget` and
 `rsvg-convert` (optional: `desktop-file-validate`, `appstreamcli`):
 
 ```bash
-./build.sh x86_64
+./build.sh                 # x86_64 and aarch64 AppImages
+./scripts/build-deb.sh all # matching .deb packages
 ```
 
 `build.sh` downloads and **SHA-512-verifies** Proton's CLI, builds the Rust
@@ -152,6 +157,7 @@ crates/core/         shared config / state / health / snapshot types
 crates/engine/       two-way Rust sync engine
 crates/apprun/       Rust AppImage entry point
 build.sh             download -> verify -> build -> package -> validate
+scripts/build-deb.sh install the tested AppImage as a Debian package
 upstream.lock        Proton CLI version + SHA-512s (written by check-upstream.sh)
 scripts/             upstream check, release notes, licence texts, dev install
 ```

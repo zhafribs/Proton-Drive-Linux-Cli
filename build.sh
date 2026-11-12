@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# build.sh - Build Proton Drive CLI AppImage (x86_64; aarch64 discontinued)
+# build.sh - Build Proton Drive CLI AppImages (x86_64 and aarch64)
 #
 # Downloads the official Proton Drive CLI binaries, verifies them against the
 # SHA-512 checksums published by Proton, builds this project's Rust GUI
@@ -9,8 +9,10 @@
 # installed on the host beyond a normal desktop.
 #
 # Usage:
-#   ./build.sh                   # build x86_64
+#   ./build.sh                   # build every supported architecture
 #   ./build.sh x86_64            # build x86_64
+#   ./build.sh aarch64           # build aarch64
+#   ./build.sh all               # build every supported architecture
 #   ./scripts/check-upstream.sh  # refresh upstream.lock first (or let CI do it)
 #
 # The upstream version and the SHA-512 checksums Proton publishes live in
@@ -42,19 +44,34 @@ APPIMAGETOOL_SHA256="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb3
 # appimagetool downloads the AppImage type2 runtime at package time. Pin it,
 # or the first code a user executes is an unverified `continuous` asset.
 TYPE2_RUNTIME_VERSION="20251108"
-TYPE2_RUNTIME_SHA256="2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d"
+declare -A TYPE2_RUNTIME_SHA256=(
+    [x86_64]="2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d"
+    [aarch64]="00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444"
+)
 CROSS_TARGET=""
+# CI installs zig here; make a local cross-build find it without extra setup.
+if ! command -v zig >/dev/null 2>&1 && [ -x "$HOME/zig/zig" ]; then
+    PATH="$HOME/zig:$PATH"
+    export PATH
+fi
+HOST_ARCH="$(uname -m)"
+case "$HOST_ARCH" in
+    x86_64|amd64) HOST_ARCH="x86_64" ;;
+    *) echo "build.sh runs on x86_64 (appimagetool host tool); got $HOST_ARCH" >&2; exit 2 ;;
+esac
 
 # upstream platform -> AppImage architecture, output suffix
 declare -A APPIMAGE_ARCH=(
     [linux-x64]="x86_64"
+    [linux-arm64]="aarch64"
 )
 
-TARGETS=("linux-x64")
+TARGETS=("linux-x64" "linux-arm64")
 [ $# -gt 0 ] && case "$1" in
+    all) TARGETS=("linux-x64" "linux-arm64") ;;
     x86_64|amd64) TARGETS=("linux-x64") ;;
-    aarch64|arm64) echo "aarch64 builds were discontinued - releases are x86_64-only" >&2; exit 2 ;;
-    *) echo "unknown target: $1 (only x86_64 is built)" >&2; exit 2 ;;
+    aarch64|arm64) TARGETS=("linux-arm64") ;;
+    *) echo "unknown target: $1 (use x86_64, aarch64 or all)" >&2; exit 2 ;;
 esac
 
 log() { printf '\033[1;35m==>\033[0m %s\n' "$*"; }
@@ -89,7 +106,7 @@ load_upstream() {
 
     declare -gA UPSTREAM_SHA512=()
     local platform key value
-    for platform in "${!APPIMAGE_ARCH[@]}"; do
+    for platform in "${TARGETS[@]}"; do
         key="$(sha512_key "$platform")"
         value="$(lock_get "$key")"
         [ -n "$value" ] || die "upstream.lock is missing $key - run scripts/check-upstream.sh"
@@ -101,8 +118,8 @@ load_upstream
 
 fetch_tool() {
     mkdir -p "$TOOLS"
-    local tool="$TOOLS/appimagetool-x86_64.AppImage"
-    local url="https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-x86_64.AppImage"
+    local tool="$TOOLS/appimagetool-${HOST_ARCH}.AppImage"
+    local url="https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-${HOST_ARCH}.AppImage"
     local tmp="$tool.download"
 
     if [ -f "$tool" ] && echo "${APPIMAGETOOL_SHA256}  $tool" | sha256sum -c - >/dev/null 2>&1; then
@@ -120,17 +137,20 @@ fetch_tool() {
 }
 
 fetch_runtime() {
+    local arch="$1"
     mkdir -p "$TOOLS"
-    local out="$TOOLS/runtime-x86_64"
-    local url="https://github.com/AppImage/type2-runtime/releases/download/${TYPE2_RUNTIME_VERSION}/runtime-x86_64"
+    local out="$TOOLS/runtime-${arch}"
+    local url="https://github.com/AppImage/type2-runtime/releases/download/${TYPE2_RUNTIME_VERSION}/runtime-${arch}"
     local tmp="$out.download"
-    if [ -f "$out" ] && echo "${TYPE2_RUNTIME_SHA256}  $out" | sha256sum -c - >/dev/null 2>&1; then
+    local expected="${TYPE2_RUNTIME_SHA256[$arch]}"
+    [ -n "$expected" ] || die "no pinned type2 runtime for ${arch}"
+    if [ -f "$out" ] && echo "${expected}  $out" | sha256sum -c - >/dev/null 2>&1; then
         return
     fi
     rm -f "$out" "$tmp"
-    log "downloading type2 runtime ${TYPE2_RUNTIME_VERSION}"
+    log "downloading type2 runtime ${TYPE2_RUNTIME_VERSION} (${arch})"
     wget -q -O "$tmp" "$url" || die "type2 runtime download failed"
-    echo "${TYPE2_RUNTIME_SHA256}  $tmp" | sha256sum -c - >/dev/null \
+    echo "${expected}  $tmp" | sha256sum -c - >/dev/null \
         || { rm -f "$tmp"; die "type2 runtime checksum mismatch - refusing to embed it"; }
     mv "$tmp" "$out"
 }
@@ -175,14 +195,19 @@ check_glibc_floor() {
 # match the target and have no zigbuild.
 build_gui() {
     local arch="$1" bin_dir
-    [ "$arch" = "x86_64" ] || die "no GUI target for ${arch} - releases are x86_64-only"
+    case "$arch" in
+        x86_64) RUST_TARGET="x86_64-unknown-linux-gnu" ;;
+        aarch64) RUST_TARGET="aarch64-unknown-linux-gnu" ;;
+        *) die "no GUI target for ${arch}" ;;
+    esac
     if [ "${REQUIRE_GLIBC_FLOOR:-0}" = "1" ] && [ -z "$CROSS_TARGET" ]; then
         die "REQUIRE_GLIBC_FLOOR is set but cargo-zigbuild/zig are unavailable"
     fi
     if [ -n "$CROSS_TARGET" ]; then
         log "building GUI (${CROSS_TARGET}, zigbuild)"
         ( cd "$ROOT/gui" && cargo zigbuild --release --target "$CROSS_TARGET" )
-        for bin_dir in "$ROOT/gui/target/$CROSS_TARGET/release" \
+        for bin_dir in "$ROOT/gui/target/$RUST_TARGET/release" \
+                       "$ROOT/gui/target/$CROSS_TARGET/release" \
                        "$ROOT/gui/target/x86_64-unknown-linux-gnu/release"; do
             [ -x "$bin_dir/proton-drive-gui" ] && break
         done
@@ -203,7 +228,11 @@ build_gui() {
 # `src/AppRun`. It only dispatches to the GUI / engine / upstream CLI.
 build_apprun() {
     local arch="$1" bin_dir
-    [ "$arch" = "x86_64" ] || die "no AppRun target for ${arch} - releases are x86_64-only"
+    case "$arch" in
+        x86_64) RUST_TARGET="x86_64-unknown-linux-gnu" ;;
+        aarch64) RUST_TARGET="aarch64-unknown-linux-gnu" ;;
+        *) die "no AppRun target for ${arch}" ;;
+    esac
     if [ "${REQUIRE_GLIBC_FLOOR:-0}" = "1" ] && [ -z "$CROSS_TARGET" ]; then
         die "REQUIRE_GLIBC_FLOOR is set but cargo-zigbuild/zig are unavailable"
     fi
@@ -211,7 +240,8 @@ build_apprun() {
         log "building AppRun launcher (${CROSS_TARGET}, zigbuild)"
         ( cd "$ROOT" && cargo zigbuild --release -p proton-drive-apprun --target "$CROSS_TARGET" ) \
             || die "AppRun build failed"
-        for bin_dir in "$ROOT/gui/target/$CROSS_TARGET/release" \
+        for bin_dir in "$ROOT/gui/target/$RUST_TARGET/release" \
+                       "$ROOT/gui/target/$CROSS_TARGET/release" \
                        "$ROOT/gui/target/x86_64-unknown-linux-gnu/release"; do
             [ -x "$bin_dir/proton-drive-apprun" ] && break
         done
@@ -263,8 +293,10 @@ make_appdir() {
     if [ -n "$CROSS_TARGET" ]; then
         ( cd "$ROOT" && cargo zigbuild --release -p proton-engine --target "$CROSS_TARGET" ) \
             || die "proton-engine cross-build failed"
-        for ebin in "$ROOT/gui/target/$CROSS_TARGET/release/proton-engine" \
+        for ebin in "$ROOT/gui/target/$RUST_TARGET/release/proton-engine" \
+                    "$ROOT/gui/target/$CROSS_TARGET/release/proton-engine" \
                     "$ROOT/gui/target/x86_64-unknown-linux-gnu/release/proton-engine" \
+                    "$ROOT/target/$RUST_TARGET/release/proton-engine" \
                     "$ROOT/target/$CROSS_TARGET/release/proton-engine" \
                     "$ROOT/target/x86_64-unknown-linux-gnu/release/proton-engine"; do
             [ -x "$ebin" ] && { engine_bin="$ebin"; break; }
@@ -343,12 +375,21 @@ build_one() {
     local out="$DIST/${APPIMAGE_NAME}-${VERSION}-GUI-${GUI_VERSION}-${arch}.AppImage"
 
     fetch_payload "$platform"
+    case "$arch" in
+        x86_64) RUST_TARGET="x86_64-unknown-linux-gnu" ;;
+        aarch64) RUST_TARGET="aarch64-unknown-linux-gnu" ;;
+        *) die "no Rust target for ${arch}" ;;
+    esac
     if [ "${REQUIRE_GLIBC_FLOOR:-0}" = "1" ]; then
         command -v cargo-zigbuild >/dev/null 2>&1 && command -v zig >/dev/null 2>&1 \
             || die "REQUIRE_GLIBC_FLOOR is set but cargo-zigbuild/zig are unavailable"
-        CROSS_TARGET="x86_64-unknown-linux-gnu.2.28"
+        rustup target list --installed | grep -qx "$RUST_TARGET" \
+            || die "rustup target add $RUST_TARGET"
+        CROSS_TARGET="${RUST_TARGET}.2.28"
     elif command -v cargo-zigbuild >/dev/null 2>&1 && command -v zig >/dev/null 2>&1; then
-        CROSS_TARGET="x86_64-unknown-linux-gnu.2.28"
+        rustup target list --installed | grep -qx "$RUST_TARGET" \
+            || die "rustup target add $RUST_TARGET"
+        CROSS_TARGET="${RUST_TARGET}.2.28"
     else
         CROSS_TARGET=""
         log "warning: cargo-zigbuild/zig not found - this local build is NOT glibc-pinned"
@@ -362,10 +403,11 @@ build_one() {
     log "building ${arch} AppImage"
     rm -f "$out"
 
-    local -a tool_args=( --no-appstream --runtime-file "$TOOLS/runtime-x86_64" "$appdir" "$out" )
+    fetch_runtime "$arch"
+    local -a tool_args=( --no-appstream --runtime-file "$TOOLS/runtime-${arch}" "$appdir" "$out" )
 
     local tool_log="$BUILD/appimagetool-${arch}.log"
-    ARCH="$arch" APPIMAGE_EXTRACT_AND_RUN=1 "$TOOLS/appimagetool-x86_64.AppImage" "${tool_args[@]}" \
+    ARCH="$arch" APPIMAGE_EXTRACT_AND_RUN=1 "$TOOLS/appimagetool-${HOST_ARCH}.AppImage" "${tool_args[@]}" \
         >"$tool_log" 2>&1 || { cat "$tool_log" >&2; die "appimagetool failed for ${arch}"; }
     grep -E 'AppStream upstream metadata|WARNING|Error|Success' "$tool_log" || true
 
@@ -373,9 +415,8 @@ build_one() {
     log "built $out ($(du -h "$out" | cut -f1))"
 }
 
-log "Proton Drive CLI ${VERSION} -> AppImage"
+log "Proton Drive CLI ${VERSION} -> AppImages: ${TARGETS[*]}"
 fetch_tool
-fetch_runtime
 mkdir -p "$BUILD" "$DIST"
 render_icon
 

@@ -32,8 +32,11 @@ PAGE_URL="$(lock_get PAGE_URL)"
 SHA512_X64="$(lock_get SHA512_LINUX_X64)"
 
 X86="$DIST/ProtonDrive-CLI-${VERSION}-GUI-${GUI_VERSION}-x86_64.AppImage"
-for artifact in "$X86" "$DIST/SHA256SUMS"; do
-    [ -f "$artifact" ] || { echo "error: missing $(basename "$artifact") - run ./build.sh first" >&2; exit 1; }
+ARM="$DIST/ProtonDrive-CLI-${VERSION}-GUI-${GUI_VERSION}-aarch64.AppImage"
+DEB_AMD64="$DIST/proton-drive_${VERSION}+gui${GUI_VERSION}_amd64.deb"
+DEB_ARM64="$DIST/proton-drive_${VERSION}+gui${GUI_VERSION}_arm64.deb"
+for artifact in "$X86" "$ARM" "$DEB_AMD64" "$DEB_ARM64" "$DIST/SHA256SUMS"; do
+    [ -f "$artifact" ] || { echo "error: missing $(basename "$artifact") - run ./build.sh and scripts/build-deb.sh first" >&2; exit 1; }
 done
 
 # Sanity: SHA256SUMS must describe exactly the artifacts we are about to announce.
@@ -65,6 +68,13 @@ grep -qE '^[[:space:]]*-[[:space:]]+' "$CHANGELOG_SECTION" \
 # section sits flush in the notes
 sed -i -e '/./,$!d' -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$CHANGELOG_SECTION"
 
+OTHER_ROWS="$TMP/other-rows.md"
+{
+    printf '| `%s` | ARM64 AppImage | `%s` |\n' "$(basename "$ARM")" "$(sha256 "$ARM")"
+    printf '| `%s` | Debian/Ubuntu amd64 | `%s` |\n' "$(basename "$DEB_AMD64")" "$(sha256 "$DEB_AMD64")"
+    printf '| `%s` | Debian/Ubuntu arm64 | `%s` |\n' "$(basename "$DEB_ARM64")" "$(sha256 "$DEB_ARM64")"
+} > "$OTHER_ROWS"
+
 RENDERED="$TMP/rendered.md"
 sed \
     -e "s|{{VERSION}}|${VERSION}|g" \
@@ -74,7 +84,9 @@ sed \
     -e "s|{{SHA256_X86_64}}|$(sha256 "$X86")|g" \
     -e "s|{{SHA512_LINUX_X64}}|${SHA512_X64}|g" \
     -e "s|{{X86_FILE}}|$(basename "$X86")|g" \
-    -e "s|{{OTHER_ARCH}}||g" \
+    -e "s|{{DEB_AMD64_FILE}}|$(basename "$DEB_AMD64")|g" \
+    -e "/{{OTHER_ARCH}}/r $OTHER_ROWS" \
+    -e "/{{OTHER_ARCH}}/d" \
     -e "s|{{TAG}}|v${VERSION}-gui${GUI_VERSION}|g" \
     -e "s|{{GUI_VERSION}}|${GUI_VERSION}|g" \
     -e "s|{{PAGE_URL}}|${PAGE_URL}|g" \

@@ -1,3 +1,21 @@
+## 3.29.0 — 2026-11-12
+
+### UI and packaging confidence
+
+- **Automated UI audit.** Every page, dialog and status variant renders
+  headlessly at 720×400 and at 50/100/200% scale. AccessKit fails the test if
+  any input widget has no screen-reader name; a keyboard-only test Tab-focuses
+  the Settings nav row and activates it. `scripts/ui-check.sh` refreshes the
+  screenshot matrix in `docs/audit/m8/`, and CI keeps it as an artifact.
+- **aarch64 AppImage.** Proton's official CLI now ships a Linux arm64 binary,
+  so releases include an aarch64 AppImage built with the same zig-pinned
+  glibc 2.28 floor as x86_64.
+- **Debian packages.** `amd64` and `arm64` `.deb` files install the tested
+  AppImage with a `proton-drive` launcher, desktop entry and icon.
+- **Release assets and notes** cover both architectures and both packages;
+  `scripts/verify-release.sh` checks each AppImage, its GLIBC floor and each
+  `.deb`'s metadata.
+
 ## 3.28.0 — 2026-11-12
 
 ### Update trust and reproducibility

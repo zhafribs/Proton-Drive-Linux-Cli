@@ -3,9 +3,14 @@ verified against Proton's published SHA-512 at build time — plus this repo's
 open-source desktop app: two-way folder sync, cloud file manager, tray,
 in-app updates. Not affiliated with Proton AG.
 
+Pick the AppImage or .deb for your machine (x86_64 or aarch64):
+
 ```bash
 chmod +x {{X86_FILE}}
 ./{{X86_FILE}}          # double-click works too; sign-in opens in a terminal
+
+# Debian/Ubuntu alternative:
+sudo apt install ./{{DEB_AMD64_FILE}}
 ```
 
 Won't start? FUSE: Arch `pacman -S fuse2` · Debian/Ubuntu `apt install libfuse2t64` ·
@@ -13,7 +18,7 @@ Fedora `dnf install fuse-libs` — or launch with `APPIMAGE_EXTRACT_AND_RUN=1`.
 
 | File | Arch | SHA-256 |
 | --- | --- | --- |
-| `{{X86_FILE}}` | Intel/AMD | `{{SHA256_X86_64}}` |
+| `{{X86_FILE}}` | Intel/AMD AppImage | `{{SHA256_X86_64}}` |
 {{OTHER_ARCH}}
 
 Verify: `sha256sum -c SHA256SUMS`

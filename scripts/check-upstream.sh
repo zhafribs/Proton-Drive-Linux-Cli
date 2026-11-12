@@ -25,8 +25,7 @@ DRY_RUN=0
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=1
 
 # Platforms this project packages. Must stay in sync with APPIMAGE_ARCH in build.sh.
-# aarch64 was discontinued: releases are x86_64-only.
-REQUIRED_PLATFORMS=(linux-x64)
+REQUIRED_PLATFORMS=(linux-x64 linux-arm64)
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT

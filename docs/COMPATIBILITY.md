@@ -1,13 +1,13 @@
 # Linux and desktop compatibility
 
-This is the honest support matrix for the AppImage, not a marketing claim.
-The app is x86_64 Linux only.
+This is the honest support matrix for the AppImage and .deb packages, not a
+marketing claim. Releases cover x86_64 and aarch64 Linux.
 
 ## What works
 
 | Area | Status |
 |---|---|
-| ABI | glibc 2.28+ x86_64. Release builds are zig-pinned; the gate checks the ELF floor. |
+| ABI | glibc 2.28+ on x86_64 and aarch64. Release builds are zig-pinned; the gate checks the ELF floor. |
 | AppImage mount | Type-2 runtime with FUSE2 `fusermount`; recent runtimes also try `fusermount3`, and FUSE3-only systems can set `FUSERMOUNT_PROG=fusermount3`. |
 | No FUSE | With `APPIMAGE_EXTRACT_AND_RUN=1` the GUI runs. Background sync still needs a mountable AppImage: the systemd unit starts the AppImage without that variable, so treat extract-and-run as GUI-only. |
 | Display | X11; Wayland through XWayland; native Wayland with `PROTON_SYNC_WAYLAND=1`. |
@@ -32,7 +32,8 @@ The app is x86_64 Linux only.
 ## Not supported
 
 - **musl-only distributions** (Alpine): the release is glibc-linked.
-- **32-bit x86** and **aarch64**: releases are x86_64 only.
+- **32-bit x86**: releases are 64-bit only.
+- **Flatpak**: no sandboxed package yet.
 - **Non-systemd init systems** for background sync. The GUI can browse, but
   start/pause/enable-at-login and the engine service require a systemd user
   session. This is the largest remaining portability gap.
@@ -53,6 +54,7 @@ The app is x86_64 Linux only.
 ## Release checks
 
 - CI builds with `REQUIRE_GLIBC_FLOOR=1` and `cargo-zigbuild` at glibc 2.28.
-- The release gate verifies the AppImage, signature and smoke startup.
+- The release gate verifies both AppImages, both `.deb` packages, signatures
+  and smoke startup on the build architecture.
 - Local development builds without zig are not release artifacts; they inherit
   the host glibc and must not be published.

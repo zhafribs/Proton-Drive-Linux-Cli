@@ -41,3 +41,7 @@ zune-jpeg = "0.5"
 # Only for `ui::glyph_tests`, which proves the icon glyphs resolve through
 # the same system font fallback eframe installs at runtime.
 egui_system_font_provider = "0.37.0"
+# Headless page rendering: AccessKit names, keyboard traversal and (with the
+# wgpu renderer) the screenshot matrix live in `ui::audit`.
+egui_kittest = { version = "0.37.0", features = ["wgpu", "snapshot"] }
+image = { version = "0.25", default-features = false }

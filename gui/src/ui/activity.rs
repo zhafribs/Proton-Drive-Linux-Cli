@@ -130,7 +130,7 @@ fn files_tab(app: &mut ActivityView, ui: &mut egui::Ui) {
                     .hint_text("Search file names...")
                     .desired_width((ui.available_width() - 150.0).max(100.0)),
             );
-            egui::ComboBox::from_id_salt("act-kind")
+            let combo = egui::ComboBox::from_id_salt("act-kind")
                 .selected_text(KINDS[app.act.kind])
                 .width(140.0)
                 .show_ui(ui, |ui| {
@@ -138,6 +138,15 @@ fn files_tab(app: &mut ActivityView, ui: &mut egui::Ui) {
                         ui.selectable_value(&mut app.act.kind, i, *k);
                     }
                 });
+            // A visible "Filter" label would cost width on the narrow card;
+            // name the control for screen readers instead.
+            combo.response.widget_info(|| {
+                let mut info = egui::WidgetInfo::new(egui::Role::ComboBox);
+                info.enabled = ui.is_enabled();
+                info.label = Some("Filter activity by type".into());
+                info.current_text_value = Some(KINDS[app.act.kind].to_string());
+                info
+            });
         });
         ui.add_space(8.0);
 

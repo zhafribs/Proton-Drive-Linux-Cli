@@ -15,7 +15,6 @@ VERIFY_KEY="${SIGN_RELEASE_VERIFY_KEY:-$PUBLIC}"
 
 die() { printf 'sign-release: %s\n' "$*" >&2; exit 1; }
 
-[ -f "$MANIFEST" ] || die "dist/SHA256SUMS missing - run ./build.sh first"
 [ -f "$PUBLIC" ] || die "src/update-signing-key.pub missing"
 [ -f "$VERIFY_KEY" ] || die "verification key not found at $VERIFY_KEY"
 command -v openssl >/dev/null 2>&1 || die "openssl not found"
@@ -35,6 +34,22 @@ else
     die "set UPDATE_SIGNING_KEY (CI) or UPDATE_SIGNING_KEY_FILE (local)"
 fi
 [ -f "$key_file" ] || die "signing key not found at $key_file"
+
+# Regenerate the manifest over exactly this release's artifacts. Old AppImages
+# kept in a developer's dist/ must not leak into the signed list.
+VERSION="$(awk -F= '$1 == "VERSION" { sub(/^[^=]*=/, ""); print; exit }' "$ROOT/upstream.lock")"
+GUI_VERSION="$(sed -n 's/^pub const GUI_VERSION: &str = "\(.*\)";$/\1/p' "$ROOT/gui/src/main.rs" | head -1)"
+[ -n "$VERSION" ] && [ -n "$GUI_VERSION" ] || die "missing VERSION or GUI_VERSION"
+artifacts=(
+    "$ROOT/dist/ProtonDrive-CLI-${VERSION}-GUI-${GUI_VERSION}-x86_64.AppImage"
+    "$ROOT/dist/ProtonDrive-CLI-${VERSION}-GUI-${GUI_VERSION}-aarch64.AppImage"
+    "$ROOT/dist/proton-drive_${VERSION}+gui${GUI_VERSION}_amd64.deb"
+    "$ROOT/dist/proton-drive_${VERSION}+gui${GUI_VERSION}_arm64.deb"
+)
+( cd "$ROOT/dist" && for f in "${artifacts[@]}"; do
+    [ -f "$f" ] && sha256sum "$(basename "$f")"
+done > SHA256SUMS )
+[ -s "$MANIFEST" ] || die "no release artifacts found - run ./build.sh and scripts/build-deb.sh first"
 
 openssl pkeyutl -sign -rawin -inkey "$key_file" -in "$MANIFEST" -out "$SIGNATURE"
 openssl pkeyutl -verify -pubin -inkey "$VERIFY_KEY" -rawin -in "$MANIFEST" \
