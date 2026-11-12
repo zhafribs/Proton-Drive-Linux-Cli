@@ -1,0 +1,70 @@
+# Release evidence — v0.9.0-gui3.28.0
+
+Tag: v0.9.0-gui3.28.0
+Scope: M7 leftovers — successor-signed key revocation feed and reproducible
+build attestation.
+
+## Assets
+
+  ProtonDrive-CLI-0.9.0-GUI-3.28.0-x86_64.AppImage  52750840 bytes
+  revocations.json                                  68 bytes
+  revocations.json.sig                              64 bytes
+  SHA256SUMS                                        115 bytes
+  SHA256SUMS.sig                                    64 bytes
+
+Published AppImage SHA-256:
+  d157fc0d2e30201a1d9be939a0959542207d7b74baa54c52374c5a32732edb60
+
+## Published-release verification
+
+  ProtonDrive-CLI-0.9.0-GUI-3.28.0-x86_64.AppImage: OK
+  signature: SHA256SUMS OK
+  signature: revocations.json OK
+  smoke ok: gui 3.28.0, conf keys 15, local /tmp/proton-verify.JlT1Mq/smoke-home/ProtonDrive, cli true, health status 'ok', theme system (system dark)
+  squashfs-root/AppRun: GLIBC_2.28
+  squashfs-root/usr/bin/proton-drive-gui: GLIBC_2.28
+  squashfs-root/usr/bin/proton-engine: GLIBC_2.28
+
+`scripts/verify-release.sh v0.9.0-gui3.28.0` passed.
+
+## Key revocation feed
+
+`security/key-revocations.json` and `.sig` are signed by the offline successor
+key. The published `main` copies were fetched over HTTPS and verified against
+`src/update-signing-successor.pub`:
+
+  Signature Verified Successfully
+  remote-key-feed: verified
+
+The release gate also checks the feed signature and that the embedded
+successor hex matches the public key file.
+
+## Reproducibility
+
+Local, two independent builds with `SOURCE_DATE_EPOCH=1794494719`:
+
+  5ea634b8053c77794c6ac9bbc594c22c00ca8f3e022719cff141e5aca331adf2  build 1
+  5ea634b8053c77794c6ac9bbc594c22c00ca8f3e022719cff141e5aca331adf2  build 2
+  REPRODUCIBLE: the two builds are byte-identical
+
+CI, release job run 43240742821:
+
+  reproducible: both builds are byte-identical
+
+The two CI builds are also identical to the published AppImage
+`d157fc0d…`, which differs from the local hash only because CI cross-builds
+through cargo-zigbuild/zig to pin the GLIBC 2.28 floor.
+
+## Gate results
+
+- 305 tests passed, 4 ignored.
+- clippy clean (`-D warnings`).
+- Release-gate fixtures 12/12.
+- `scripts/check-release.sh` passed for CLI 0.9.0, GUI 3.28.0.
+- CI run 43240742821: verify and release both succeeded.
+- Releases retained: 37.
+
+Successor public key:
+  f0ed7f4fa4fac94e0bf72931ee0ab16fd4882867c167572c988bec85986444c1
+Successor private key:
+  ~/Backup/proton-update-successor-key.pem (0600, offline).

@@ -34,9 +34,11 @@ correct.
 
 ### 3.28.0
 
-- Tag `v0.9.0-gui3.28.0`; evidence in
-  `docs/audit/evidence/release-3.28.0.txt`.
-- Key feed signed by the offline successor key and verified by the release
-  gate.
-- Reproducibility: two local builds were byte-identical; CI repeats the check
-  on the release commit.
+- Tag `v0.9.0-gui3.28.0`; CI `43240742821` verify + release succeeded.
+- Key feed signed by the offline successor key; the published `main` copy was
+  fetched and verified against `src/update-signing-successor.pub`.
+- Reproducibility: two local builds were byte-identical
+  (`5ea634b8…`); CI repeated the check and published
+  `d157fc0d…` with the GLIBC 2.28 floor.
+- 305 tests, clippy clean, release gate 12/12.
+- Evidence: `docs/audit/evidence/release-3.28.0.txt`.
