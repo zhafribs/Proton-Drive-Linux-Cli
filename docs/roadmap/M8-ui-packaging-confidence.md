@@ -31,5 +31,10 @@
 
 ## Release verification
 
-- Tag `v0.9.0-gui3.29.0`; evidence in
-  `docs/audit/evidence/release-3.29.0.txt`.
+- Tag `v0.9.0-gui3.29.0`; CI `43248371534` verify + release succeeded.
+- 311 tests, clippy clean, release gate 12/12.
+- `scripts/verify-release.sh v0.9.0-gui3.29.0` verified both AppImages, both
+  `.deb` packages, signatures, smoke and GLIBC 2.28 on both architectures.
+- UI audit: 7 pages, 14 dialogs, 7 status variants, keyboard-only navigation
+  and 15 screenshots; CI artifact `ui-audit-screenshots`.
+- Evidence: `docs/audit/evidence/release-3.29.0.txt`.

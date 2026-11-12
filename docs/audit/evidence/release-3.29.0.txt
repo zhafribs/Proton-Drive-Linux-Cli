@@ -1,0 +1,103 @@
+# Release evidence — v0.9.0-gui3.29.0
+
+Tag: v0.9.0-gui3.29.0
+Scope: M8 — UI & Packaging Confidence. Headless page audit, keyboard and
+AccessKit checks, aarch64 AppImage, amd64/arm64 .deb packages.
+
+## Assets
+
+  ProtonDrive-CLI-0.9.0-GUI-3.29.0-x86_64.AppImage   52759032 bytes
+  ProtonDrive-CLI-0.9.0-GUI-3.29.0-aarch64.AppImage  51390984 bytes
+  proton-drive_0.9.0+gui3.29.0_amd64.deb             51870356 bytes
+  proton-drive_0.9.0+gui3.29.0_arm64.deb             50469000 bytes
+  revocations.json                                   68 bytes
+  revocations.json.sig                               64 bytes
+  SHA256SUMS                                         441 bytes
+  SHA256SUMS.sig                                     64 bytes
+
+Published SHA-256:
+
+  6c4558c7f54ef34be78e709e2b4ca4af95ab315b426d31bb5e4f4c387aadc7c9  x86_64 AppImage
+  7c28b53aca4eac652896da5f43c227626fe460416291dd538c8d5f677151ea9c  aarch64 AppImage
+  2eeabf41ae3063bd73e47759bf939751109d4292db7eb373ce5d91982137f6ae  amd64 .deb
+  4c12edc353702553f55c3ae2e88ea0009a31c726cfdc8e6765cc477343ce55f4  arm64 .deb
+
+## Published-release verification
+
+`scripts/verify-release.sh v0.9.0-gui3.29.0`:
+
+  ProtonDrive-CLI-0.9.0-GUI-3.29.0-x86_64.AppImage: OK
+  ProtonDrive-CLI-0.9.0-GUI-3.29.0-aarch64.AppImage: OK
+  proton-drive_0.9.0+gui3.29.0_amd64.deb: OK
+  proton-drive_0.9.0+gui3.29.0_arm64.deb: OK
+  signature: SHA256SUMS OK
+  signature: revocations.json OK
+  smoke ok: gui 3.29.0, conf keys 15, local /tmp/proton-verify.h7Ghrl/smoke-home-x86_64/ProtonDrive, cli true, health status 'ok', theme system (system dark)
+  squashfs-root/AppRun: GLIBC_2.28
+  squashfs-root/usr/bin/proton-drive-gui: GLIBC_2.28
+  squashfs-root/usr/bin/proton-engine: GLIBC_2.28
+  aarch64-root/AppRun: GLIBC_2.28
+  aarch64-root/usr/bin/proton-drive-gui: GLIBC_2.28
+  aarch64-root/usr/bin/proton-engine: GLIBC_2.28
+  deb: proton-drive_0.9.0+gui3.29.0_amd64.deb OK
+  deb: proton-drive_0.9.0+gui3.29.0_arm64.deb OK
+
+## UI audit
+
+`scripts/ui-check.sh` (6 tests):
+
+  every_page_renders_at_the_minimum_window
+  keyboard_only_reaches_settings_and_activates_it
+  status_variants_render_without_missing_names
+  dialogs_render_without_missing_names
+  screenshot_matrix_covers_pages_and_scales
+  kittest_renders_a_frame
+
+- 7 pages (Home, My files, Photos, Activity, Settings, About, Recovery) at
+  720×400.
+- 4 pages at 50% (1440×800 logical) and 200% (720×400 logical on a 2x surface).
+- 14 dialogs and 7 status variants; AccessKit fails any input widget without a
+  screen-reader name.
+- Keyboard: Tab visits at least 5 controls, reaches the Settings nav row and
+  Enter switches to Settings with no pointer events.
+- 15 screenshots in `docs/audit/m8/`; CI artifact `ui-audit-screenshots`
+  (run 43248371534).
+
+Two accessibility defects found and fixed: the Activity filter combo box had
+no accessible name, and the rename/new-folder text field was labelled only by
+a sibling label.
+
+## Packaging
+
+- aarch64 AppImage is an AArch64 ELF; AppRun, GUI, engine and CLI all report
+  GLIBC_2.28. Both architectures are signed by the same manifest.
+- `.deb` files install the tested AppImage under
+  `/usr/lib/proton-drive/`, a `/usr/bin/proton-drive` launcher, the desktop
+  entry, metainfo and icons; control metadata and installed payload were
+  checked for both architectures.
+
+## Reproducibility
+
+Local, current source, two independent builds with
+`SOURCE_DATE_EPOCH=1794496890`:
+
+  ae5e2a29ebc36478bc908d39299ada70a41410ffb2cd66f331dd63db76fec44b  build 1
+  ae5e2a29ebc36478bc908d39299ada70a41410ffb2cd66f331dd63db76fec44b  build 2
+  REPRODUCIBLE: the two builds are byte-identical
+
+CI run 43248371534:
+
+  reproducible: both builds are byte-identical
+
+The published x86_64 hash differs from the local hash because the CI runner
+uses its own cached Rust/zig/mksquashfs environment; each environment's two
+builds are still identical.
+
+## Gate results
+
+- 311 tests passed, 4 ignored.
+- clippy clean (`-D warnings`).
+- Release-gate fixtures 12/12.
+- `scripts/check-release.sh`: OK — CLI 0.9.0, GUI 3.29.0.
+- CI run 43248371534: verify and release both succeeded.
+- Releases retained: 38.

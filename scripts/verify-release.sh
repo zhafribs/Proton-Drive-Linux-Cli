@@ -40,8 +40,8 @@ for app in ProtonDrive-CLI-*-x86_64.AppImage ProtonDrive-CLI-*-aarch64.AppImage;
     esac
     chmod +x "$app"
     if [ "$want" = "$(uname -m)" ]; then
-        HOME="$TMP/smoke-home-$want" XDG_CONFIG_HOME="$TMP/smoke-config-$want" "$app" --smoke
-        "$app" --appimage-extract >/dev/null 2>&1
+        HOME="$TMP/smoke-home-$want" XDG_CONFIG_HOME="$TMP/smoke-config-$want" "./$app" --smoke
+        "./$app" --appimage-extract >/dev/null 2>&1
         root="squashfs-root"
     else
         off="$(grep -abo 'hsqs' "$app" | head -1 | cut -d: -f1)"
