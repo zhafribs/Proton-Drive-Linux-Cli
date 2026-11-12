@@ -44,12 +44,19 @@ for app in ProtonDrive-CLI-*-x86_64.AppImage ProtonDrive-CLI-*-aarch64.AppImage;
         "$app" --appimage-extract >/dev/null 2>&1
         root="squashfs-root"
     else
-        command -v unsquashfs >/dev/null 2>&1 \
-            || { echo "$want: checksum OK; install squashfs-tools to inspect its contents" >&2; continue; }
         off="$(grep -abo 'hsqs' "$app" | head -1 | cut -d: -f1)"
         [ -n "$off" ] || { echo "no squashfs offset in $app" >&2; exit 1; }
         root="$TMP/$want-root"
-        unsquashfs -o "$off" -d "$root" "$app" >/dev/null
+        if command -v unsquashfs >/dev/null 2>&1; then
+            unsquashfs -o "$off" -d "$root" "$app" >/dev/null
+        elif command -v 7z >/dev/null 2>&1; then
+            dd if="$app" bs=1 skip="$off" of="$TMP/$want.squashfs" status=none
+            mkdir -p "$root"
+            7z x -o"$root" "$TMP/$want.squashfs" >/dev/null
+        else
+            echo "$want: checksum OK; install squashfs-tools or 7z to inspect its contents" >&2
+            continue
+        fi
     fi
     for f in "$root/AppRun" "$root/usr/bin/proton-drive-gui" "$root/usr/bin/proton-engine"; do
         glibc_floor "$f"
@@ -64,8 +71,8 @@ for deb in proton-drive_*_amd64.deb proton-drive_*_arm64.deb; do
     darch="${darch%.deb}"
     grep -qx "Architecture: ${darch}" <<<"$control" \
         || { echo "$deb architecture mismatch" >&2; exit 1; }
-    ar p "$deb" data.tar.xz | tar -tJf - \
-        | grep -qx './usr/lib/proton-drive/ProtonDrive.AppImage' \
+    data_list="$(ar p "$deb" data.tar.xz | tar -tJf -)"
+    grep -qx './usr/lib/proton-drive/ProtonDrive.AppImage' <<<"$data_list" \
         || { echo "$deb does not install the AppImage" >&2; exit 1; }
     echo "deb: $deb OK"
 done

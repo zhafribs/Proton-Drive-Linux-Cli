@@ -108,13 +108,14 @@ if [ -z "${CHECK_RELEASE_PUBLIC_KEY:-}" ]; then
         deb="${pair%%:*}"
         darch="${pair##*:}"
         [ -f "$deb" ] || die "missing artifact $(basename "$deb") - run scripts/build-deb.sh all"
-        ar t "$deb" | grep -qx 'debian-binary' || die "$(basename "$deb") is not an ar archive"
+        ar_members="$(ar t "$deb")"
+        grep -qx 'debian-binary' <<<"$ar_members" || die "$(basename "$deb") is not an ar archive"
         control="$(ar p "$deb" control.tar.xz | tar -xJOf - ./control)"
         grep -qx "Package: proton-drive" <<<"$control" || die "$(basename "$deb") has the wrong package name"
         grep -qx "Version: ${VERSION}+gui${GUI_VERSION}" <<<"$control" || die "$(basename "$deb") has the wrong version"
         grep -qx "Architecture: ${darch}" <<<"$control" || die "$(basename "$deb") has the wrong architecture"
-        ar p "$deb" data.tar.xz | tar -tJf - \
-            | grep -qx './usr/lib/proton-drive/ProtonDrive.AppImage' \
+        data_list="$(ar p "$deb" data.tar.xz | tar -tJf -)"
+        grep -qx './usr/lib/proton-drive/ProtonDrive.AppImage' <<<"$data_list" \
             || die "$(basename "$deb") does not install the AppImage"
     done
 fi
