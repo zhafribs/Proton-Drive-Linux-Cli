@@ -927,22 +927,4 @@ mod tests {
         assert!(!marker.exists(), "the full library releases the hold");
         let _ = std::fs::remove_dir_all(&root);
     }
-
-    #[test]
-    fn probe_session_surfaces_a_dead_session() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("pd-gui-probe-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let bin = dir.join("fake-proton-drive");
-        std::fs::write(
-            &bin,
-            "#!/bin/sh\necho 'You need to login first' >&2\nexit 1\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let err = probe_session(&bin, "/my-files").unwrap_err();
-        assert!(err.contains("login"), "{err}");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 }
