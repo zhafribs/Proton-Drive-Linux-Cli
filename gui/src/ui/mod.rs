@@ -341,6 +341,8 @@ pub struct App {
     pub settings_tab: usize,
     pub upd: UpdateUi,
 
+    /// First-run wizard page; `None` once finished or skipped.
+    pub onboarding: Option<u8>,
     pub hidden: bool,
     pub hide_on_start: bool,
     pub quitting: bool,
@@ -721,6 +723,7 @@ impl App {
             release::update_confirm_health(&paths);
         }
         let prefs = prefs::Prefs::load(&paths.prefs_file);
+        crate::i18n::set(prefs.language());
         // Read the desktop's scheme before the first frame so the first paint
         // already matches it (Linux never reports it to egui itself).
         let detected_theme = system_theme::detect();
@@ -817,6 +820,7 @@ impl App {
         let tray = tray::spawn(tx.clone(), icon_rgba, icon_w);
 
         let nav_width = prefs.nav_width;
+        let onboarding = (!prefs.onboarding_done()).then_some(0);
         let hide_on_start = prefs.start_in_tray();
         let prefs_baseline = Some(prefs.clone());
         let paused_by_user = paths.state_dir.join("paused").exists();
@@ -892,6 +896,7 @@ impl App {
             tray,
             wayland_fallback,
             relaunch_slot,
+            onboarding,
         }))
     }
 
@@ -1203,6 +1208,34 @@ impl App {
             });
             return;
         };
+        if crate::paths::in_flatpak() {
+            self.dialog = Some(Dialog::Info {
+                title: "Sign in".into(),
+                body: "Run this in a terminal on this computer:\n\n    flatpak run \
+                       --command=proton-drive io.github.zhafribs.protondrivecli auth login\n\n\
+                       Finish the browser sign-in there; this window will notice when \
+                       the session appears."
+                    .into(),
+            });
+            // The sandbox has no host terminal to open. Poll the same session
+            // the CLI writes so onboarding can continue without a restart.
+            let tx = self.ctx.tx.clone();
+            self.login_started = Some(Instant::now());
+            std::thread::spawn(move || {
+                for _ in 0..60 {
+                    std::thread::sleep(Duration::from_secs(5));
+                    if let Some(c) = cli::resolve_cli() {
+                        let id = cli::fetch_identity(&c);
+                        let logged = id.logged_in;
+                        let _ = tx.send(Back::Identity(id));
+                        if logged {
+                            break;
+                        }
+                    }
+                }
+            });
+            return;
+        }
         match cli::find_terminal() {
             Some((exe, args)) => {
                 self.login_started = Some(Instant::now());
@@ -2037,9 +2070,9 @@ impl App {
         let label = if let Some(email) = email.as_deref() {
             email
         } else if self.ctx.identity.is_some() {
-            "Signed out"
+            crate::i18n::tr("Signed out", "Log keluar")
         } else {
-            "Checking\u{2026}"
+            crate::i18n::tr("Checking\u{2026}", "Menyemak\u{2026}")
         };
         let signed_in = !matches!(
             self.ui_status(),
@@ -2048,9 +2081,15 @@ impl App {
                 | health::UiStatus::SigningIn
         ) && (self.logged_in() || self.last_email.is_some());
         let hint = if signed_in {
-            "Account \u{b7} click to sign out"
+            crate::i18n::tr(
+                "Account \u{b7} click to sign out",
+                "Akaun \u{b7} klik untuk log keluar",
+            )
         } else {
-            "Account \u{b7} click to sign in"
+            crate::i18n::tr(
+                "Account \u{b7} click to sign in",
+                "Akaun \u{b7} klik untuk log masuk",
+            )
         };
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 46.0), egui::Sense::click());
@@ -2064,7 +2103,10 @@ impl App {
             egui::WidgetInfo::labeled(
                 egui::Role::Button,
                 ui.is_enabled(),
-                format!("Account menu - {account_name}"),
+                format!(
+                    "{} - {account_name}",
+                    crate::i18n::tr("Account menu", "Menu akaun")
+                ),
             )
         });
         // Glass pill: accent-glow edge on hover/focus, presence dot on the
@@ -2170,11 +2212,18 @@ impl App {
                 ui.separator();
                 ui.add_space(6.0);
                 if signed_in {
-                    if account_action(ui, "Sign out", true) {
+                    if account_action(
+                        ui,
+                        crate::i18n::tr("Sign out", "Log keluar"),
+                        true,
+                    ) {
                         self.dialog = Some(Dialog::ConfirmLogout);
                         ui.close();
                     }
-                } else if widgets::primary_button_full(ui, "Sign in") {
+                } else if widgets::primary_button_full(
+                    ui,
+                    crate::i18n::tr("Sign in", "Log masuk"),
+                ) {
                     self.action_login();
                     ui.close();
                 }
@@ -2233,7 +2282,11 @@ impl App {
                         toasts: &mut self.toasts,
                         now,
                     };
-                    activity::draw(&mut view, ui, "Activity");
+                    activity::draw(
+                        &mut view,
+                        ui,
+                        crate::i18n::tr("Activity", "Aktiviti"),
+                    );
                 }
                 Page::Settings => {
                     let mut actions = Vec::new();
@@ -2359,6 +2412,218 @@ impl App {
         }
         if dismiss {
             self.toasts.pop_front();
+        }
+    }
+
+    fn finish_onboarding(&mut self) {
+        self.onboarding = None;
+        self.ctx.prefs.set_bool("onboarding_done", true);
+    }
+
+    /// First-run guide. It is a plain window, not a modal dialog, so the
+    /// regular Escape/close paths still work and the UI audit can render it.
+    fn onboarding_ui(&mut self, ctx: &egui::Context) {
+        let Some(step) = self.onboarding else { return };
+        if self.dialog.is_some() || self.quitting {
+            return;
+        }
+        let local = self
+            .ctx
+            .conf
+            .get("PROTON_SYNC_LOCAL")
+            .filter(|s| !s.trim().is_empty())
+            .cloned()
+            .unwrap_or_else(|| "~/ProtonDrive".to_string());
+        let mut next = None;
+        let mut finish = false;
+        egui::Window::new(crate::i18n::tr(
+            "Set up Proton Drive",
+            "Sediakan Proton Drive",
+        ))
+            .id(egui::Id::unique("onboarding"))
+            .collapsible(false)
+            .resizable(false)
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_max_width(430.0);
+                match step {
+                    0 => {
+                        ui.heading(crate::i18n::tr(
+                            "Sync your Drive with this computer",
+                            "Segerakkan Drive anda dengan komputer ini",
+                        ));
+                        ui.add_space(6.0);
+                        ui.label(crate::i18n::tr(
+                            "Proton Drive keeps a local folder and your cloud files in \
+                             step. Sign in with your Proton account, choose where the \
+                             folder should live, and the app handles the rest.",
+                            "Proton Drive memastikan folder tempatan dan fail awan anda \
+                             sentiasa seiring. Log masuk dengan akaun Proton, pilih \
+                             lokasi folder, dan aplikasi ini menguruskan selebihnya.",
+                        ));
+                        ui.add_space(10.0);
+                        ui.label(
+                            egui::RichText::new(crate::i18n::tr(
+                                "Your password goes to Proton's official CLI, never to \
+                                 this app.",
+                                "Kata laluan anda hanya diberikan kepada CLI rasmi \
+                                 Proton, bukan kepada aplikasi ini.",
+                            ))
+                            .size(11.5)
+                            .weak(),
+                        );
+                        ui.add_space(14.0);
+                        ui.horizontal(|ui| {
+                            if widgets::primary_button(
+                                ui,
+                                crate::i18n::tr("Get started", "Mula"),
+                            ) {
+                                next = Some(1);
+                            }
+                            if ui
+                                .button(crate::i18n::tr("Skip setup", "Langkau persediaan"))
+                                .clicked()
+                            {
+                                finish = true;
+                            }
+                        });
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(crate::i18n::tr(
+                                    "Language:",
+                                    "Bahasa:",
+                                ))
+                                .size(11.5)
+                                .weak(),
+                            );
+                            for lang in [
+                                crate::i18n::Language::English,
+                                crate::i18n::Language::Malay,
+                            ] {
+                                if ui
+                                    .selectable_label(
+                                        crate::i18n::current() == lang,
+                                        lang.label(),
+                                    )
+                                    .clicked()
+                                {
+                                    crate::i18n::set(lang);
+                                    self.ctx.prefs.set("language", lang.code());
+                                    ui.ctx().request_repaint();
+                                }
+                            }
+                        });
+                    }
+                    1 => {
+                        ui.heading(crate::i18n::tr("Sign in", "Log masuk"));
+                        ui.add_space(6.0);
+                        if self.logged_in() {
+                            let who = self.ctx.identity.as_ref()
+                                .and_then(|i| i.email.as_deref())
+                                .or(self.last_email.as_deref())
+                                .unwrap_or(crate::i18n::tr(
+                                    "your Proton account",
+                                    "akaun Proton anda",
+                                ));
+                            ui.label(
+                                crate::i18n::tr(
+                                    "Signed in as {who}.",
+                                    "Log masuk sebagai {who}.",
+                                )
+                                .replace("{who}", who),
+                            );
+                        } else {
+                            ui.label(crate::i18n::tr(
+                                "Sign in with your Proton account. The CLI opens the \
+                                 browser sign-in; this app never sees your password.",
+                                "Log masuk dengan akaun Proton anda. CLI membuka log \
+                                 masuk pelayar; aplikasi ini tidak melihat kata laluan \
+                                 anda.",
+                            ));
+                            ui.add_space(12.0);
+                            ui.horizontal(|ui| {
+                                if widgets::primary_button(
+                                    ui,
+                                    crate::i18n::tr("Sign in", "Log masuk"),
+                                ) {
+                                    self.action_login();
+                                    next = Some(2);
+                                }
+                                if ui
+                                    .button(crate::i18n::tr(
+                                        "I'm already signed in",
+                                        "Saya sudah log masuk",
+                                    ))
+                                    .clicked()
+                                {
+                                    next = Some(2);
+                                }
+                            });
+                        }
+                        ui.add_space(10.0);
+                        if ui.button(crate::i18n::tr("Back", "Kembali")).clicked() {
+                            next = Some(0);
+                        }
+                    }
+                    _ => {
+                        ui.heading(crate::i18n::tr(
+                            "Choose your sync folder",
+                            "Pilih folder segerak anda",
+                        ));
+                        ui.add_space(6.0);
+                        ui.label(crate::i18n::tr(
+                            "Files will sync to:",
+                            "Fail akan disegerakkan ke:",
+                        ));
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&local).monospace().strong(),
+                            )
+                            .wrap(),
+                        );
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new(crate::i18n::tr(
+                                "Change it now, or later in Settings. The folder must \
+                                 be on a local disk, not a network mount.",
+                                "Tukar sekarang atau kemudian dalam Tetapan. Folder \
+                                 mestilah pada cakera tempatan, bukan mount rangkaian.",
+                            ))
+                            .size(11.5)
+                            .weak(),
+                        );
+                        ui.add_space(14.0);
+                        ui.horizontal(|ui| {
+                            if widgets::primary_button(
+                                ui,
+                                crate::i18n::tr("Finish", "Selesai"),
+                            ) {
+                                finish = true;
+                            }
+                            if ui
+                                .button(crate::i18n::tr(
+                                    "Choose folder...",
+                                    "Pilih folder...",
+                                ))
+                                .clicked()
+                            {
+                                self.page = Page::Settings;
+                                self.settings_tab = 0;
+                                finish = true;
+                            }
+                            if ui.button("Back").clicked() {
+                                next = Some(1);
+                            }
+                        });
+                    }
+                }
+            });
+        if finish {
+            self.finish_onboarding();
+        } else if let Some(step) = next {
+            self.onboarding = Some(step);
         }
     }
 
@@ -3353,6 +3618,7 @@ impl App {
             self.toast_ui(&ctx);
         }
         self.dialog_ui(&ctx);
+        self.onboarding_ui(&ctx);
     }
 }
 

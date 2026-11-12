@@ -1114,7 +1114,7 @@ pub fn draw(app: &mut PhotoView, ui: &mut egui::Ui) {
     let narrow = ui.available_width() < 420.0;
     if sel.is_empty() && !narrow {
         ui.horizontal(|ui| {
-            widgets::page_title(ui, "Photos");
+            widgets::page_title(ui, crate::i18n::tr("Photos", "Foto"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.allocate_ui_with_layout(
                     egui::vec2(325.0, 30.0),
@@ -1125,7 +1125,7 @@ pub fn draw(app: &mut PhotoView, ui: &mut egui::Ui) {
         });
     } else {
         ui.horizontal(|ui| {
-            widgets::page_title(ui, "Photos");
+            widgets::page_title(ui, crate::i18n::tr("Photos", "Foto"));
         });
         if sel.is_empty() {
             ui.add_space(6.0);

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Flatpak entry point: run the GUI, and tell it where the bundled official CLI
+# lives. The GUI starts the engine itself because the sandbox has no systemd.
+export PROTON_DRIVE_BIN=/app/bin/proton-drive
+exec /app/bin/proton-drive-gui "$@"

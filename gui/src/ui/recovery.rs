@@ -124,7 +124,7 @@ pub fn draw(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                widgets::page_title(ui, "Recovery");
+                widgets::page_title(ui, crate::i18n::tr("Recovery", "Pemulihan"));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let busy = ctx.state.busy
                         || ctx.state.loading

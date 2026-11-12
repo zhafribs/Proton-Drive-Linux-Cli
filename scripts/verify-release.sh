@@ -64,6 +64,10 @@ for app in ProtonDrive-CLI-*-x86_64.AppImage ProtonDrive-CLI-*-aarch64.AppImage;
     rm -rf "$root"
 done
 
+flatpak_bundle="$(ls proton-drive_*_x86_64.flatpak 2>/dev/null | head -1 || true)"
+[ -n "$flatpak_bundle" ] || { echo "missing Flatpak bundle" >&2; exit 1; }
+echo "flatpak: $flatpak_bundle OK"
+
 for deb in proton-drive_*_amd64.deb proton-drive_*_arm64.deb; do
     [ -f "$deb" ] || { echo "missing deb: $deb" >&2; exit 1; }
     control="$(ar p "$deb" control.tar.xz | tar -xJOf - ./control)"

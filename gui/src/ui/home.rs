@@ -227,7 +227,12 @@ fn draw_inner(app: &mut HomeView, ui: &mut egui::Ui) {
 
     let full = ui.available_width();
     if full < 640.0 {
-        if activity::draw_preview(app.changes, ui, "Recent activity", 4) {
+        if activity::draw_preview(
+            app.changes,
+            ui,
+            crate::i18n::tr("Recent activity", "Aktiviti terkini"),
+            4,
+        ) {
             app.actions.push(HomeAction::OpenActivity);
         }
         ui.add_space(12.0);
@@ -240,7 +245,12 @@ fn draw_inner(app: &mut HomeView, ui: &mut egui::Ui) {
                 egui::vec2(left, 0.0),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
-                    if activity::draw_preview(app.changes, ui, "Recent activity", 4) {
+                    if activity::draw_preview(
+                        app.changes,
+                        ui,
+                        crate::i18n::tr("Recent activity", "Aktiviti terkini"),
+                        4,
+                    ) {
                         app.actions.push(HomeAction::OpenActivity);
                     }
                 },
@@ -264,12 +274,22 @@ fn page_head(
     signing_in: bool,
 ) {
     ui.horizontal(|ui| {
-        widgets::page_title(ui, "Home");
+        widgets::page_title(ui, crate::i18n::tr("Home", "Utama"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if signing_in {
-                ui.label(egui::RichText::new("Signing in\u{2026}").weak());
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr(
+                        "Signing in\u{2026}",
+                        "Sedang log masuk\u{2026}",
+                    ))
+                    .weak(),
+                );
             } else if signed_out || needs_login {
-                let label = if needs_login { "  Sign in again" } else { "  Sign in" };
+                let label = if needs_login {
+                    crate::i18n::tr("  Sign in again", "  Log masuk semula")
+                } else {
+                    crate::i18n::tr("  Sign in", "  Log masuk")
+                };
                 if widgets::primary_button_hint(
                     ui,
                     label,
@@ -281,7 +301,7 @@ fn page_head(
                 if app.active
                     && widgets::primary_button_hint(
                         ui,
-                        "  Sync now",
+                        crate::i18n::tr("  Sync now", "  Segerak sekarang"),
                         "Run a full check now.",
                     )
                 {
@@ -289,17 +309,17 @@ fn page_head(
                 }
                 if widgets::secondary_button_hint(
                     ui,
-                    "  Open local folder",
+                    crate::i18n::tr("  Open local folder", "  Buka folder tempatan"),
                     "Open your Proton Drive folder in the file manager.",
                 ) {
                     app.action_open_folder();
                 }
                 let pause_label = if app.active {
-                    "  Pause"
+                    crate::i18n::tr("  Pause", "  Jeda")
                 } else if app.paused_by_user {
-                    "  Resume"
+                    crate::i18n::tr("  Resume", "  Sambung")
                 } else {
-                    "  Start syncing"
+                    crate::i18n::tr("  Start syncing", "  Mula menyegerak")
                 };
                 let pause_hint = if app.active {
                     "Pause syncing: pick 15 minutes, 1 hour, or until you resume."
@@ -335,21 +355,45 @@ fn metrics(app: &HomeView, ui: &mut egui::Ui) {
         .unwrap_or_else(|| "Not yet".to_string());
 
     ui.columns(3, |cols| {
-        widgets::metric(&mut cols[0], "Files", &files, "In your sync folder");
-        widgets::metric(&mut cols[1], "On disk", &bytes, "Local copy");
-        widgets::metric(&mut cols[2], "Last check", &last, "Background audit");
+        widgets::metric(
+            &mut cols[0],
+            crate::i18n::tr("Files", "Fail"),
+            &files,
+            crate::i18n::tr("In your sync folder", "Dalam folder segerak anda"),
+        );
+        widgets::metric(
+            &mut cols[1],
+            crate::i18n::tr("On disk", "Pada cakera"),
+            &bytes,
+            crate::i18n::tr("Local copy", "Salinan tempatan"),
+        );
+        widgets::metric(
+            &mut cols[2],
+            crate::i18n::tr("Last check", "Semakan terakhir"),
+            &last,
+            crate::i18n::tr("Background audit", "Audit latar belakang"),
+        );
     });
 }
 
 fn cloud_storage(app: &HomeView, ui: &mut egui::Ui) {
     let quota = cloud::quota_usage(&app.ctx.paths.state_dir.join("quota.json"));
-    widgets::card(ui, Some("Cloud storage"), |ui| {
+    widgets::card(
+        ui,
+        Some(crate::i18n::tr("Cloud storage", "Storan awan")),
+        |ui| {
         let Some((used, total, drive, fetched)) = quota else {
             ui.label(
                 egui::RichText::new(if app.active {
-                    "Waiting for the sync service to report your storage quota."
+                    crate::i18n::tr(
+                        "Waiting for the sync service to report your storage quota.",
+                        "Menunggu perkhidmatan segerak melaporkan kuota storan anda.",
+                    )
                 } else {
-                    "Start syncing to load your cloud storage quota."
+                    crate::i18n::tr(
+                        "Start syncing to load your cloud storage quota.",
+                        "Mulakan penyegerakan untuk memuatkan kuota storan awan anda.",
+                    )
                 })
                 .size(12.0)
                 .weak(),
@@ -435,12 +479,27 @@ fn sync_details(app: &mut HomeView, ui: &mut egui::Ui) {
         .map(interval_label)
         .unwrap_or_else(|| "\u{2014}".to_string());
 
-    widgets::card(ui, Some("Sync details"), |ui| {
-        detail_row(ui, "Next check", &next);
-        detail_row(ui, "Cloud walk", &cloud_walk);
-        detail_row(ui, "App build", &engine);
-        detail_row(ui, "Remote folder", &remote);
-        detail_row(ui, "Check interval", &interval);
+    widgets::card(
+        ui,
+        Some(crate::i18n::tr("Sync details", "Butiran segerak")),
+        |ui| {
+            detail_row(
+                ui,
+                crate::i18n::tr("Next check", "Semakan seterusnya"),
+                &next,
+            );
+            detail_row(ui, crate::i18n::tr("Cloud walk", "Laluan awan"), &cloud_walk);
+            detail_row(ui, crate::i18n::tr("App build", "Binaan aplikasi"), &engine);
+            detail_row(
+                ui,
+                crate::i18n::tr("Remote folder", "Folder jauh"),
+                &remote,
+            );
+            detail_row(
+                ui,
+                crate::i18n::tr("Check interval", "Selang semakan"),
+                &interval,
+            );
     });
 }
 

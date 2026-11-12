@@ -1,3 +1,20 @@
+## 3.31.0 — 2026-11-13
+
+### First run, language and Flatpak
+
+- **First-run setup.** A short wizard welcomes new users, explains that sync
+  starts with a sign-in and a folder, and links straight to Settings. It is
+  shown once and can be skipped.
+- **Flatpak bundle.** `proton-drive_*_x86_64.flatpak` installs the same tested
+  binaries with a sandbox, a desktop entry and a launcher. Updates, the menu
+  entry and login are Flatpak-aware; sign-in shows the exact `flatpak run`
+  command because the sandbox has no host terminal.
+- **Bahasa Melayu (beta).** A language selector in Appearance and first-run
+  setup translates the setup flow, sidebar, sync status and Home. Other pages
+  remain English until their strings are translated; the UI says so.
+- **Sandbox honesty.** Flatpak hides the AppImage update/download controls and
+  the host autostart/menu toggles instead of offering buttons that cannot work.
+
 ## 3.30.0 — 2026-11-13
 
 ### Sync reliability and diagnostics

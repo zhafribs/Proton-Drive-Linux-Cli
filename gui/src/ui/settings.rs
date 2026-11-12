@@ -128,6 +128,7 @@ pub struct Draft {
     pub autostart_touched: bool,
     pub appstart_touched: bool,
     pub theme_idx: usize,
+    pub language: crate::i18n::Language,
     pub ui_scale_pct: u16,
     pub motion: bool,
     pub updates_auto: bool,
@@ -196,6 +197,7 @@ impl Draft {
                 crate::prefs::Theme::Light => 1,
                 crate::prefs::Theme::Dark => 2,
             },
+            language: prefs.language(),
             ui_scale_pct: prefs.ui_scale().percent(),
             motion: prefs.motion_enabled(),
             updates_auto: prefs.updates_auto(),
@@ -438,7 +440,7 @@ pub fn draw(app: &mut SettingsView, ui: &mut egui::Ui) {
                 ui.add_space(pad);
                 ui.vertical(|ui| {
                     ui.set_width(width);
-                    widgets::page_title(ui, "Settings");
+                    widgets::page_title(ui, crate::i18n::tr("Settings", "Tetapan"));
                     ui.add_space(16.0);
                     tab_bar(app, ui);
                     ui.add_space(10.0);
@@ -1233,6 +1235,34 @@ fn appearance_card(app: &mut SettingsView, ui: &mut egui::Ui) {
             );
         }
         ui.add_space(4.0);
+        labeled_control(ui, "Language / Bahasa", |ui| {
+            egui::ComboBox::from_id_salt("language")
+                .selected_text(app.draft.language.label())
+                .show_ui(ui, |ui| {
+                    for lang in [
+                        crate::i18n::Language::English,
+                        crate::i18n::Language::Malay,
+                    ] {
+                        if ui
+                            .selectable_value(&mut app.draft.language, lang, lang.label())
+                            .changed()
+                        {
+                            crate::i18n::set(lang);
+                            app.ctx.prefs.set("language", lang.code());
+                            ui.ctx().request_repaint();
+                        }
+                    }
+                });
+        });
+        ui.label(
+            egui::RichText::new(
+                "Bahasa Melayu currently covers first-run setup, the sidebar, \
+                 status and Home; other pages remain English.",
+            )
+            .size(11.0)
+            .weak(),
+        );
+        ui.add_space(4.0);
         let mut motion = app.draft.motion;
         if widgets::toggle(
             ui,
@@ -1333,6 +1363,17 @@ fn appearance_card(app: &mut SettingsView, ui: &mut egui::Ui) {
 
 fn updates_card(app: &mut SettingsView, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Updates"), |ui| {
+        if crate::paths::in_flatpak() {
+            ui.label(
+                egui::RichText::new(
+                    "This Flatpak is updated by your software center. The app still \
+                     checks for new versions so you can see when one is available.",
+                )
+                .size(11.5)
+                .weak(),
+            );
+            ui.add_space(4.0);
+        }
         let mut v = app.draft.updates_auto;
         if widgets::toggle(ui, "Check for new versions automatically", &mut v, None) {
             app.draft.updates_auto = v;
@@ -1366,6 +1407,17 @@ fn updates_card(app: &mut SettingsView, ui: &mut egui::Ui) {
 
 fn install_card(app: &mut SettingsView, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Installing on Linux"), |ui| {
+        if crate::paths::in_flatpak() {
+            ui.label(
+                egui::RichText::new(
+                    "Managed by Flatpak: the menu entry, updates and login all \
+                     belong to the sandbox. Sync starts when this window opens.",
+                )
+                .size(11.5)
+                .weak(),
+            );
+            return;
+        }
         let installed = desktop::menu_installed(&app.ctx.paths);
         ui.label(
             egui::RichText::new(if installed {

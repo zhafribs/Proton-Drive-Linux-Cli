@@ -43,6 +43,9 @@ impl CliLock {
     /// show a folder because the engine is busy would be worse - but it is
     /// then unprotected, so a session loss stays possible in that case.
     pub fn acquire(path: &Path, wait: Duration) -> Option<Self> {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         let file = OpenOptions::new()
             .create(true)
             .write(true)

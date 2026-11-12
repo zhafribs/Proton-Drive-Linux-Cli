@@ -166,6 +166,14 @@ impl Prefs {
     pub fn close_to_tray(&self) -> bool {
         self.bool_of("close_to_tray", true)
     }
+    pub fn onboarding_done(&self) -> bool {
+        self.bool_of("onboarding_done", false)
+    }
+    pub fn language(&self) -> crate::i18n::Language {
+        crate::i18n::Language::from_str(
+            self.values.get("language").map(String::as_str).unwrap_or("en"),
+        )
+    }
 
     /// Animate status changes / request continuous repaints.
     pub fn motion_enabled(&self) -> bool {

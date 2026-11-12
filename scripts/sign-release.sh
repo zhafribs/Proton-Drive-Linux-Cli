@@ -45,6 +45,7 @@ artifacts=(
     "$ROOT/dist/ProtonDrive-CLI-${VERSION}-GUI-${GUI_VERSION}-aarch64.AppImage"
     "$ROOT/dist/proton-drive_${VERSION}+gui${GUI_VERSION}_amd64.deb"
     "$ROOT/dist/proton-drive_${VERSION}+gui${GUI_VERSION}_arm64.deb"
+    "$ROOT/dist/proton-drive_${VERSION}+gui${GUI_VERSION}_x86_64.flatpak"
 )
 ( cd "$ROOT/dist" && for f in "${artifacts[@]}"; do
     [ -f "$f" ] && sha256sum "$(basename "$f")"

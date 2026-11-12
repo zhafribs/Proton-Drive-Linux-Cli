@@ -14,6 +14,14 @@ pub const RELEASE_PAGE: &str =
     "https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/latest";
 pub const JOURNAL_UNIT: &str = "proton-sync";
 
+/// True inside the Flatpak sandbox. Flatpak owns updates, the menu entry and
+/// login (the sandbox has no host terminal), so those paths must not pretend
+/// to work like the AppImage.
+pub fn in_flatpak() -> bool {
+    std::env::var_os("PROTON_SYNC_FLATPAK").is_some()
+        || std::path::Path::new("/.flatpak-info").is_file()
+}
+
 #[derive(Clone)]
 pub struct Paths {
     pub conf_file: PathBuf,

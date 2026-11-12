@@ -9,6 +9,7 @@ mod conf;
 mod desktop;
 mod exec;
 mod health;
+mod i18n;
 mod journal;
 mod notify;
 mod paths;
@@ -28,7 +29,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// The GUI's own version (the release tag is `v<CLI>-gui<GUI>`).
-pub const GUI_VERSION: &str = "3.30.0";
+pub const GUI_VERSION: &str = "3.31.0";
 
 /// The systemd user unit path (shared with `service.rs`).
 pub fn service_unit_path() -> PathBuf {

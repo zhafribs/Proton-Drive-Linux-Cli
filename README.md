@@ -1,4 +1,4 @@
-# Proton Drive for Linux — AppImage + deb
+# Proton Drive for Linux — AppImage, deb + Flatpak
 
 ![Latest release](https://img.shields.io/github/v/release/zhafribs/Proton-Drive-Linux-Cli)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
@@ -17,7 +17,7 @@ no AUR.
 > Unofficial. Not affiliated with, endorsed, sponsored or supported by Proton
 > AG. "Proton Drive" is a trademark of Proton AG.
 
-**[Download the latest AppImage or .deb →](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/latest)**
+**[Download the latest AppImage, .deb or Flatpak →](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/latest)**
 
 Every published build stays on the releases page; older releases are never
 pruned automatically.
@@ -32,13 +32,19 @@ pruned automatically.
    ```bash
    sudo apt install ./proton-drive_*_amd64.deb
    ```
+   Or install the x86_64 Flatpak:
+   ```bash
+   flatpak install --user ./proton-drive_*_x86_64.flatpak
+   flatpak run io.github.zhafribs.protondrivecli
+   ```
 2. Run it and click **Sign in** in the bottom-left account pill — Proton's CLI
    opens a terminal for 2FA.
 3. **Settings → pick your sync folder → Save.** The app installs a systemd
    *user* service; from then on `~/ProtonDrive` mirrors your Drive.
 
 Works on x86_64 and aarch64 Linux with **glibc ≥ 2.28** and FUSE, with or
-without a systemd user session. If it won't start:
+without a systemd user session. The Flatpak is x86_64 only; see
+[docs/FLATPAK.md](docs/FLATPAK.md). If it won't start:
 install `libfuse2` / `fuse2` / `fuse-libs`, or run with
 `APPIMAGE_EXTRACT_AND_RUN=1`.
 
@@ -110,6 +116,9 @@ modes and what actually fixes each one.
 - **Settings** — selective sync, never-sync patterns, instant upload, check
   intervals, notifications, light/dark/system theme, interface size, tray,
   start-at-login, menu install and **in-app updates** (SHA-256 verified).
+- **First run and language** — a one-time setup wizard; English or Bahasa
+  Melayu (beta) for setup, navigation, status and Home. Other pages stay
+  English until translated; see [docs/LOCALIZATION.md](docs/LOCALIZATION.md).
 - **Portable sync** — the systemd user unit is used when available; without
   it the GUI supervises the engine, restarts it after a crash and adopts the
   running process after a GUI restart.
@@ -153,8 +162,9 @@ Install Rust with [rustup](https://rustup.rs/), then `wget` and
 `rsvg-convert` (optional: `desktop-file-validate`, `appstreamcli`):
 
 ```bash
-./build.sh                 # x86_64 and aarch64 AppImages
-./scripts/build-deb.sh all # matching .deb packages
+./build.sh                    # x86_64 and aarch64 AppImages
+./scripts/build-deb.sh all    # matching .deb packages
+./scripts/build-flatpak.sh    # x86_64 Flatpak bundle
 ```
 
 `build.sh` downloads and **SHA-512-verifies** Proton's CLI, builds the Rust
@@ -171,6 +181,7 @@ crates/engine/       two-way Rust sync engine
 crates/apprun/       Rust AppImage entry point
 build.sh             download -> verify -> build -> package -> validate
 scripts/build-deb.sh install the tested AppImage as a Debian package
+scripts/build-flatpak.sh ship the tested AppImage in a Flatpak sandbox
 upstream.lock        Proton CLI version + SHA-512s (written by check-upstream.sh)
 scripts/             upstream check, release notes, licence texts, dev install
 ```

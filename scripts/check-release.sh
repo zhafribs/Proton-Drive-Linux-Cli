@@ -30,6 +30,7 @@ APPIMAGE="$DIST/ProtonDrive-CLI-${VERSION}-GUI-${GUI_VERSION}-x86_64.AppImage"
 APPIMAGE_ARM64="$DIST/ProtonDrive-CLI-${VERSION}-GUI-${GUI_VERSION}-aarch64.AppImage"
 DEB_AMD64="$DIST/proton-drive_${VERSION}+gui${GUI_VERSION}_amd64.deb"
 DEB_ARM64="$DIST/proton-drive_${VERSION}+gui${GUI_VERSION}_arm64.deb"
+FLATPAK="$DIST/proton-drive_${VERSION}+gui${GUI_VERSION}_x86_64.flatpak"
 [ -f "$APPIMAGE" ] || die "missing artifact $(basename "$APPIMAGE")"
 [ -f "$DIST/SHA256SUMS" ] || die "dist/SHA256SUMS missing"
 
@@ -104,6 +105,8 @@ if [ -z "${CHECK_RELEASE_PUBLIC_KEY:-}" ]; then
     [ -f "$APPIMAGE_ARM64" ] || die "missing artifact $(basename "$APPIMAGE_ARM64")"
     [ "$(elf_machine "$APPIMAGE_ARM64")" = "AArch64" ] \
         || die "aarch64 AppImage is not an AArch64 ELF"
+    [ -f "$FLATPAK" ] || die "missing artifact $(basename "$FLATPAK") - run scripts/build-flatpak.sh"
+    [ -s "$FLATPAK" ] || die "$(basename "$FLATPAK") is empty"
     for pair in "$DEB_AMD64:amd64" "$DEB_ARM64:arm64"; do
         deb="${pair%%:*}"
         darch="${pair##*:}"
@@ -123,7 +126,7 @@ fi
 # --- checksums and the version-bump guard.
 ( cd "$DIST" && sha256sum -c --ignore-missing SHA256SUMS >/dev/null ) \
     || die "dist/SHA256SUMS does not match the built AppImage"
-for artifact in "$APPIMAGE" "$APPIMAGE_ARM64" "$DEB_AMD64" "$DEB_ARM64"; do
+for artifact in "$APPIMAGE" "$APPIMAGE_ARM64" "$DEB_AMD64" "$DEB_ARM64" "$FLATPAK"; do
     if [ -f "$artifact" ]; then
         grep -q "  $(basename "$artifact")\$" "$DIST/SHA256SUMS" \
             || die "dist/SHA256SUMS has no entry for $(basename "$artifact")"

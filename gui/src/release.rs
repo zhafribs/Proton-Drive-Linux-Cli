@@ -854,6 +854,11 @@ fn download_plan(
 /// Download the AppImage for this machine, verify the signed checksum
 /// manifest, then verify the AppImage against that manifest.
 pub fn download_update(rel: &Release, arch: &str) -> Result<std::path::PathBuf, String> {
+    if crate::paths::in_flatpak() {
+        return Err(
+            "This Flatpak is updated by your software center, not by the app.".to_string(),
+        );
+    }
     let plan = download_plan(rel, arch, appimage_path().as_deref())?;
 
     // Signature first: a checksum is only trustworthy when the manifest that

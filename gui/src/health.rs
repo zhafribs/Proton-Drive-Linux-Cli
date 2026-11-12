@@ -3,6 +3,7 @@
 
 pub use proton_core::health::{Health, is_login_error, is_network_error, read};
 
+use crate::i18n::tr;
 use crate::util::rel_time;
 
 /// The states the Home orb can show. Each has its own colour and glyph.
@@ -118,17 +119,17 @@ pub fn derive_status(
 /// A short status label for pills and the sidebar footer.
 pub fn short_label(key: &str) -> &'static str {
     match key {
-        "synced" => "Synced",
-        "syncing" => "Syncing",
-        "paused" => "Paused",
-        "needs_login" => "Session expired",
-        "signed_out" => "Not signed in",
-        "signing_in" => "Signing in",
-        "engine_stopped" => "Engine stopped",
-        "deletes_held" => "Deletions held",
-        "starting" => "Starting",
-        "error" => "Sync error",
-        _ => "Checking",
+        "synced" => tr("Synced", "Disegerakkan"),
+        "syncing" => tr("Syncing", "Menyegerakkan"),
+        "paused" => tr("Paused", "Dijeda"),
+        "needs_login" => tr("Session expired", "Sesi tamat"),
+        "signed_out" => tr("Welcome", "Selamat datang"),
+        "signing_in" => tr("Signing in", "Sedang log masuk"),
+        "engine_stopped" => tr("Engine stopped", "Enjin berhenti"),
+        "deletes_held" => tr("Deletions held", "Pemadaman ditahan"),
+        "starting" => tr("Starting", "Memulakan"),
+        "error" => tr("Sync error", "Ralat penyegerakan"),
+        _ => tr("Checking", "Menyemak"),
     }
 }
 
@@ -136,26 +137,59 @@ pub fn short_label(key: &str) -> &'static str {
 /// exist, plain product wording for the states the Python app never had.
 pub fn status_text(status: UiStatus) -> (&'static str, &'static str) {
     match status {
-        UiStatus::Synced => ("You're up to date", ""),
-        UiStatus::Syncing => ("Syncing your files...", "Just a moment..."),
-        UiStatus::Paused => ("Sync is paused", "Nothing is syncing. Your files are safe."),
-        UiStatus::NeedsLogin => ("Your session expired", "Sign in again to resume syncing."),
-        UiStatus::SignedOut => (
-            "Welcome to Proton Drive",
-            "Sign in to start - your files will appear here.",
+        UiStatus::Synced => (tr("You're up to date", "Semua sudah dikemas kini"), ""),
+        UiStatus::Syncing => (
+            tr("Syncing your files...", "Menyegerakkan fail anda..."),
+            tr("Just a moment...", "Sebentar..."),
         ),
-        UiStatus::SigningIn => ("Signing in...", "Finish signing in in the terminal window."),
+        UiStatus::Paused => (
+            tr("Sync is paused", "Penyegerakan dijeda"),
+            tr(
+                "Nothing is syncing. Your files are safe.",
+                "Tiada penyegerakan. Fail anda selamat.",
+            ),
+        ),
+        UiStatus::NeedsLogin => (
+            tr("Your session expired", "Sesi anda telah tamat"),
+            tr(
+                "Sign in again to resume syncing.",
+                "Log masuk semula untuk meneruskan penyegerakan.",
+            ),
+        ),
+        UiStatus::SignedOut => (
+            tr("Welcome to Proton Drive", "Selamat datang ke Proton Drive"),
+            tr(
+                "Sign in to start - your files will appear here.",
+                "Log masuk untuk bermula - fail anda akan muncul di sini.",
+            ),
+        ),
+        UiStatus::SigningIn => (
+            tr("Signing in...", "Sedang log masuk..."),
+            tr(
+                "Finish signing in in the terminal window.",
+                "Selesaikan log masuk dalam tetingkap terminal.",
+            ),
+        ),
         UiStatus::EngineStopped => (
-            "Sync engine isn't running",
-            "Start it to keep your files in sync.",
+            tr("Sync engine isn't running", "Enjin penyegerakan tidak berjalan"),
+            tr(
+                "Start it to keep your files in sync.",
+                "Mulakannya untuk memastikan fail anda disegerakkan.",
+            ),
         ),
         UiStatus::DeletesHeld => (
-            "Deletions paused",
-            "Nothing was deleted. Review the files before continuing.",
+            tr("Deletions paused", "Pemadaman dijeda"),
+            tr(
+                "Nothing was deleted. Review the files before continuing.",
+                "Tiada apa-apa dipadam. Semak fail sebelum meneruskan.",
+            ),
         ),
-        UiStatus::Starting => ("Starting the sync engine...", "Just a moment..."),
-        UiStatus::Error => ("Couldn't sync", "{error}"),
-        UiStatus::Unknown => ("Checking your files...", ""),
+        UiStatus::Starting => (
+            tr("Starting the sync engine...", "Memulakan enjin penyegerakan..."),
+            tr("Just a moment...", "Sebentar..."),
+        ),
+        UiStatus::Error => (tr("Couldn't sync", "Tidak dapat menyegerakkan"), "{error}"),
+        UiStatus::Unknown => (tr("Checking your files...", "Menyemak fail anda..."), ""),
     }
 }
 

@@ -1,0 +1,51 @@
+app-id: io.github.zhafribs.protondrivecli
+runtime: org.freedesktop.Platform
+runtime-version: "25.08"
+sdk: org.freedesktop.Sdk
+command: proton-drive-launch
+
+finish-args:
+  # A sync client needs the files the user chooses, not just a portal-chosen
+  # single file. The engine watches them with inotify and moves deletes to
+  # trash, so it needs the real paths.
+  - --filesystem=home
+  - --share=ipc
+  - --share=network
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Session in the desktop keyring, tray and notifications.
+  - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --talk-name=org.freedesktop.portal.Desktop
+  - --env=PROTON_SYNC_FLATPAK=1
+
+modules:
+  - name: proton-drive
+    buildsystem: simple
+    build-options:
+      # The official CLI is a Bun standalone executable: its payload lives in
+      # ELF sections. flatpak-builder's default debuginfo extraction removes
+      # them and turns the CLI into a bare Bun runtime.
+      no-debuginfo: true
+      strip: false
+    build-commands:
+      - install -Dm755 usr/bin/proton-drive /app/bin/proton-drive
+      - install -Dm755 usr/bin/proton-drive-gui /app/bin/proton-drive-gui
+      - install -Dm755 usr/bin/proton-engine /app/bin/proton-engine
+      - install -Dm755 proton-drive-wrapper /app/bin/proton-drive-launch
+      - install -d /app/share/applications
+      - sed -e 's/^Icon=proton-drive$/Icon=io.github.zhafribs.protondrivecli/' -e 's/^Exec=proton-drive$/Exec=proton-drive-launch/' usr/share/applications/io.github.zhafribs.protondrivecli.desktop > /app/share/applications/io.github.zhafribs.protondrivecli.desktop
+      - chmod 0644 /app/share/applications/io.github.zhafribs.protondrivecli.desktop
+      - install -Dm644 usr/share/metainfo/io.github.zhafribs.protondrivecli.appdata.xml /app/share/metainfo/io.github.zhafribs.protondrivecli.appdata.xml
+      - install -Dm644 usr/share/icons/hicolor/256x256/apps/proton-drive.png /app/share/icons/hicolor/256x256/apps/io.github.zhafribs.protondrivecli.png
+      - install -Dm644 usr/share/icons/hicolor/512x512/apps/proton-drive.png /app/share/icons/hicolor/512x512/apps/io.github.zhafribs.protondrivecli.png
+      - install -Dm644 LICENSE /app/share/licenses/io.github.zhafribs.protondrivecli/LICENSE
+    sources:
+      - type: dir
+        path: appdir
+      - type: file
+        path: proton-drive-wrapper
+      - type: file
+        path: LICENSE

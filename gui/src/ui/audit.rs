@@ -198,6 +198,7 @@ fn fixture(page: Page) -> App {
         prefs_baseline: Some(prefs),
         settings_tab: 0,
         upd: UpdateUi::default(),
+        onboarding: None,
         hidden: false,
         hide_on_start: false,
         quitting: false,
@@ -409,5 +410,15 @@ fn dialogs_render_without_missing_names() {
         let mut harness = harness(Page::Cloud, egui::vec2(720.0, 400.0), 1.0);
         harness.state_mut().dialog = Some(dialog);
         harness.run();
+    }
+}
+
+#[test]
+fn onboarding_steps_render_without_missing_names() {
+    for step in 0..3 {
+        let mut harness = harness(Page::Home, egui::vec2(720.0, 400.0), 1.0);
+        harness.state_mut().onboarding = Some(step);
+        harness.run();
+        assert_eq!(harness.state().onboarding, Some(step));
     }
 }

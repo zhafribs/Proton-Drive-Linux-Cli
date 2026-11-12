@@ -1350,7 +1350,14 @@ fn page_head(app: &mut CloudView, ui: &mut egui::Ui) {
     let (trash_view, busy, can_transfer) =
         (app.cloud.trash_view, app.cloud.busy, app.can_transfer());
     ui.horizontal(|ui| {
-        widgets::page_title(ui, if trash_view { "Trash" } else { "Files" });
+        widgets::page_title(
+            ui,
+            if trash_view {
+                crate::i18n::tr("Trash", "Tong sampah")
+            } else {
+                crate::i18n::tr("Files", "Fail")
+            },
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if trash_view {
                 if can_transfer
@@ -2827,7 +2834,12 @@ pub fn nav_ui(app: &mut CloudView, ui: &mut egui::Ui) {
         app.cloud.disk_loaded = true;
         app.cloud.disk = load_disk_cache(&app.ctx.paths.cloud_cache_file);
     }
-    if widgets::nav_row(ui, widgets::NavIcon::Home, "Home", *app.page == super::Page::Home) {
+    if widgets::nav_row(
+        ui,
+        widgets::NavIcon::Home,
+        crate::i18n::tr("Home", "Utama"),
+        *app.page == super::Page::Home,
+    ) {
         *app.page = super::Page::Home;
     }
     ui.add_space(8.0);
@@ -2844,7 +2856,7 @@ pub fn nav_ui(app: &mut CloudView, ui: &mut egui::Ui) {
     if widgets::nav_row(
         ui,
         widgets::NavIcon::Photos,
-        "Photos",
+        crate::i18n::tr("Photos", "Foto"),
         *app.page == super::Page::Photos,
     ) {
         *app.page = super::Page::Photos;
@@ -2853,7 +2865,7 @@ pub fn nav_ui(app: &mut CloudView, ui: &mut egui::Ui) {
     if widgets::nav_row(
         ui,
         widgets::NavIcon::Activity,
-        "Activity",
+        crate::i18n::tr("Activity", "Aktiviti"),
         *app.page == super::Page::Activity,
     ) {
         *app.page = super::Page::Activity;
@@ -2862,27 +2874,38 @@ pub fn nav_ui(app: &mut CloudView, ui: &mut egui::Ui) {
     if widgets::nav_row(
         ui,
         widgets::NavIcon::Settings,
-        "Settings",
+        crate::i18n::tr("Settings", "Tetapan"),
         *app.page == super::Page::Settings,
     ) {
         *app.page = super::Page::Settings;
     }
     ui.add_space(6.0);
     let trash_active = *app.page == super::Page::Cloud && app.cloud.trash_view;
-    if widgets::nav_row(ui, widgets::NavIcon::Trash, "Trash", trash_active) && !app.cloud.busy {
+    if widgets::nav_row(
+        ui,
+        widgets::NavIcon::Trash,
+        crate::i18n::tr("Trash", "Tong sampah"),
+        trash_active,
+    ) && !app.cloud.busy
+    {
         go_trash(app);
     }
     ui.add_space(6.0);
     if widgets::nav_row(
         ui,
         widgets::NavIcon::Recovery,
-        "Recovery",
+        crate::i18n::tr("Recovery", "Pemulihan"),
         *app.page == super::Page::Recovery,
     ) {
         *app.page = super::Page::Recovery;
     }
     ui.add_space(6.0);
-    if widgets::nav_row(ui, widgets::NavIcon::About, "About", *app.page == super::Page::About) {
+    if widgets::nav_row(
+        ui,
+        widgets::NavIcon::About,
+        crate::i18n::tr("About", "Perihal"),
+        *app.page == super::Page::About,
+    ) {
         *app.page = super::Page::About;
     }
 }
@@ -2903,7 +2926,11 @@ fn my_files_row(app: &mut CloudView, ui: &mut egui::Ui, root_open: bool) {
         egui::Color32::TRANSPARENT
     };
     resp.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::Role::TreeItem, ui.is_enabled(), "My files")
+        egui::WidgetInfo::labeled(
+            egui::Role::TreeItem,
+            ui.is_enabled(),
+            crate::i18n::tr("My files", "Fail saya"),
+        )
     });
     ui.ctx().accesskit_node_builder(resp.id, |n| {
         n.set_level(1);
@@ -2937,7 +2964,7 @@ fn my_files_row(app: &mut CloudView, ui: &mut egui::Ui, root_open: bool) {
     ui.painter().text(
         rect.left_center() + egui::vec2(42.0, 0.0),
         egui::Align2::LEFT_CENTER,
-        "My files",
+        crate::i18n::tr("My files", "Fail saya"),
         egui::FontId::proportional(14.5),
         color,
     );

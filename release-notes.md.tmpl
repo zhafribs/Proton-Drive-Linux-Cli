@@ -11,6 +11,10 @@ chmod +x {{X86_FILE}}
 
 # Debian/Ubuntu alternative:
 sudo apt install ./{{DEB_AMD64_FILE}}
+
+# Flatpak (x86_64):
+flatpak install --user ./{{FLATPAK_FILE}}
+flatpak run io.github.zhafribs.protondrivecli
 ```
 
 Won't start? FUSE: Arch `pacman -S fuse2` · Debian/Ubuntu `apt install libfuse2t64` ·
