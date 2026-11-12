@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// The GUI's own version (the release tag is `v<CLI>-gui<GUI>`).
-pub const GUI_VERSION: &str = "3.29.0";
+pub const GUI_VERSION: &str = "3.30.0";
 
 /// The systemd user unit path (shared with `service.rs`).
 pub fn service_unit_path() -> PathBuf {
@@ -37,6 +37,12 @@ pub fn service_unit_path() -> PathBuf {
 
 fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--diagnose") {
+        if let Err(e) = diagnose() {
+            eprintln!("diagnose failed: {e}");
+        }
+        return Ok(());
+    }
     let smoke_run =
         args.iter().any(|a| a == "--smoke") || std::env::var_os("PROTON_SYNC_SMOKE").is_some();
 
@@ -189,6 +195,78 @@ fn spawn_detached(target: &Path) {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
+}
+
+/// Read-only support report for a machine that will not sync. It never opens
+/// a window or takes the GUI lock; every call is bounded.
+fn diagnose() -> Result<(), String> {
+    use std::net::{TcpStream, ToSocketAddrs};
+
+    let p = paths::resolve();
+    let prefs = prefs::Prefs::load(&p.prefs_file);
+    let c = conf::read(&p.conf_file);
+    let remote = c
+        .get("PROTON_SYNC_REMOTE")
+        .filter(|s| !s.trim().is_empty())
+        .cloned()
+        .unwrap_or_else(|| "/my-files".to_string());
+    let local = c
+        .get("PROTON_SYNC_LOCAL")
+        .filter(|s| !s.trim().is_empty())
+        .cloned()
+        .unwrap_or_else(|| "~/ProtonDrive".to_string());
+    let h = health::read(&p.health_file);
+
+    println!("Proton Drive for Linux {GUI_VERSION}");
+    println!("Platform {} {}", std::env::consts::OS, std::env::consts::ARCH);
+    println!("Config {}", p.conf_file.display());
+    println!("State {}", p.state_dir.display());
+    println!("Local {local} (exists: {})", Path::new(&local).is_dir());
+    println!("Remote {remote}");
+    println!(
+        "Theme {} · interface {}%",
+        prefs.theme().as_str(),
+        prefs.ui_scale().percent()
+    );
+    println!(
+        "Service active={} enabled={} supervisor={}",
+        service::is_active(),
+        service::is_enabled(),
+        service::uses_supervisor()
+    );
+
+    match cli::resolve_cli() {
+        Some(cli) => {
+            println!("CLI {}", cli.display());
+            println!("CLI version {}", cli::cli_version(&cli));
+            println!("Session probe (fs info {remote}):");
+            match cli::probe_session(&cli, &remote) {
+                Ok(out) => println!("  ok: {}", out.lines().next().unwrap_or("").trim()),
+                Err(e) => println!("  failed: {e}"),
+            }
+        }
+        None => println!("CLI not found"),
+    }
+
+    print!("Network drive-api.proton.me:443 ... ");
+    match "drive-api.proton.me:443".to_socket_addrs().ok().and_then(|mut a| a.next()) {
+        Some(addr) => match TcpStream::connect_timeout(&addr, Duration::from_secs(5)) {
+            Ok(_) => println!("connected ({addr})"),
+            Err(e) => println!("failed ({addr}): {e}"),
+        },
+        None => println!("DNS resolution failed"),
+    }
+
+    println!("\nhealth.json:");
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&h).unwrap_or_else(|_| "unreadable".to_string())
+    );
+    println!("\nRecent engine log:");
+    for line in service::journal_lines(80) {
+        println!("{line}");
+    }
+    Ok(())
 }
 
 fn smoke() -> Result<(), String> {

@@ -21,6 +21,7 @@ pub struct AboutView<'a> {
     pub recovery: &'a mut RecoveryState,
     pub icon_tex: Option<egui::TextureHandle>,
     pub toasts: &'a mut VecDeque<Toast>,
+    pub log_lines: &'a [String],
     pub now: f64,
     pub actions: &'a mut Vec<AboutAction>,
 }
@@ -553,6 +554,25 @@ fn details(app: &mut AboutView, ui: &mut egui::Ui) {
             detail_row(ui, "Recovery check", check, Some(&check_detail));
             ui.add_space(8.0);
             if ui.button("Copy diagnostics").clicked() {
+                let h = &app.ctx.health;
+                let err = h.error.as_deref().unwrap_or("");
+                let failure = if err.is_empty() {
+                    "none"
+                } else if crate::health::is_network_error(err) {
+                    "network"
+                } else if crate::health::is_login_error(err) {
+                    "session"
+                } else {
+                    "other"
+                };
+                let log: Vec<&str> = app
+                    .log_lines
+                    .iter()
+                    .rev()
+                    .take(40)
+                    .rev()
+                    .map(String::as_str)
+                    .collect();
                 let text = format!(
                     "Proton Drive for Linux {GUI_VERSION}\n\
                      Proton CLI {cli}\n\
@@ -561,10 +581,37 @@ fn details(app: &mut AboutView, ui: &mut egui::Ui) {
                      Install {install}\n\
                      Config {conf_full}\n\
                      State {state_full}\n\
+                     Sync status {}\n\
+                     Sync error {}\n\
+                     Failure kind {}\n\
+                     Last update {}\n\
+                     Next check {}\n\
+                     Engine build {}\n\
+                     Cycle seconds {}\n\
+                     Failed {}  Conflicts {}  Holds {}\n\
+                     Audit {}{}\n\
                      Recovery check {check}\n\
-                     {check_detail}",
+                     {check_detail}\n\
+                     --- recent engine log ---\n{}",
                     std::env::consts::OS,
                     std::env::consts::ARCH,
+                    if h.status.is_empty() { "unknown" } else { &h.status },
+                    h.error.as_deref().unwrap_or("none"),
+                    failure,
+                    h.ts.as_deref().unwrap_or("unknown"),
+                    h.next_poll.as_deref().unwrap_or("not scheduled"),
+                    h.build.as_deref().unwrap_or("unknown"),
+                    h.cycle_seconds.map(|s| format!("{s:.1}")).unwrap_or_default(),
+                    h.failed,
+                    h.conflicts,
+                    h.holds,
+                    h.audit_phase.as_deref().unwrap_or("idle"),
+                    h.audit_error
+                        .as_deref()
+                        .filter(|e| !e.is_empty())
+                        .map(|e| format!(": {e}"))
+                        .unwrap_or_default(),
+                    log.join("\n"),
                 );
                 ui.ctx().copy_text(text);
                 app.toast("Diagnostics copied.");

@@ -2250,6 +2250,7 @@ impl App {
                         recovery: &mut self.recovery,
                         icon_tex: self.icon_tex.clone(),
                         toasts: &mut self.toasts,
+                        log_lines: &self.log_lines,
                         now,
                         actions: &mut actions,
                     };

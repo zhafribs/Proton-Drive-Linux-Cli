@@ -36,6 +36,18 @@ fn approval_matches(
         && result.deletes_held_cloud_digest.as_deref().unwrap_or("") == approval.cloud_digest
 }
 
+/// Health status for a failed cycle. A transport failure must never be shown
+/// as an expired session: signing in again cannot fix Wi-Fi or a proxy.
+fn failure_status(message: &str) -> &'static str {
+    if proton_core::health::is_network_error(message) {
+        "error"
+    } else if proton_core::health::is_login_error(message) {
+        "needs_login"
+    } else {
+        "error"
+    }
+}
+
 fn cfg_values() -> std::collections::BTreeMap<String, String> {
     let home = dirs::home_dir().unwrap_or_else(|| std::path::Path::new("/").to_path_buf());
     let config_dir = dirs::config_dir().unwrap_or_else(|| home.join(".config"));
@@ -201,6 +213,7 @@ pub fn run_loop() -> Result<()> {
             force_full,
         );
         let mut retrying = false;
+        let mut retry_secs = 10u64;
         let mut file_login_grace = false;
         match result {
             Ok(()) => {
@@ -230,13 +243,16 @@ pub fn run_loop() -> Result<()> {
             }
             Err(err) => {
                 let message = format!("{err:#}");
-                let login = proton_core::health::is_login_error(&message);
-                // At boot the keyring can still be locked. Retry quietly for
-                // a short grace period instead of flashing "session expired".
-                let in_grace = login && boot.elapsed() < Duration::from_secs(60);
+                let network = proton_core::health::is_network_error(&message);
+                let status = failure_status(&message);
+                let login = status == "needs_login";
+                // At boot the keyring can still be locked and the network may
+                // not be up yet. Retry quietly for a short grace period
+                // instead of flashing "session expired".
+                let transient = login || network;
+                let in_grace = transient && boot.elapsed() < Duration::from_secs(60);
                 file_login_grace = in_grace;
                 if !in_grace {
-                    let status = if login { "needs_login" } else { "error" };
                     crate::health::write_health(&Health {
                         status: status.to_string(),
                         error: Some(message),
@@ -246,6 +262,12 @@ pub fn run_loop() -> Result<()> {
                 }
                 if login {
                     retry_at = Some(Instant::now() + Duration::from_secs(10));
+                    retrying = true;
+                } else if network {
+                    // Wake-from-sleep often beats the Wi-Fi/VPN. Retry soon
+                    // and let a successful cycle clear the error by itself.
+                    retry_at = Some(Instant::now() + Duration::from_secs(30));
+                    retry_secs = 30;
                     retrying = true;
                 } else {
                     retry_at = None;
@@ -258,7 +280,7 @@ pub fn run_loop() -> Result<()> {
             run_photos(&cli, &values, &[]);
         }
         if retrying {
-            crate::health::write_schedule_retry(interval, 10);
+            crate::health::write_schedule_retry(interval, retry_secs);
         } else {
             crate::health::write_schedule(interval);
         }
@@ -1099,5 +1121,20 @@ mod tests {
         std::fs::write(&path, b"uid-1\n\n").unwrap();
         assert_eq!(take_photo_request(&path), Some(vec!["uid-1".to_string()]));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use super::failure_status;
+
+    #[test]
+    fn a_transport_failure_is_not_a_lost_session() {
+        assert_eq!(failure_status("request timed out"), "error");
+        assert_eq!(failure_status("HTTP 401 from proxy"), "error");
+        assert_eq!(failure_status("connection refused"), "error");
+        assert_eq!(failure_status("You need to login first"), "needs_login");
+        assert_eq!(failure_status("HTTP 401 Unauthorized"), "needs_login");
+        assert_eq!(failure_status("permission denied"), "error");
     }
 }

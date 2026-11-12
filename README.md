@@ -62,6 +62,19 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
 
 ![About](docs/screenshots/about-3.20.49.png)
 
+## If sync stops
+
+Run the windowless report on the machine that is stuck:
+
+```bash
+./ProtonDrive-CLI-*-x86_64.AppImage --diagnose > proton-diagnose.txt
+```
+
+It distinguishes a network/proxy failure from an expired session and includes
+the last engine log lines. See
+[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for the three failure
+modes and what actually fixes each one.
+
 ## Features
 
 - **Folder sync** — `~/ProtonDrive` mirrors `/my-files` both ways: local edits

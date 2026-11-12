@@ -247,6 +247,16 @@ impl Cli {
         let s = self.run(args, true, Some(180), locked)?;
         Ok(serde_json::from_str(&s)?)
     }
+
+    /// Refresh the CLI session once, alone under the app-wide lock, before
+    /// parallel transfers start. The CLI rotates the refresh token on every
+    /// refresh; if several workers discover an expired access token together,
+    /// the losers can invalidate the session and leave sync stuck until the
+    /// user signs in again.
+    pub fn warm_session(&self, remote_root: &str) -> Result<()> {
+        self.run(&["fs", "info", remote_root], true, Some(120), true)?;
+        Ok(())
+    }
 }
 
 /// Escape a '/' inside a node name.
@@ -341,6 +351,20 @@ mod flag_tests {
 mod timeout_tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn warm_session_fails_before_parallel_work_on_a_dead_session() {
+        let dir = std::env::temp_dir().join(format!("pd-cli-warm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("fake-proton-drive");
+        std::fs::write(&bin, "#!/bin/sh\necho 'You need to login first' >&2\nexit 1\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cli = Cli::for_test(bin);
+        let err = cli.warm_session("/my-files").unwrap_err().to_string();
+        assert!(err.contains("login"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_hung_command_is_killed_at_the_deadline() {

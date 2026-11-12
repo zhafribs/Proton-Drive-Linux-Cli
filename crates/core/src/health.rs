@@ -88,6 +88,38 @@ pub fn is_login_error(message: &str) -> bool {
         || m.contains("keyring")
 }
 
+/// A transport failure, not a lost session. Wake-from-sleep and corporate
+/// proxies routinely produce messages that mention 401 or "unreachable";
+/// telling the user to sign in again cannot fix either.
+pub fn is_network_error(message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    [
+        "timed out",
+        "timeout",
+        "connection refused",
+        "connection reset",
+        "connection closed",
+        "broken pipe",
+        "network is unreachable",
+        "no route to host",
+        "unreachable",
+        "could not resolve",
+        "name resolution",
+        "dns",
+        "tls",
+        "certificate",
+        "handshake",
+        "proxy",
+        "econnreset",
+        "econnrefused",
+        "etimedout",
+        "enotfound",
+        "offline",
+    ]
+    .iter()
+    .any(|needle| m.contains(needle))
+}
+
 impl Health {
     pub fn ts_dt(&self) -> Option<DateTime<FixedOffset>> {
         self.ts.as_deref().and_then(crate::time::parse_iso)
@@ -186,5 +218,11 @@ mod tests {
         assert!(is_login_error("keyring unlock failed"));
         assert!(is_login_error("HTTP 401 Unauthorized"));
         assert!(!is_login_error("network is unreachable"));
+        assert!(is_network_error("request timed out"));
+        assert!(is_network_error("connection refused"));
+        assert!(is_network_error("TLS handshake failed"));
+        assert!(is_network_error("HTTP 401 from proxy"));
+        assert!(!is_network_error("You need to login first"));
+        assert!(!is_network_error("HTTP 401 Unauthorized"));
     }
 }

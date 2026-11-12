@@ -1,7 +1,7 @@
 //! Status mapping for the engine's health snapshot - the struct itself lives
 //! in `proton-core` so the GUI and the engine share one schema.
 
-pub use proton_core::health::{Health, is_login_error, read};
+pub use proton_core::health::{Health, is_login_error, is_network_error, read};
 
 use crate::util::rel_time;
 

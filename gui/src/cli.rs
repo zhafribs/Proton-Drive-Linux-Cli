@@ -101,6 +101,21 @@ fn run_cli_unlocked(cli: &Path, args: &[&str], timeout: Duration) -> Result<exec
     exec::run(&cli.to_string_lossy(), args, timeout)
 }
 
+/// One read-only call that proves the stored session still works. Used by
+/// `--diagnose`; the engine has the same probe before parallel transfers.
+pub fn probe_session(cli: &Path, remote_root: &str) -> Result<String, String> {
+    let out = run_cli(cli, &["fs", "info", remote_root], Duration::from_secs(60))?;
+    if out.ok() {
+        return Ok(out.stdout.trim().to_string());
+    }
+    let err = if out.stderr.trim().is_empty() {
+        out.stdout.trim()
+    } else {
+        out.stderr.trim()
+    };
+    Err(err.to_string())
+}
+
 /// First line of `proton-drive --version` ("" on failure).
 pub fn cli_version(cli: &Path) -> String {
     let out = run_cli_unlocked(cli, &["--version"], Duration::from_secs(60));
@@ -911,5 +926,23 @@ mod tests {
         arm_photo_hold(&photos, &state);
         assert!(!marker.exists(), "the full library releases the hold");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn probe_session_surfaces_a_dead_session() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("pd-gui-probe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("fake-proton-drive");
+        std::fs::write(
+            &bin,
+            "#!/bin/sh\necho 'You need to login first' >&2\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let err = probe_session(&bin, "/my-files").unwrap_err();
+        assert!(err.contains("login"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

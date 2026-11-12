@@ -691,6 +691,12 @@ pub fn execute(
     let total_files: u64 = batches.iter().map(|b| b.rels.len() as u64).sum();
     let done_files = std::sync::atomic::AtomicU64::new(0);
     let retries = cli::cfg_int("PROTON_SYNC_RETRIES", 3, 10);
+    // One serialized call refreshes an expired access token before any worker
+    // can race the refresh, and a dead session fails here without spawning a
+    // batch that would rotate it several times at once.
+    if !batches.is_empty() {
+        cli.warm_session(remote_root)?;
+    }
     report_transfer(0, total_files, &[]);
     let outcomes = cli::with_cli_lock(|| {
         Ok(cli::run_parallel(batches, transfers, |b| {

@@ -1,3 +1,22 @@
+## 3.30.0 — 2026-11-13
+
+### Sync reliability and diagnostics
+
+- **Transport failures are not lost sessions.** Timeouts, DNS failures,
+  connection resets and proxies now show a sync error and retry after 30 s,
+  instead of claiming the session expired and telling the user to sign in.
+- **Session refresh is serialized before parallel transfers.** One short
+  `fs info` call refreshes an expired access token before any worker starts,
+  so workers cannot rotate the single-use refresh token concurrently and
+  strand sync until the next sign-in.
+- **`--diagnose` support report.** Prints the health snapshot, the resolved
+  CLI and its session probe, network reachability, service state and the last
+  80 engine log lines without opening a window.
+- **Copy diagnostics includes the failure.** About → Diagnostics now copies
+  the sync status, error, failure kind (network/session/other), cycle details
+  and the last 40 log lines.
+- **Troubleshooting guide** for sleep, VPN/proxy and expired-session failures.
+
 ## 3.29.0 — 2026-11-12
 
 ### UI and packaging confidence
