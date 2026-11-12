@@ -31,5 +31,8 @@ session refreshes, and make a stuck machine explain itself.
 
 ## Release verification
 
-- Tag `v0.9.0-gui3.30.0`; evidence in
-  `docs/audit/evidence/release-3.30.0.txt`.
+- Tag `v0.9.0-gui3.30.0`; CI `43256388766` verify + release succeeded.
+- 313 tests, clippy clean, release gate 12/12, UI audit passed.
+- Both AppImages and both `.deb` packages verified, including the published
+  `--diagnose` command.
+- Evidence: `docs/audit/evidence/release-3.30.0.txt`.

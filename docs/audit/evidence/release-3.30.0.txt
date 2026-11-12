@@ -1,0 +1,90 @@
+# Release evidence — v0.9.0-gui3.30.0
+
+Tag: v0.9.0-gui3.30.0
+Scope: M9 — Sync Reliability & Diagnostics. Network/session separation,
+serialized session refresh before parallel transfers, `--diagnose`, richer
+copied diagnostics and a troubleshooting guide.
+
+## Assets
+
+  ProtonDrive-CLI-0.9.0-GUI-3.30.0-x86_64.AppImage   52771320 bytes
+  ProtonDrive-CLI-0.9.0-GUI-3.30.0-aarch64.AppImage  51382792 bytes
+  proton-drive_0.9.0+gui3.30.0_amd64.deb             51879804 bytes
+  proton-drive_0.9.0+gui3.30.0_arm64.deb             50464572 bytes
+  revocations.json                                   68 bytes
+  revocations.json.sig                               64 bytes
+  SHA256SUMS                                         441 bytes
+  SHA256SUMS.sig                                     64 bytes
+
+Published SHA-256:
+
+  7ce43caccdc516c62121c47674c70e2cf49486f43cd71e1283fca19ea809590a  x86_64 AppImage
+  87b3c3c21b2b142a3e2e0ac8527dae95633807111affa8e21590fc34e4b04138  aarch64 AppImage
+  8d43895503b16e1a5ea96eb9f85b1928009f6a705118970e3242d09cba3ab5c9  amd64 .deb
+  8fd341fd30ee8f4a904d5bc84bc277f76a35eb8d2cd14b5eedef10cb35fc3304  arm64 .deb
+
+## Published-release verification
+
+`scripts/verify-release.sh v0.9.0-gui3.30.0`:
+
+  ProtonDrive-CLI-0.9.0-GUI-3.30.0-x86_64.AppImage: OK
+  ProtonDrive-CLI-0.9.0-GUI-3.30.0-aarch64.AppImage: OK
+  proton-drive_0.9.0+gui3.30.0_amd64.deb: OK
+  proton-drive_0.9.0+gui3.30.0_arm64.deb: OK
+  signature: SHA256SUMS OK
+  signature: revocations.json OK
+  smoke ok: gui 3.30.0, conf keys 15, cli true, health status 'ok', theme system
+  squashfs-root/AppRun: GLIBC_2.28
+  squashfs-root/usr/bin/proton-drive-gui: GLIBC_2.28
+  squashfs-root/usr/bin/proton-engine: GLIBC_2.28
+  aarch64-root/AppRun: GLIBC_2.28
+  aarch64-root/usr/bin/proton-drive-gui: GLIBC_2.28
+  aarch64-root/usr/bin/proton-engine: GLIBC_2.28
+  deb: proton-drive_0.9.0+gui3.30.0_amd64.deb OK
+  deb: proton-drive_0.9.0+gui3.30.0_arm64.deb OK
+
+`--diagnose` was also run from the published x86_64 AppImage: it resolved the
+bundled CLI, printed the health snapshot, session probe, network reachability
+and service state without opening a window.
+
+## Sync reliability changes
+
+- `is_network_error` recognises timeouts, DNS/TLS/proxy/connection failures;
+  `failure_status` keeps those as `error`, never `needs_login`.
+- Network failures retry after 30 s; session failures after 10 s. A successful
+  cycle clears either status by itself.
+- `Cli::warm_session` runs one `fs info` under the app-wide lock before any
+  parallel transfer batch. A dead session fails before workers start; an
+  expired access token is refreshed once instead of by several workers at
+  once (the CLI rotates the refresh token on every use).
+- `--diagnose` and About → Copy diagnostics now include the health error,
+  failure kind, cycle timing and recent engine log lines.
+
+## Reproducibility
+
+Local, two independent builds with `SOURCE_DATE_EPOCH=1794499566`:
+
+  5fc29564391ace421d64614024a8c29219b7cdada1de4897d2c615a807c4e884  build 1
+  5fc29564391ace421d64614024a8c29219b7cdada1de4897d2c615a807c4e884  build 2
+  REPRODUCIBLE: the two builds are byte-identical
+
+CI run 43256388766:
+
+  reproducible: both builds are byte-identical
+
+## Gate results
+
+- 313 tests passed, 4 ignored.
+- clippy clean (`-D warnings`).
+- Release-gate fixtures 12/12.
+- UI audit and screenshot matrix passed.
+- `scripts/check-release.sh`: OK — CLI 0.9.0, GUI 3.30.0.
+- CI run 43256388766: verify and release both succeeded.
+- Releases retained: 39.
+
+## Note for the work laptop
+
+No machine-specific log was available for this release. If sync is still red,
+`./ProtonDrive-CLI-*-x86_64.AppImage --diagnose > proton-diagnose.txt` now
+prints the exact error, a session probe, network reachability and recent engine
+logs. The three failure classes are documented in `docs/TROUBLESHOOTING.md`.
