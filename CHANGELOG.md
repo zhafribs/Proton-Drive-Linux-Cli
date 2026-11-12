@@ -1,3 +1,13 @@
+## 3.31.1 — 2026-11-13
+
+### Update check fix
+
+- **Key-revocation feed URL.** Updates from `3.28.0`–`3.31.0` stopped before
+  downloading because the release-download host allowlist rejected the
+  successor-signed feed on `raw.githubusercontent.com`. The two exact feed
+  files are now trusted; no other raw path is. Users on those versions must
+  install this release once by hand, after which in-app updates work again.
+
 ## 3.31.0 — 2026-11-13
 
 ### First run, language and Flatpak

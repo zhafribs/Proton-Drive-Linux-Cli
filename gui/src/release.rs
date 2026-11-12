@@ -239,6 +239,14 @@ fn trusted_download_url(url: &str) -> bool {
     match host {
         "github.com" => path.starts_with("zhafribs/Proton-Drive-Linux-Cli/releases/download/"),
         "release-assets.githubusercontent.com" | "objects.githubusercontent.com" => true,
+        // The successor-signed key-revocation feed is fetched from the
+        // repository itself. Allow only those two exact files, not arbitrary
+        // raw content.
+        "raw.githubusercontent.com" => matches!(
+            path,
+            "zhafribs/Proton-Drive-Linux-Cli/main/security/key-revocations.json"
+                | "zhafribs/Proton-Drive-Linux-Cli/main/security/key-revocations.json.sig"
+        ),
         _ => false,
     }
 }
@@ -1398,6 +1406,12 @@ mod tests {
     }
 
     #[test]
+    fn the_key_revocation_feed_url_is_trusted() {
+        assert!(trusted_download_url(KEY_REVOCATIONS_URL));
+        assert!(trusted_download_url(KEY_REVOCATIONS_SIG_URL));
+    }
+
+    #[test]
     fn download_hosts_are_exact() {
         assert!(trusted_download_url(
             "https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/download/v1/x.AppImage"
@@ -1408,6 +1422,12 @@ mod tests {
         assert!(trusted_download_url(
             "https://objects.githubusercontent.com/github-production-release-asset/x"
         ));
+        assert!(trusted_download_url(
+            "https://raw.githubusercontent.com/zhafribs/Proton-Drive-Linux-Cli/main/security/key-revocations.json"
+        ));
+        assert!(trusted_download_url(
+            "https://raw.githubusercontent.com/zhafribs/Proton-Drive-Linux-Cli/main/security/key-revocations.json.sig"
+        ));
         for bad in [
             "http://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/download/v1/x",
             "https://github.com.evil/zhafribs/Proton-Drive-Linux-Cli/releases/download/v1/x",
@@ -1415,6 +1435,8 @@ mod tests {
             "https://github.com:444/zhafribs/Proton-Drive-Linux-Cli/releases/download/v1/x",
             "https://github.com/other/repo/releases/download/v1/x",
             "https://evil/github-production-release-asset/x",
+            "https://raw.githubusercontent.com/zhafribs/Proton-Drive-Linux-Cli/main/README.md",
+            "https://raw.githubusercontent.com/other/repo/main/security/key-revocations.json",
             "",
         ] {
             assert!(!trusted_download_url(bad), "accepted {bad}");

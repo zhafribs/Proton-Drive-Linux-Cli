@@ -45,6 +45,16 @@ After the AppImages exist, build the matching Debian packages (plain `ar` and
 ./scripts/build-deb.sh all
 ```
 
+The x86_64 Flatpak needs `flatpak`, `flatpak-builder` and the
+`org.freedesktop.Platform/Sdk//25.08` runtimes:
+
+```bash
+flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+flatpak install --user -y flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
+./scripts/build-flatpak.sh
+./scripts/check-flatpak.sh
+```
+
 ## Run from a source checkout (development)
 
 The GUI and the sync engine are separate processes.

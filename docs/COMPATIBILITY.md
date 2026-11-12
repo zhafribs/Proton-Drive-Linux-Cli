@@ -9,6 +9,8 @@ marketing claim. Releases cover x86_64 and aarch64 Linux.
 |---|---|
 | ABI | glibc 2.28+ on x86_64 and aarch64. Release builds are zig-pinned; the gate checks the ELF floor. |
 | AppImage mount | Type-2 runtime with FUSE2 `fusermount`; recent runtimes also try `fusermount3`, and FUSE3-only systems can set `FUSERMOUNT_PROG=fusermount3`. |
+| Flatpak | x86_64 single-file bundle; `org.freedesktop.Platform//25.08`, `--filesystem=home`, session keyring. No host terminal: sign-in uses the printed `flatpak run` command. |
+| Language | English or Bahasa Melayu (beta) for setup, navigation, status and Home; other pages stay English. |
 | No FUSE | With `APPIMAGE_EXTRACT_AND_RUN=1` the GUI runs. Background sync still needs a mountable AppImage: the systemd unit starts the AppImage without that variable, so treat extract-and-run as GUI-only. |
 | Display | X11; Wayland through XWayland; native Wayland with `PROTON_SYNC_WAYLAND=1`. |
 | Desktop | GNOME, KDE Plasma, XFCE, Cinnamon, MATE, Hyprland and wlroots desktops through the XDG portal and GTK settings. |
@@ -33,7 +35,7 @@ marketing claim. Releases cover x86_64 and aarch64 Linux.
 
 - **musl-only distributions** (Alpine): the release is glibc-linked.
 - **32-bit x86**: releases are 64-bit only.
-- **Flatpak**: no sandboxed package yet.
+- **aarch64 Flatpak and Flathub**: the bundle is x86_64 and self-hosted.
 - **Non-systemd init systems** for background sync. The GUI can browse, but
   start/pause/enable-at-login and the engine service require a systemd user
   session. This is the largest remaining portability gap.
