@@ -1406,6 +1406,18 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "network: fetches the live key-revocation feed"]
+    fn live_key_revocation_feed_is_reachable_and_signed() {
+        let feed = http_get_text_retry(KEY_REVOCATIONS_URL, 30).unwrap();
+        let sig = http_get_bytes_retry(KEY_REVOCATIONS_SIG_URL, 30, 1024).unwrap();
+        assert!(verify_manifest_with(
+            UPDATE_SUCCESSOR_PUBLIC_KEY_HEX,
+            feed.as_bytes(),
+            &sig
+        ));
+    }
+
+    #[test]
     fn the_key_revocation_feed_url_is_trusted() {
         assert!(trusted_download_url(KEY_REVOCATIONS_URL));
         assert!(trusted_download_url(KEY_REVOCATIONS_SIG_URL));
