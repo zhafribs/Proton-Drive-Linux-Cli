@@ -140,7 +140,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            librsvg2-bin desktop-file-utils appstream binutils openssl
+            librsvg2-bin desktop-file-utils appstream binutils openssl \
+            flatpak flatpak-builder
 
       - name: Cache the Rust build (registry + cargo tools + target)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
