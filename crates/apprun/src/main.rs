@@ -26,7 +26,13 @@ fn route(first: Option<&std::ffi::OsStr>) -> Route {
     use std::ffi::OsStr;
     match first {
         Some(s) if s == OsStr::new("__sync-engine") => Route::Engine,
-        Some(s) if s == OsStr::new("__gui") || s == OsStr::new("--smoke") => Route::Gui,
+        Some(s)
+            if s == OsStr::new("__gui")
+                || s == OsStr::new("--smoke")
+                || s == OsStr::new("--diagnose") =>
+        {
+            Route::Gui
+        }
         None => Route::Gui,
         Some(s) if s.is_empty() => Route::Gui,
         Some(_) => Route::Cli,
@@ -129,6 +135,7 @@ mod tests {
         assert_eq!(route(Some(OsStr::new("__sync-engine"))), Route::Engine);
         assert_eq!(route(Some(OsStr::new("__gui"))), Route::Gui);
         assert_eq!(route(Some(OsStr::new("--smoke"))), Route::Gui);
+        assert_eq!(route(Some(OsStr::new("--diagnose"))), Route::Gui);
         assert_eq!(route(Some(OsStr::new(""))), Route::Gui);
         assert_eq!(route(None), Route::Gui);
     }
