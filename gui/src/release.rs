@@ -50,10 +50,18 @@ impl Release {
     }
 }
 
-/// The project's Ed25519 update-manifest public key (raw 32-byte hex).
+/// The project's primary Ed25519 update-manifest public key (raw 32-byte hex).
 /// The private key lives in the GitHub `UPDATE_SIGNING_KEY` secret and an
 /// offline backup; it is never in this repository.
 const UPDATE_PUBLIC_KEY_HEX: &str = "49a5c084f6e0673bb7ad3c102db4186ff6048529c6533b334ebfc868db0e51bb";
+/// Successor key. Its private half is offline; it signs the key-revocation
+/// feed so a compromised primary key cannot suppress its own revocation.
+const UPDATE_SUCCESSOR_PUBLIC_KEY_HEX: &str =
+    "f0ed7f4fa4fac94e0bf72931ee0ab16fd4882867c167572c988bec85986444c1";
+const KEY_REVOCATIONS_URL: &str =
+    "https://raw.githubusercontent.com/zhafribs/Proton-Drive-Linux-Cli/main/security/key-revocations.json";
+const KEY_REVOCATIONS_SIG_URL: &str =
+    "https://raw.githubusercontent.com/zhafribs/Proton-Drive-Linux-Cli/main/security/key-revocations.json.sig";
 
 fn hex_bytes<const N: usize>(value: &str) -> Option<[u8; N]> {
     if value.len() != N * 2 {
@@ -85,11 +93,7 @@ fn verify_manifest_with(key_hex: &str, manifest: &[u8], signature: &[u8]) -> boo
 /// Keys allowed to sign update manifests. Rotation adds a new key here in a
 /// release signed by the old one; the old key stays until the migration
 /// window ends.
-const UPDATE_PUBLIC_KEYS: &[&str] = &[
-    UPDATE_PUBLIC_KEY_HEX,
-    // Successor key generated 2026-11-10; private key kept offline.
-    "f0ed7f4fa4fac94e0bf72931ee0ab16fd4882867c167572c988bec85986444c1",
-];
+const UPDATE_PUBLIC_KEYS: &[&str] = &[UPDATE_PUBLIC_KEY_HEX, UPDATE_SUCCESSOR_PUBLIC_KEY_HEX];
 /// Keys revoked by a later release. A revoked key is skipped even when its
 /// signature would otherwise verify.
 const REVOKED_UPDATE_KEYS: &[&str] = &[];
@@ -109,13 +113,58 @@ fn verify_manifest_with_keys(
 /// a non-revoked project key over `SHA256SUMS`. The digest in that signed
 /// manifest is the authority; the GitHub API digest is only a consistency
 /// check.
+fn manifest_signing_key(manifest: &[u8], signature: &[u8]) -> Option<&'static str> {
+    UPDATE_PUBLIC_KEYS
+        .iter()
+        .filter(|key| !REVOKED_UPDATE_KEYS.contains(key))
+        .find(|key| verify_manifest_with(key, manifest, signature))
+        .copied()
+}
+
+#[cfg(test)]
 fn verify_manifest_signature(manifest: &[u8], signature: &[u8]) -> bool {
-    verify_manifest_with_keys(
-        UPDATE_PUBLIC_KEYS,
-        REVOKED_UPDATE_KEYS,
-        manifest,
-        signature,
-    )
+    manifest_signing_key(manifest, signature).is_some()
+}
+
+fn key_is_revoked(key: &str, feed: &[u8]) -> Result<bool, String> {
+    #[derive(serde::Deserialize)]
+    struct Feed {
+        #[serde(default)]
+        revoked_keys: Vec<String>,
+    }
+    let feed: Feed = serde_json::from_slice(feed)
+        .map_err(|e| format!("key revocation feed is not valid JSON: {e}"))?;
+    Ok(feed.revoked_keys.iter().any(|k| k == key))
+}
+
+/// Check the manifest signature and the successor-signed key-revocation feed.
+/// The feed is required, so a compromised primary key cannot suppress its own
+/// revocation; a missing feed fails closed.
+fn check_manifest_trust(manifest: &[u8], signature: &[u8]) -> Result<(), String> {
+    let key = manifest_signing_key(manifest, signature)
+        .ok_or_else(|| "update manifest is unsigned or its signature is invalid".to_string())?;
+    let feed = http_get_text_retry(KEY_REVOCATIONS_URL, 30)
+        .map_err(|e| format!("key revocation feed fetch failed: {e}"))?;
+    let sig = http_get_bytes_retry(KEY_REVOCATIONS_SIG_URL, 30, 1024)
+        .map_err(|e| format!("key revocation signature fetch failed: {e}"))?;
+    check_manifest_trust_with(key, UPDATE_SUCCESSOR_PUBLIC_KEY_HEX, feed.as_bytes(), &sig)
+}
+
+/// The pure trust decision: the feed must be signed by the successor key and
+/// must not list the key that signed the manifest.
+fn check_manifest_trust_with(
+    key: &str,
+    successor_key: &str,
+    feed: &[u8],
+    feed_signature: &[u8],
+) -> Result<(), String> {
+    if !verify_manifest_with(successor_key, feed, feed_signature) {
+        return Err("key revocation feed has an invalid successor signature".into());
+    }
+    if key_is_revoked(key, feed)? {
+        return Err("the update manifest is signed by a revoked key".into());
+    }
+    Ok(())
 }
 
 /// Releases at or after this GUI version must carry a signed revocation feed.
@@ -814,9 +863,7 @@ pub fn download_update(rel: &Release, arch: &str) -> Result<std::path::PathBuf, 
         .map_err(|e| format!("checksum fetch failed: {e}"))?;
     let signature = http_get_bytes_retry(&plan.sig_url, 60, 1024)
         .map_err(|e| format!("manifest signature fetch failed: {e}"))?;
-    if !verify_manifest_signature(manifest.as_bytes(), &signature) {
-        return Err("update manifest is unsigned or its signature is invalid".to_string());
-    }
+    check_manifest_trust(manifest.as_bytes(), &signature)?;
     let want = sum_for(&manifest, &plan.name)
         .and_then(|sum| normalize_sha256(&sum))
         .ok_or_else(|| {
@@ -1557,6 +1604,51 @@ mod tests {
             manifest,
             &other_sig.to_bytes()
         ));
+    }
+
+    #[test]
+    fn key_revocation_feed_lists_revoked_keys() {
+        let feed = br#"{"version":1,"revoked_keys":["abc"]}"#;
+        assert!(key_is_revoked("abc", feed).unwrap());
+        assert!(!key_is_revoked("def", feed).unwrap());
+        let empty = br#"{"version":1,"revoked_keys":[]}"#;
+        assert!(!key_is_revoked("abc", empty).unwrap());
+        assert!(key_is_revoked("abc", b"not json").is_err());
+    }
+
+    #[test]
+    fn key_revocation_feed_requires_the_successor_signature() {
+        use ed25519_dalek::{Signer, SigningKey};
+        let successor = SigningKey::from_bytes(&[21u8; 32]);
+        let successor_hex: String = successor
+            .verifying_key()
+            .to_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let attacker = SigningKey::from_bytes(&[22u8; 32]);
+        let feed = br#"{"version":1,"revoked_keys":["compromised"]}"#;
+        let good = successor.sign(feed);
+        assert!(
+            check_manifest_trust_with("healthy", &successor_hex, feed, &good.to_bytes()).is_ok()
+        );
+        let revoked =
+            check_manifest_trust_with("compromised", &successor_hex, feed, &good.to_bytes())
+                .unwrap_err();
+        assert!(revoked.contains("revoked key"));
+        let bad = attacker.sign(feed);
+        assert!(
+            check_manifest_trust_with("healthy", &successor_hex, feed, &bad.to_bytes()).is_err()
+        );
+        let malformed = b"not json";
+        let malformed_sig = successor.sign(malformed);
+        assert!(check_manifest_trust_with(
+            "healthy",
+            &successor_hex,
+            malformed,
+            &malformed_sig.to_bytes()
+        )
+        .is_err());
     }
 
     #[test]

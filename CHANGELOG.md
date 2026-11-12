@@ -1,3 +1,19 @@
+## 3.28.0 — 2026-11-12
+
+### Update trust and reproducibility
+
+- **Successor-signed key revocation.** The updater fetches
+  `security/key-revocations.json` and its signature from `main`, requires the
+  feed, and rejects a manifest signed by a key listed in `revoked_keys`. A
+  missing or malformed feed fails closed, so a compromised primary key can be
+  rejected without shipping a new release.
+- **Reproducible AppImage.** `build.sh` honours `SOURCE_DATE_EPOCH` for the
+  AppStream release date. CI builds twice and compares bytes;
+  `scripts/repro-check.sh` proves the same property locally.
+- **Release gate hardening.** `check-release.sh` verifies the successor feed
+  signature and that the embedded successor key matches
+  `src/update-signing-successor.pub`.
+
 ## 3.27.0 — 2026-11-10
 
 ### Update trust operations

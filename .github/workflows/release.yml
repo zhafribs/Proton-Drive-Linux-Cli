@@ -207,7 +207,19 @@ jobs:
       - name: Build AppImages (x86_64)
         env:
           REQUIRE_GLIBC_FLOOR: "1"
-        run: ./build.sh
+        run: SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" ./build.sh
+
+      # Attestation, not documentation: a second build from the same commit
+      # must produce exactly the same AppImage bytes.
+      - name: Prove the AppImage is reproducible
+        env:
+          REQUIRE_GLIBC_FLOOR: "1"
+        run: |
+          set -euo pipefail
+          cp dist/ProtonDrive-CLI-*-x86_64.AppImage "$RUNNER_TEMP/first.AppImage"
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" ./build.sh
+          cmp "$RUNNER_TEMP/first.AppImage" dist/ProtonDrive-CLI-*-x86_64.AppImage
+          echo "reproducible: both builds are byte-identical"
 
       - name: Sign the checksum manifest
         env:

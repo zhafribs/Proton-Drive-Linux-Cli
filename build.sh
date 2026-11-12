@@ -287,7 +287,11 @@ make_appdir() {
     # Fill the versions at build time so AppStream, the desktop entry and the
     # binary can never disagree.
     local release_date
-    release_date="$(date -u +%F)"
+    if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then
+        release_date="$(date -u -d "@${SOURCE_DATE_EPOCH}" +%F)"
+    else
+        release_date="$(date -u +%F)"
+    fi
     sed "s/@GUI_VERSION@/${GUI_VERSION}/g" "$SRC/$DESKTOP_ID" > "$appdir/$DESKTOP_ID"
     install -m 0644 "$appdir/$DESKTOP_ID" "$appdir/usr/share/applications/$DESKTOP_ID"
     sed "s/@GUI_VERSION@/${GUI_VERSION}/g; s/@RELEASE_DATE@/${release_date}/g" \

@@ -56,8 +56,13 @@ for f in "$desktop" "$desktop_installed"; do
     grep -qx "X-AppImage-Version=${GUI_VERSION}" "$f" \
         || die "$(basename "$f") does not carry X-AppImage-Version=${GUI_VERSION}"
 done
-grep -q "<release version=\"${GUI_VERSION}\" date=\"$(date -u +%F)\"/>" "$metainfo" \
-    || die "metainfo release version/date does not match ${GUI_VERSION} ($(date -u +%F))"
+if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then
+    metainfo_date="$(date -u -d "@${SOURCE_DATE_EPOCH}" +%F)"
+else
+    metainfo_date="$(date -u +%F)"
+fi
+grep -q "<release version=\"${GUI_VERSION}\" date=\"${metainfo_date}\"/>" "$metainfo" \
+    || die "metainfo release version/date does not match ${GUI_VERSION} (${metainfo_date})"
 grep -q '<id>io.github.zhafribs.protondrivecli</id>' "$metainfo" \
     || die "metainfo component id is not io.github.zhafribs.protondrivecli"
 grep -q '<launchable type="desktop-id">io.github.zhafribs.protondrivecli.desktop</launchable>' "$metainfo" \
@@ -115,6 +120,28 @@ if [ -z "${CHECK_RELEASE_PUBLIC_KEY:-}" ] && [ "${ALLOW_KEY_ROTATION:-0}" != "1"
         | tail -c 32 | od -An -tx1 | tr -d ' \n')"
     [ -n "$embedded" ] && [ "$embedded" = "$derived" ] \
         || die "gui/src/release.rs embedded update key does not match src/update-signing-key.pub"
+fi
+
+# The key-revocation feed is fetched at update time from the repository, so
+# the committed copy must carry a valid successor signature. Like the key
+# check above, this only applies to a real release, not a gate fixture.
+if [ -z "${CHECK_RELEASE_PUBLIC_KEY:-}" ]; then
+    KEY_FEED="$ROOT/security/key-revocations.json"
+    SUCCESSOR_PUBLIC="$ROOT/src/update-signing-successor.pub"
+    [ -f "$KEY_FEED" ] || die "security/key-revocations.json is missing"
+    [ -f "$KEY_FEED.sig" ] || die "security/key-revocations.json.sig is missing - run scripts/sign-key-revocations.sh"
+    [ -f "$SUCCESSOR_PUBLIC" ] || die "src/update-signing-successor.pub is missing"
+    openssl pkeyutl -verify -pubin -inkey "$SUCCESSOR_PUBLIC" -rawin \
+        -in "$KEY_FEED" -sigfile "$KEY_FEED.sig" >/dev/null 2>&1 \
+        || die "key-revocations.json.sig does not verify against the successor key"
+    grep -q '"revoked_keys"' "$KEY_FEED" \
+        || die "security/key-revocations.json has no revoked_keys list"
+    embedded_successor="$(sed -n '/UPDATE_SUCCESSOR_PUBLIC_KEY_HEX/,/;/s/.*"\([0-9a-f]\{64\}\)".*/\1/p' \
+        "$ROOT/gui/src/release.rs" | head -1)"
+    derived_successor="$(openssl pkey -pubin -in "$SUCCESSOR_PUBLIC" -outform DER 2>/dev/null \
+        | tail -c 32 | od -An -tx1 | tr -d ' \n')"
+    [ -n "$embedded_successor" ] && [ "$embedded_successor" = "$derived_successor" ] \
+        || die "gui/src/release.rs embedded successor key does not match src/update-signing-successor.pub"
 fi
 
 allow_same="${ALLOW_SAME_VERSION:-0}"

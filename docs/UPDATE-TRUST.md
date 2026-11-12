@@ -40,6 +40,54 @@ Its private key is offline; it is not in the repository or CI.
 revoked key is skipped even if its signature is cryptographically valid. This
 protects users who install the revoking build.
 
+## Key revocation feed
+
+A compromised primary key must be rejectable by builds that already trusted
+it. From `3.28.0` the updater fetches:
+
+```
+security/key-revocations.json
+security/key-revocations.json.sig
+```
+
+from `main` on `raw.githubusercontent.com`. The feed is:
+
+```json
+{ "version": 1, "updated": "…", "revoked_keys": [ "<64-hex public key>" ] }
+```
+
+Its signature is made by the **successor key**, not the release key. The
+updater requires the feed: a missing, malformed or badly signed feed fails
+closed. Releases before `3.28.0` do not check it.
+
+Sign the feed offline after every edit:
+
+```sh
+./scripts/sign-key-revocations.sh
+```
+
+The script uses `UPDATE_SUCCESSOR_KEY_FILE` (default
+`~/Backup/proton-update-successor-key.pem`) and verifies the result against
+`src/update-signing-successor.pub`. Commit both the feed and signature.
+
+To revoke the primary key, add its hex to `revoked_keys`, sign, commit and
+push. Builds at `3.28.0` or later then reject manifests signed by it, even
+though the key remains in `UPDATE_PUBLIC_KEYS`, so a stolen primary key
+cannot sign an update that users install.
+
+## Reproducible builds
+
+`build.sh` honours `SOURCE_DATE_EPOCH` for the AppStream release date. CI
+builds with the source commit's timestamp, so the same commit produces the
+same bytes. Prove it locally with:
+
+```sh
+./scripts/repro-check.sh
+```
+
+The script builds twice with the same `SOURCE_DATE_EPOCH` and fails unless the
+two AppImages are byte-identical.
+
 ## Release revocation feed
 
 Every release from `3.27.0` carries:
@@ -63,10 +111,11 @@ release, and the feed from that release will block it.
 `SHA256SUMS`, both signatures, the AppImage smoke test and the GLIBC 2.28
 floor.
 
-## Limitation
+## Remaining limits
 
-The feed is signed by a trusted release key. A compromised key can sign a feed
-that omits its own revocation, so this protects against a bad **release**, not
-a stolen **key**. Key rotation remains preventative: add the successor key now,
-keep the private keys offline, and publish the rotation release before the old
-key is retired.
+The successor key is now the root of trust for key revocation. Its private key
+must stay offline; if it is compromised, no shipped build can revoke it
+without a manual recovery release. The feed lives on `main`, so an outage or
+deletion fails closed rather than accepting updates. Release-tag revocation is
+still signed by the release key and protects against a bad release, not a
+stolen key.
