@@ -229,6 +229,16 @@ fn normalize_sha256(raw: &str) -> Option<String> {
 /// The updater only talks to this repository's releases and GitHub's asset
 /// CDN. Hosts are matched exactly, so `github.com.evil` or userinfo tricks do
 /// not pass. The digest is still the integrity check; this is defence in depth.
+pub fn updater_feed_url() -> &'static str {
+    KEY_REVOCATIONS_URL
+}
+
+/// Whether this build's allowlist accepts its own key-revocation feed. A
+/// support report can show this without making a network call.
+pub fn updater_feed_trusted() -> bool {
+    trusted_download_url(KEY_REVOCATIONS_URL) && trusted_download_url(KEY_REVOCATIONS_SIG_URL)
+}
+
 fn trusted_download_url(url: &str) -> bool {
     let Some(rest) = url.strip_prefix("https://") else {
         return false;
@@ -876,7 +886,17 @@ pub fn download_update(rel: &Release, arch: &str) -> Result<std::path::PathBuf, 
         .map_err(|e| format!("checksum fetch failed: {e}"))?;
     let signature = http_get_bytes_retry(&plan.sig_url, 60, 1024)
         .map_err(|e| format!("manifest signature fetch failed: {e}"))?;
-    check_manifest_trust(manifest.as_bytes(), &signature)?;
+    check_manifest_trust(manifest.as_bytes(), &signature).map_err(|e| {
+        if e.contains("untrusted download URL") {
+            format!(
+                "{e}\nThis build cannot self-update. Download the latest release from \
+                 {} manually.",
+                crate::paths::RELEASE_PAGE
+            )
+        } else {
+            e
+        }
+    })?;
     let want = sum_for(&manifest, &plan.name)
         .and_then(|sum| normalize_sha256(&sum))
         .ok_or_else(|| {

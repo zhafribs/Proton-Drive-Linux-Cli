@@ -587,6 +587,7 @@ fn details(app: &mut AboutView, ui: &mut egui::Ui) {
                      Last update {}\n\
                      Next check {}\n\
                      Engine build {}\n\
+                     Updater feed {} (trusted: {})\n\
                      Cycle seconds {}\n\
                      Failed {}  Conflicts {}  Holds {}\n\
                      Audit {}{}\n\
@@ -601,6 +602,8 @@ fn details(app: &mut AboutView, ui: &mut egui::Ui) {
                     h.ts.as_deref().unwrap_or("unknown"),
                     h.next_poll.as_deref().unwrap_or("not scheduled"),
                     h.build.as_deref().unwrap_or("unknown"),
+                    crate::release::updater_feed_url(),
+                    crate::release::updater_feed_trusted(),
                     h.cycle_seconds.map(|s| format!("{s:.1}")).unwrap_or_default(),
                     h.failed,
                     h.conflicts,

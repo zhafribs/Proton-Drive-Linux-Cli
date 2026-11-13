@@ -1382,6 +1382,16 @@ fn updates_card(app: &mut SettingsView, ui: &mut egui::Ui) {
         if !app.upd.label.is_empty() {
             ui.label(egui::RichText::new(app.upd.label.clone()).size(12.0).weak());
         }
+        if !crate::release::updater_feed_trusted() {
+            ui.label(
+                egui::RichText::new(
+                    "This build does not trust its update feed; download the latest \
+                     release manually.",
+                )
+                .size(11.0)
+                .color(crate::theme::ERROR),
+            );
+        }
         ui.add_space(6.0);
         let has_update = app.upd.available.is_some() && app.ctx.paths.appimage.is_some();
         ui.horizontal_wrapped(|ui| {

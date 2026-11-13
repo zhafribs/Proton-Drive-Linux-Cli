@@ -1,3 +1,16 @@
+## 3.31.2 — 2026-11-13
+
+### Updater clarity
+
+- **The update feed is now visible in diagnostics.** About → Copy diagnostics
+  prints the key-revocation feed URL and whether the running build trusts it.
+- **Manual-download guidance.** If a build rejects its feed URL, the update
+  error now says to download the latest release manually instead of only
+  naming the rejected URL.
+- **Upgrade target.** This release exists so a manually installed `3.31.1`
+  can exercise the fixed updater against a newer release. Builds `3.31.0` and
+  older still cannot self-update; install `3.31.1` or `3.31.2` once by hand.
+
 ## 3.31.1 — 2026-11-13
 
 ### Update check fix
