@@ -5,6 +5,7 @@
 ![Rust only](https://img.shields.io/badge/Rust-only-000?logo=rust)
 ![Arch: x86_64 + aarch64](https://img.shields.io/badge/arch-x86__64%20%2B%20aarch64-lightgrey)
 ![Proton Drive CLI: 0.9.0](https://img.shields.io/badge/Proton%20Drive%20CLI-0.9.0-6D4AFF)
+![Languages: English + Bahasa Melayu](https://img.shields.io/badge/languages-English%20%2B%20Bahasa%20Melayu-4B8BBE)
 
 **An unofficial Proton Drive desktop app for Linux** — two-way folder sync, a
 cloud file manager, tray, notifications and in-app updates, built on Proton's
@@ -52,21 +53,23 @@ install `libfuse2` / `fuse2` / `fuse-libs`, or run with
 
 | Home | My files |
 |:---:|:---:|
-| ![Home](docs/screenshots/home-3.20.49.png) | ![My files](docs/screenshots/files-3.20.49.png) |
+| ![Home](docs/screenshots/home-3.33.0.png) | ![My files](docs/screenshots/files-3.33.0.png) |
 
-**Interface size** — five presets plus a custom 50%-200% slider:
+| Settings | Photos |
+|:---:|:---:|
+| ![Settings](docs/screenshots/settings-3.33.0.png) | ![Photos](docs/screenshots/photos-3.33.0.png) |
 
-![Appearance](docs/screenshots/appearance-3.20.49.png)
+**English and Bahasa Melayu are built in.** The same Home screen in Malay:
 
-*Dark theme shown; light and system themes are built in.*
+| Home in Bahasa Melayu | About |
+|:---:|:---:|
+| ![Home in Malay](docs/screenshots/home-ms-3.33.0.png) | ![About](docs/screenshots/about-3.33.0.png) |
 
-**Photos** — the same status hero and three summary cards as Home, above the timeline:
+*Dark theme shown. Light, dark and system themes are built in, with five
+interface-size presets plus a custom 50%-200% slider.*
 
-![Photos](docs/screenshots/photos-3.20.39.png)
-
-**About** — versions, updates, diagnostics and credits:
-
-![About](docs/screenshots/about-3.20.49.png)
+**Reliability:** a 60-cycle churn soak, update rollback/fault matrix and an
+opt-in real-account E2E live in [docs/RELIABILITY.md](docs/RELIABILITY.md).
 
 ## If sync stops
 
