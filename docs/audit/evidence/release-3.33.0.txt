@@ -1,0 +1,70 @@
+# Release evidence — v0.9.0-gui3.33.0 (M11)
+
+Tag: v0.9.0-gui3.33.0
+Scope: M11 — Complete Bahasa Melayu interface, plus the reliability evidence
+shipped in v0.9.0-gui3.32.0.
+
+## Assets
+
+  ProtonDrive-CLI-0.9.0-GUI-3.33.0-x86_64.AppImage   52787704 bytes
+  ProtonDrive-CLI-0.9.0-GUI-3.33.0-aarch64.AppImage  51423752 bytes
+  proton-drive_0.9.0+gui3.33.0_amd64.deb             51895052 bytes
+  proton-drive_0.9.0+gui3.33.0_arm64.deb             50506380 bytes
+  proton-drive_0.9.0+gui3.33.0_x86_64.flatpak        41453264 bytes
+  revocations.json                                   68 bytes
+  revocations.json.sig                               64 bytes
+  SHA256SUMS                                         551 bytes
+  SHA256SUMS.sig                                     64 bytes
+
+Published SHA-256:
+
+  a2f0406aba38000f8b82bf38e10f99217cd8a4a5a9698e681bed620ae0d6f271  x86_64 AppImage
+  4326fb0005913eebf37dca59f724aef027810d553ef730520da9ba72182ad769  aarch64 AppImage
+  db000ebaefb34dec109ef4d14df61bb79c86753909ec29820aeb21c433d2667b  amd64 .deb
+  a637577ab1fe2df21f44786fb8bd6ab5d0ae87816ccccadbe9ab4a8b4802d83b  arm64 .deb
+  b94ca0f943a1a80c4f4205559124c3f6468a342ce0629e331983391be5997957  x86_64 .flatpak
+
+The published SHA256SUMS signature verified against
+`src/update-signing-key.pub`.
+
+## Localization
+
+- 299 catalog entries in `gui/src/i18n.rs`; `tr()` for known call sites,
+  `t()`/`rt()` for static and formatted display text.
+- All pages, dialogs, menus, tray entries, notifications, empty states, app
+  errors and update progress render in Malay.
+- Counts and relative times translate by shape (`4 item`, `12 minit lalu`,
+  `Dimuat naik · Documents`). File names, versions, dates, sizes and raw CLI
+  errors stay as data.
+- Seven Malay page screenshots in `docs/audit/m11/`; English equivalents in
+  `docs/audit/m8/`. The UI audit renders every page and all dialog variants in
+  Malay with the same AccessKit checks.
+- Core catalog assertions cover navigation, Settings, sync, conflicts,
+  Recovery and proper-noun fallback.
+
+## Reliability evidence (3.32.0)
+
+- `sixty_cycles_keep_both_sides_and_state_converged`: 60 process cycles with
+  two-sided churn; trees and `state.json` converge, no conflicts, no stale
+  rows.
+- `scripts/live-e2e.sh`: opt-in real-account upload/list/download/byte-compare
+  and trash cleanup; not run in CI.
+- Existing matrix: failed upload, short download, session vs network
+  classification, update trust, atomic swap and rollback.
+- `scripts/bench-scan.sh 10000`: 14 ms / 14 ms / 14 ms.
+
+## Gate results
+
+- 322 tests passed, 6 ignored (network/live tests).
+- clippy clean (`-D warnings`).
+- Release-gate fixtures 12/12; UI audit and Malay screenshots passed.
+- `scripts/check-release.sh`: OK — CLI 0.9.0, GUI 3.33.0.
+- CI run `43426465991`: verify and release succeeded.
+- CI reproducibility: both builds byte-identical.
+- Releases retained: 45.
+
+## Note
+
+The full `verify-release.sh` download of every asset was not re-run locally;
+CI built, signed, smoke-tested and published this tag, and the published
+manifest signature was verified separately.

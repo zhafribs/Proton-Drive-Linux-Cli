@@ -10,9 +10,21 @@
   English.
 - **Language selector** no longer says beta; the note explains that file names
   and raw CLI errors remain as reported.
-- **Reliability evidence:** 60-cycle two-sided soak test, opt-in real-account
-  live E2E (`scripts/live-e2e.sh`), update/rollback and sync fault matrix,
-  and a fresh 10,000-file scan baseline (14 ms x3).
+- **Reliability evidence** from `3.32.0` remains: 60-cycle soak, opt-in live
+  E2E, fault matrix and scan baseline.
+
+## 3.32.0 — 2026-11-13
+
+### Reliability evidence
+
+- **Sixty-cycle soak test.** Local and cloud churn for 60 process cycles; both
+  trees and `state.json` converge with no conflicts or stale rows.
+- **Opt-in live E2E.** `scripts/live-e2e.sh` creates a temporary folder in a
+  real account, uploads, lists, downloads and byte-compares one file, then
+  trashes the folder. Not run in CI; it needs a signed-in account.
+- **Fault matrix retained.** Failed upload, short download, session/network
+  classification, update trust and rollback remain covered.
+- **Scan baseline:** 10,000 local files scanned in 14 ms three times.
 
 ## 3.31.3 — 2026-11-13
 

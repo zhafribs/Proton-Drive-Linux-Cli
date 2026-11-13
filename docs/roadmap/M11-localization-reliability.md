@@ -4,7 +4,7 @@
 **Theme:** make the interface usable in Malay and turn the reliability claims
 into repeatable evidence.
 
-## Part 1 — Reliability evidence (shipped in `3.33.0`)
+## Part 1 — Reliability evidence (`3.32.0`)
 
 - Sixty-cycle soak test with two-sided churn.
 - Opt-in real-account live E2E (`scripts/live-e2e.sh`).
@@ -12,7 +12,7 @@ into repeatable evidence.
   classification, update rollback.
 - Scan baseline re-run and recorded.
 
-## Part 2 — Complete localization (shipped in `3.33.0`)
+## Part 2 — Complete localization (`3.33.0`)
 
 - Every page, dialog, menu, empty state, app error, notification and tray
   entry is available in English and Bahasa Melayu.
@@ -24,3 +24,12 @@ into repeatable evidence.
 
 - Flatpak distribution/Flathub/aarch64 (deliberately omitted for now).
 - Running a real Proton account inside CI.
+
+## Release verification
+
+- `v0.9.0-gui3.32.0` — 60-cycle soak, live-E2E harness, fault matrix and scan
+  baseline; CI verify + release succeeded.
+- `v0.9.0-gui3.33.0` — complete Malay interface; 322 tests, clippy clean,
+  release gate and UI audit passed; CI run `43426465991` succeeded.
+- Published SHA256SUMS signature verified; release assets and hashes are in
+  `docs/audit/evidence/release-3.33.0.txt`.
