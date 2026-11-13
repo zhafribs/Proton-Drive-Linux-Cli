@@ -1,0 +1,39 @@
+# Release evidence — v0.9.0-gui3.31.3
+
+Tag: v0.9.0-gui3.31.3
+Purpose: make an in-app update visibly progress instead of appearing frozen,
+and stop `--diagnose | head` from aborting on a closed stdout pipe.
+
+## Assets
+
+  ProtonDrive-CLI-0.9.0-GUI-3.31.3-x86_64.AppImage   52771320 bytes
+  ProtonDrive-CLI-0.9.0-GUI-3.31.3-aarch64.AppImage  51415560 bytes
+  proton-drive_0.9.0+gui3.31.3_amd64.deb             51880664 bytes
+  proton-drive_0.9.0+gui3.31.3_arm64.deb             50497212 bytes
+  proton-drive_0.9.0+gui3.31.3_x86_64.flatpak        40093976 bytes
+
+SHA-256 (signed SHA256SUMS):
+
+  d84ca7683d428b3ab6eebabcca9cf1107b68e3a9f8d558f9f7ae2c25144f4bf3  x86_64 AppImage
+  74b34c9aad57877d83cc9c122cf38d0d0a2fedc9f38dcc421f0197bcc0255d45  aarch64 AppImage
+  db4447a53f3dd0297a99b997747da6487f770fd52f6984844c93a954aafe640d  amd64 .deb
+  d2a9631cc6724baa269494367626a632c9e0dfb121a675b9cc5098fcafb85e45  arm64 .deb
+  5db6b851285c6765c7ed028e2e9113d2eb2c8f2ed053158d748671a2fefa7335  x86_64 .flatpak
+
+## Changes
+
+- A modal with a spinner and explanation is shown above every page while an
+  update downloads and verifies. It stays until the app restarts.
+- Starting an update also queues a toast.
+- `--diagnose` writes through a sink that ignores `EPIPE`, so `| head` no
+  longer aborts with "failed printing to stdout".
+
+## Verification
+
+- 316 tests passed, 4 ignored; clippy clean.
+- UI audit includes the update-progress modal.
+- CI run `43418158433`: verify and release succeeded.
+- Local smoke: `gui 3.31.3`; `--diagnose | head -1` exits 0.
+- Reproducibility: two local builds byte-identical (`e06bb5d4...`).
+- Flatpak was rebuilt and checked locally; the published bundle is covered by
+  the signed checksum manifest.
