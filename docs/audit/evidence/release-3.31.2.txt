@@ -1,0 +1,46 @@
+# Release evidence — v0.9.0-gui3.31.2
+
+Tag: v0.9.0-gui3.31.2
+Purpose: make the fixed updater visible and give `3.31.1` a newer release to
+update to. Builds `3.31.0` and older still reject the key-revocation feed URL;
+that code is inside the old binary and cannot be patched remotely.
+
+## Assets
+
+  ProtonDrive-CLI-0.9.0-GUI-3.31.2-x86_64.AppImage   52771320 bytes
+  ProtonDrive-CLI-0.9.0-GUI-3.31.2-aarch64.AppImage  51411464 bytes
+  proton-drive_0.9.0+gui3.31.2_amd64.deb             51878604 bytes
+  proton-drive_0.9.0+gui3.31.2_arm64.deb             50495940 bytes
+  proton-drive_0.9.0+gui3.31.2_x86_64.flatpak        40088832 bytes
+
+SHA-256 (from the signed SHA256SUMS):
+
+  e192a569fcb4d2c0247a42a5d8817b4daa45cd6e8ed82a00454036de01af16d6  x86_64 AppImage
+  1e3a20fb77359796e218b88405fe0e85a2674744c65ccc66dc88ee83ddb0ef5a  aarch64 AppImage
+  978af9c409acab8162aa65b881d44900add9820508ec00f1da250f05df731869  amd64 .deb
+  01d9eaa9008f947631ab92ee99a2decfb9d8e3fb8bb1d77ef7b500c997816471  arm64 .deb
+  d8e3aac5176aee8227629f7563299634406c6c0d3964c2a25d95add9fcb6f606  x86_64 .flatpak
+
+## Changes
+
+- About → Copy diagnostics prints the key-revocation feed URL and whether the
+  running build trusts it.
+- An untrusted-feed update error now says to download the latest release
+  manually.
+- Settings shows the same warning if the running build's allowlist rejects its
+  own feed.
+
+## Verification
+
+- 316 tests passed, 3 ignored in the GUI binary; clippy clean.
+- CI run `43414026586`: verify and release succeeded.
+- Release assets are present with the signed `SHA256SUMS` covering all five.
+- Published `3.31.1` is the first version that can fetch the feed; `3.31.2`
+  is the target used to exercise that path.
+
+## Upgrade path
+
+1. Manually install `3.31.1` or `3.31.2` once.
+2. Check About/`--diagnose` reports the new version.
+3. From `3.31.1`, update to `3.31.2` in-app; the feed fetch and signature
+   verification must succeed before the download starts.
