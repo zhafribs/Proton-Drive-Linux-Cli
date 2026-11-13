@@ -1,6 +1,7 @@
 //! The Home feed: the friendly "Files moved" list and the raw technical log,
 //! exactly the two segments the PyQt app offered.
 
+use crate::i18n::{rt, t, TrUi};
 use super::{Toast, widgets};
 use crate::journal::{ChangeRow, Dir};
 use crate::theme;
@@ -60,13 +61,13 @@ pub fn draw_preview(
         }
         if shown == 0 {
             ui.label(
-                egui::RichText::new("No activity yet — changes appear here as they sync.")
+                rt("No activity yet — changes appear here as they sync.")
                     .size(12.0)
                     .weak(),
             );
         }
         ui.add_space(6.0);
-        if ui.link("View all activity").clicked() {
+        if ui.link(rt("View all activity")).clicked() {
             open = true;
         }
     });
@@ -88,7 +89,7 @@ pub fn draw(app: &mut ActivityView, ui: &mut egui::Ui, title: &str) {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
                         let sel0 = app.act.seg == 0;
-                        let r0 = ui.selectable_label(sel0, "Files moved");
+                        let r0 = ui.tselectable_label(sel0, "Files moved");
                         if r0.hovered() {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
@@ -96,7 +97,7 @@ pub fn draw(app: &mut ActivityView, ui: &mut egui::Ui, title: &str) {
                             app.act.seg = 0;
                         }
                         let sel1 = app.act.seg == 1;
-                        let r1 = ui.selectable_label(sel1, "Technical log");
+                        let r1 = ui.tselectable_label(sel1, "Technical log");
                         if r1.hovered() {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
@@ -127,15 +128,15 @@ fn files_tab(app: &mut ActivityView, ui: &mut egui::Ui) {
             // narrow the combo wraps instead of widening the card.
             ui.add(
                 egui::TextEdit::singleline(&mut app.act.query)
-                    .hint_text("Search file names...")
+                    .hint_text(rt("Search file names..."))
                     .desired_width((ui.available_width() - 150.0).max(100.0)),
             );
             let combo = egui::ComboBox::from_id_salt("act-kind")
-                .selected_text(KINDS[app.act.kind])
+                .selected_text(t(KINDS[app.act.kind]))
                 .width(140.0)
                 .show_ui(ui, |ui| {
                     for (i, k) in KINDS.iter().enumerate() {
-                        ui.selectable_value(&mut app.act.kind, i, *k);
+                        ui.tselectable_value(&mut app.act.kind, i, *k);
                     }
                 });
             // A visible "Filter" label would cost width on the narrow card;
@@ -144,7 +145,7 @@ fn files_tab(app: &mut ActivityView, ui: &mut egui::Ui) {
                 let mut info = egui::WidgetInfo::new(egui::Role::ComboBox);
                 info.enabled = ui.is_enabled();
                 info.label = Some("Filter activity by type".into());
-                info.current_text_value = Some(KINDS[app.act.kind].to_string());
+                info.current_text_value = Some(t(KINDS[app.act.kind]));
                 info
             });
         });
@@ -195,13 +196,11 @@ fn files_tab(app: &mut ActivityView, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         if shown == 0 {
             ui.label(
-                egui::RichText::new(
-                    "No activity yet — changes appear here as they sync.",
-                )
+                rt("No activity yet — changes appear here as they sync.")
                 .weak(),
             );
         } else {
-            ui.label(egui::RichText::new(format!("{shown} items")).size(12.0).weak());
+            ui.label(rt(format!("{shown} items")).size(12.0).weak());
         }
     });
 }
@@ -212,10 +211,10 @@ fn log_tab(app: &mut ActivityView, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut app.act.log_query)
-                    .hint_text("Filter log lines...")
+                    .hint_text(rt("Filter log lines..."))
                     .desired_width((ui.available_width() - 110.0).max(100.0)),
             );
-            if ui.button("Copy log").clicked() {
+            if ui.tbutton("Copy log").clicked() {
                 let text: Vec<&str> = app
                     .log_lines
                     .iter()
@@ -240,7 +239,7 @@ fn log_tab(app: &mut ActivityView, ui: &mut egui::Ui) {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for l in &lines[start..] {
-                    ui.label(egui::RichText::new(*l).monospace().size(12.0));
+                    ui.label(rt(*l).monospace().size(12.0));
                 }
             });
     });

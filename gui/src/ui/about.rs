@@ -1,5 +1,6 @@
 //! About: product identity, versions, updates, details, credits and legal.
 
+use crate::i18n::{rt, t, TrUi};
 use super::{AppCtx, Toast, UpdateUi, recovery::RecoveryState, widgets};
 use crate::paths::{RELEASE_PAGE, REPO_URL};
 use crate::{GUI_VERSION, theme, util};
@@ -115,7 +116,7 @@ pub fn draw(app: &mut AboutView, ui: &mut egui::Ui) {
 
 fn page_head(app: &mut AboutView, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
-        let title = ui.label(egui::RichText::new("About").strong().size(24.0));
+        let title = ui.label(rt("About").strong().size(24.0));
         title.widget_info(|| {
             egui::WidgetInfo::labeled(egui::Role::Heading, true, "About")
         });
@@ -160,14 +161,12 @@ fn hero(app: &AboutView, ui: &mut egui::Ui) {
                 |ui| {
                     ui.set_min_width(text_w);
                     ui.label(
-                        egui::RichText::new("Proton Drive for Linux")
+                        rt("Proton Drive for Linux")
                             .strong()
                             .size(24.0),
                     );
                     ui.label(
-                        egui::RichText::new(
-                            "Community edition \u{b7} an unofficial desktop client",
-                        )
+                        rt("Community edition \u{b7} an unofficial desktop client")
                         .size(12.5)
                         .weak(),
                     );
@@ -184,11 +183,9 @@ fn hero(app: &AboutView, ui: &mut egui::Ui) {
         ui.add_space(10.0);
         ui.add(
             egui::Label::new(
-                egui::RichText::new(
-                    "A native Linux home for your Proton Drive: two-way folder sync, a \
+                rt(t("A native Linux home for your Proton Drive: two-way folder sync, a \
                      cloud file manager and a photo timeline, built on Proton's official \
-                     command-line tool. Encryption happens on your device.",
-                )
+                     command-line tool. Encryption happens on your device."))
                 .size(12.5)
                 .weak(),
             )
@@ -209,7 +206,7 @@ fn tags(ui: &mut egui::Ui) {
                     // tags, never inside "AppImage" or "MIT".
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new(text)
+                            rt(text)
                                 .size(10.5)
                                 .color(theme::accent_text(ui.visuals())),
                         )
@@ -412,8 +409,8 @@ fn feature(ui: &mut egui::Ui, icon: widgets::NavIcon, title: &str, body: &str) {
         );
         ui.add_space(10.0);
         ui.vertical(|ui| {
-            ui.label(egui::RichText::new(title).strong().size(13.5));
-            ui.add(egui::Label::new(egui::RichText::new(body).size(12.0).weak()).wrap());
+            ui.label(rt(title).strong().size(13.5));
+            ui.add(egui::Label::new(rt(body).size(12.0).weak()).wrap());
         });
     });
     ui.add_space(10.0);
@@ -436,7 +433,7 @@ fn bullet(ui: &mut egui::Ui, text: &str) {
         ui.painter()
             .circle_filled(rect.center(), 3.0, theme::accent(ui.visuals()));
         ui.add_space(8.0);
-        ui.add(egui::Label::new(egui::RichText::new(text).size(12.0).weak()).wrap());
+        ui.add(egui::Label::new(rt(text).size(12.0).weak()).wrap());
     });
     ui.add_space(6.0);
 }
@@ -451,15 +448,15 @@ fn updates(app: &mut AboutView, ui: &mut egui::Ui) {
 
         if !status.is_empty() {
             let short = status.split(" (").next().unwrap_or(&status).to_string();
-            let resp = ui.label(egui::RichText::new(short).size(12.0).weak());
+            let resp = ui.label(rt(short).size(12.0).weak());
             resp.on_hover_text(&status);
         } else {
-            ui.label(egui::RichText::new("No check has run yet.").size(12.0).weak());
+            ui.label(rt("No check has run yet.").size(12.0).weak());
         }
         if let Some(rel) = &release {
             ui.add_space(4.0);
             ui.label(
-                egui::RichText::new(format!("GUI {} is available.", rel.gui))
+                rt(format!("GUI {} is available.", rel.gui))
                     .size(11.5)
                     .weak(),
             );
@@ -467,7 +464,7 @@ fn updates(app: &mut AboutView, ui: &mut egui::Ui) {
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
             if ui
-                .add_enabled(!checking, egui::Button::new("Check now"))
+                .add_enabled(!checking, egui::Button::new(t("Check now")))
                 .clicked()
             {
                 app.action_check_updates();
@@ -476,16 +473,16 @@ fn updates(app: &mut AboutView, ui: &mut egui::Ui) {
                 && ui
                     .add_enabled(
                         !downloading,
-                        egui::Button::new("Download and restart"),
+                        egui::Button::new(t("Download and restart")),
                     )
                     .clicked()
             {
                 app.action_download_update();
             }
-            if ui.button("Open download page").clicked() {
+            if ui.tbutton("Open download page").clicked() {
                 open_url(RELEASE_PAGE);
             }
-            if ui.button("Update settings").clicked() {
+            if ui.tbutton("Update settings").clicked() {
                 app.actions.push(AboutAction::OpenSettings);
             }
         });
@@ -495,7 +492,7 @@ fn updates(app: &mut AboutView, ui: &mut egui::Ui) {
 fn details(app: &mut AboutView, ui: &mut egui::Ui) {
     widgets::card(ui, None, |ui| {
         egui::CollapsingHeader::new(
-            egui::RichText::new("Technical details").strong().size(13.5),
+            rt("Technical details").strong().size(13.5),
         )
         .id_salt("about-details")
         .show(ui, |ui| {
@@ -553,7 +550,7 @@ fn details(app: &mut AboutView, ui: &mut egui::Ui) {
             };
             detail_row(ui, "Recovery check", check, Some(&check_detail));
             ui.add_space(8.0);
-            if ui.button("Copy diagnostics").clicked() {
+            if ui.tbutton("Copy diagnostics").clicked() {
                 let h = &app.ctx.health;
                 let err = h.error.as_deref().unwrap_or("");
                 let failure = if err.is_empty() {
@@ -625,10 +622,10 @@ fn details(app: &mut AboutView, ui: &mut egui::Ui) {
 
 fn detail_row(ui: &mut egui::Ui, label: &str, value: &str, full: Option<&str>) {
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(label).size(11.5).weak());
+        ui.label(rt(label).size(11.5).weak());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let shown = widgets::elide_middle(value, 56);
-            let response = ui.label(egui::RichText::new(shown).size(11.5).monospace());
+            let response = ui.label(rt(shown).size(11.5).monospace());
             if let Some(full) = full {
                 response.on_hover_text(full);
             }
@@ -654,9 +651,7 @@ fn credits(ui: &mut egui::Ui) {
     widgets::card(ui, Some("Credits"), |ui| {
         ui.add(
             egui::Label::new(
-                egui::RichText::new(
-                    "Built by the community on top of Proton's official command-line tool.",
-                )
+                rt("Built by the community on top of Proton's official command-line tool.")
                 .size(12.0)
                 .weak(),
             )
@@ -674,7 +669,7 @@ fn credits(ui: &mut egui::Ui) {
 }
 
 fn link(ui: &mut egui::Ui, text: &str, url: &str) {
-    if ui.link(egui::RichText::new(text).size(12.0)).clicked() {
+    if ui.link(rt(text).size(12.0)).clicked() {
         open_url(url);
     }
 }
@@ -682,22 +677,20 @@ fn link(ui: &mut egui::Ui, text: &str, url: &str) {
 fn legal(ui: &mut egui::Ui) {
     widgets::card(ui, None, |ui| {
         egui::CollapsingHeader::new(
-            egui::RichText::new("Legal and trademarks").strong().size(13.5),
+            rt("Legal and trademarks").strong().size(13.5),
         )
         .id_salt("about-legal")
         .show(ui, |ui| {
             ui.add(
                 egui::Label::new(
-                    egui::RichText::new(
-                        "Unofficial. Not affiliated with, endorsed, sponsored or supported by \
+                    rt(t("Unofficial. Not affiliated with, endorsed, sponsored or supported by \
                          Proton AG, Google LLC or Microsoft Corporation. This app uses the official \
                          Proton Drive CLI (payload MIT, Copyright (c) 2025-2026 Proton AG; source: \
                          github.com/ProtonDriveApps/sdk). All scripts in this repository, including \
                          this app, are MIT-licensed (see LICENSE). 'Proton' and 'Proton Drive' are \
                          trademarks of Proton AG, used here only to identify the product being \
                          packaged. Mentions of other products are feature comparisons only - no code, \
-                         assets or configurations of those products are used. Not legal advice.",
-                    )
+                         assets or configurations of those products are used. Not legal advice."))
                     .size(11.5)
                     .weak(),
                 )

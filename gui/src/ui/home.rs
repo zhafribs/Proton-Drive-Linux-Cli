@@ -1,6 +1,8 @@
 //! Home: the status hero, three honest metrics, a compact activity preview,
 //! and the actions people actually use.
 
+use crate::i18n::rt;
+use crate::i18n::{TrUi, t};
 use super::{AppCtx, Dialog, activity, cloud, settings::Draft, widgets};
 use crate::{health, service, util};
 use eframe::egui;
@@ -95,7 +97,7 @@ fn draw_inner(app: &mut HomeView, ui: &mut egui::Ui) {
             widgets::status_orb(ui, key, animate);
             ui.add_space(18.0);
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new(title).strong().size(20.0));
+                ui.label(rt(title).strong().size(20.0));
                 let sub = if logged_in
                     && let Some((text, at)) = &app.sub_override
                 {
@@ -107,7 +109,7 @@ fn draw_inner(app: &mut HomeView, ui: &mut egui::Ui) {
                 } else {
                     health::hero_sub(status, &app.ctx.health)
                 };
-                ui.label(egui::RichText::new(sub).size(12.5).weak());
+                ui.label(rt(sub).size(12.5).weak());
 
                 if (signed_out || needs_login) && !signing_in {
                     let local = app.ctx.conf
@@ -118,18 +120,18 @@ fn draw_inner(app: &mut HomeView, ui: &mut egui::Ui) {
                     ui.add_space(5.0);
                     ui.horizontal(|ui| {
                         ui.label(
-                            egui::RichText::new("Files will sync to")
+                            rt("Files will sync to")
                                 .size(11.5)
                                 .weak(),
                         );
                         ui.label(
-                            egui::RichText::new(widgets::elide_middle(&local, 48))
+                            rt(widgets::elide_middle(&local, 48))
                                 .size(11.5)
                                 .strong(),
                         )
                         .on_hover_text(&local);
                         let change = ui
-                            .small_button("Change")
+                            .tsmall_button("Change")
                             .on_hover_text("Opens Settings > General.");
                         change.widget_info(|| {
                             egui::WidgetInfo::labeled(
@@ -150,15 +152,13 @@ fn draw_inner(app: &mut HomeView, ui: &mut egui::Ui) {
                     } else {
                         "Deletes and edits to existing files are held until the background check finishes."
                     };
-                    ui.label(egui::RichText::new(note).size(11.5).weak());
+                    ui.label(rt(note).size(11.5).weak());
                 }
                 if status == health::UiStatus::DeletesHeld {
                     if app.ctx.health.deletes_wipe_guard {
                         ui.label(
-                            egui::RichText::new(
-                                "Nothing will be deleted while one side looks empty. Restore the \
-                                 folder or fix the sync path, then check again.",
-                            )
+                            rt(t("Nothing will be deleted while one side looks empty. Restore the \
+                                 folder or fix the sync path, then check again."))
                             .size(11.5)
                             .weak(),
                         );
@@ -183,7 +183,7 @@ fn draw_inner(app: &mut HomeView, ui: &mut egui::Ui) {
                     let total = app.ctx.health.transfer_total.unwrap_or(0) as f32;
                     ui.add_space(4.0);
                     ui.label(
-                        egui::RichText::new(format!(
+                        rt(format!(
                             "Transferring {} / {} files",
                             app.ctx.health.transfer_done.unwrap_or(0),
                             app.ctx.health.transfer_total.unwrap_or(0)
@@ -204,7 +204,7 @@ fn draw_inner(app: &mut HomeView, ui: &mut egui::Ui) {
                         };
                         let name = rel.rsplit('/').next().unwrap_or(rel);
                         ui.label(
-                            egui::RichText::new(format!("{glyph} {name}"))
+                            rt(format!("{glyph} {name}"))
                                 .size(11.0)
                                 .weak(),
                         );
@@ -278,7 +278,7 @@ fn page_head(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if signing_in {
                 ui.label(
-                    egui::RichText::new(crate::i18n::tr(
+                    rt(crate::i18n::tr(
                         "Signing in\u{2026}",
                         "Sedang log masuk\u{2026}",
                     ))
@@ -384,7 +384,7 @@ fn cloud_storage(app: &HomeView, ui: &mut egui::Ui) {
         |ui| {
         let Some((used, total, drive, fetched)) = quota else {
             ui.label(
-                egui::RichText::new(if app.active {
+                rt(if app.active {
                     crate::i18n::tr(
                         "Waiting for the sync service to report your storage quota.",
                         "Menunggu perkhidmatan segerak melaporkan kuota storan anda.",
@@ -401,7 +401,7 @@ fn cloud_storage(app: &HomeView, ui: &mut egui::Ui) {
             if let Some((drive_bytes, _, _)) = cloud::snapshot_usage(&app.ctx.paths.snapshot_file) {
                 ui.add_space(6.0);
                 ui.label(
-                    egui::RichText::new(format!(
+                    rt(format!(
                         "Drive data seen by the last walk: {}",
                         service::human_size(drive_bytes)
                     ))
@@ -444,15 +444,15 @@ fn cloud_storage(app: &HomeView, ui: &mut egui::Ui) {
                 service::human_size(total)
             )
         };
-        ui.label(egui::RichText::new(detail).size(11.5).weak());
+        ui.label(rt(detail).size(11.5).weak());
     });
 }
 
 fn storage_stat(ui: &mut egui::Ui, label: &str, value: &str, sub: &str) {
-    ui.label(egui::RichText::new(label).size(11.5).weak());
+    ui.label(rt(label).size(11.5).weak());
     ui.add_space(2.0);
-    ui.label(egui::RichText::new(value).strong().size(20.0));
-    ui.label(egui::RichText::new(sub).size(11.0).weak());
+    ui.label(rt(value).strong().size(20.0));
+    ui.label(rt(sub).size(11.0).weak());
 }
 
 fn sync_details(app: &mut HomeView, ui: &mut egui::Ui) {
@@ -505,10 +505,10 @@ fn sync_details(app: &mut HomeView, ui: &mut egui::Ui) {
 
 fn detail_row(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(label).size(11.5).weak());
+        ui.label(rt(label).size(11.5).weak());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add(
-                egui::Label::new(egui::RichText::new(value).size(12.0).strong()).truncate(),
+                egui::Label::new(rt(value).size(12.0).strong()).truncate(),
             );
         });
     });

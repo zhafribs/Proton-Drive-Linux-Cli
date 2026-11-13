@@ -117,8 +117,8 @@ modes and what actually fixes each one.
   intervals, notifications, light/dark/system theme, interface size, tray,
   start-at-login, menu install and **in-app updates** (SHA-256 verified).
 - **First run and language** — a one-time setup wizard; English or Bahasa
-  Melayu (beta) for setup, navigation, status and Home. Other pages stay
-  English until translated; see [docs/LOCALIZATION.md](docs/LOCALIZATION.md).
+  Melayu across every page, dialog and menu. See
+  [docs/LOCALIZATION.md](docs/LOCALIZATION.md).
 - **Portable sync** — the systemd user unit is used when available; without
   it the GUI supervises the engine, restarts it after a crash and adopts the
   running process after a GUI restart.

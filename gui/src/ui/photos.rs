@@ -5,6 +5,7 @@
 //! groups by day and asks. JPEG and PNG thumbnails are decoded locally; other
 //! formats keep a labelled placeholder instead of a misleadingly blank tile.
 
+use crate::i18n::{rt, t, TrUi};
 use super::{AppCtx, Dialog, Toast, widgets};
 use crate::{cli, health};
 use crate::theme;
@@ -189,7 +190,7 @@ fn draw_upload_issues(
         widgets::card(ui, Some(&title), |ui| {
             for issue in failed.iter().take(5) {
                 ui.label(
-                    egui::RichText::new(format!(
+                    rt(format!(
                         "{} \u{2014} {}",
                         issue.name,
                         shorten(&issue.reason, 180)
@@ -200,7 +201,7 @@ fn draw_upload_issues(
             }
             if failed.len() > 5 {
                 ui.label(
-                    egui::RichText::new(format!("and {} more", failed.len() - 5))
+                    rt(format!("and {} more", failed.len() - 5))
                         .size(12.0)
                         .weak(),
                 );
@@ -208,12 +209,12 @@ fn draw_upload_issues(
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
                 ui.label(
-                    egui::RichText::new("The other photos were not affected.")
+                    rt("The other photos were not affected.")
                         .size(12.0)
                         .weak(),
                 );
                 if ui
-                    .add_enabled(can_retry, egui::Button::new("Retry uploads"))
+                    .add_enabled(can_retry, egui::Button::new(t("Retry uploads")))
                     .on_disabled_hover_text(if signed_out {
                         "Sign in on Home first."
                     } else {
@@ -237,13 +238,13 @@ fn draw_upload_issues(
         widgets::card(ui, Some(&title), |ui| {
             for issue in skipped.iter().take(5) {
                 ui.label(
-                    egui::RichText::new(format!("{} {}", issue.name, issue.reason))
+                    rt(format!("{} {}", issue.name, issue.reason))
                         .size(12.0),
                 );
             }
             if skipped.len() > 5 {
                 ui.label(
-                    egui::RichText::new(format!("and {} more", skipped.len() - 5))
+                    rt(format!("and {} more", skipped.len() - 5))
                         .size(12.0)
                         .weak(),
                 );
@@ -251,7 +252,7 @@ fn draw_upload_issues(
             ui.add_space(2.0);
             ui.horizontal_wrapped(|ui| {
                 ui.label(
-                    egui::RichText::new(if skipped.len() == 1 {
+                    rt(if skipped.len() == 1 {
                         "It stays in your folder and wasn't uploaded."
                     } else {
                         "They stay in your folder and weren't uploaded."
@@ -259,7 +260,7 @@ fn draw_upload_issues(
                     .size(12.0)
                     .weak(),
                 );
-                if ui.button("Open folder").clicked() {
+                if ui.tbutton("Open folder").clicked() {
                     let dir = local_dir(app);
                     let _ = std::fs::create_dir_all(&dir);
                     open_path(&dir);
@@ -825,7 +826,7 @@ fn photo_actions(app: &mut PhotoView, ui: &mut egui::Ui) {
     let download_resp = ui
         .add_enabled(
             can_act && !app.photos.items.is_empty(),
-            egui::Button::new("Download all"),
+            egui::Button::new(t("Download all")),
         )
         .on_hover_text(
             "Copy every photo that is not on this computer. Nothing in the cloud changes.",
@@ -862,7 +863,7 @@ fn photo_actions(app: &mut PhotoView, ui: &mut egui::Ui) {
         }
     }
     if signing_in {
-        ui.add_enabled(false, egui::Button::new("Signing in..."))
+        ui.add_enabled(false, egui::Button::new(t("Signing in...")))
             .on_disabled_hover_text("Finish signing in in the terminal window.");
     } else if signed_out {
         if widgets::primary_button_hint(
@@ -882,7 +883,7 @@ fn photo_actions(app: &mut PhotoView, ui: &mut egui::Ui) {
                 request_sync(app, None);
             }
         } else {
-            ui.add_enabled(false, egui::Button::new("Sync photos"))
+            ui.add_enabled(false, egui::Button::new(t("Sync photos")))
                 .on_disabled_hover_text(if syncing {
                     "A sync is already running."
                 } else {
@@ -890,7 +891,7 @@ fn photo_actions(app: &mut PhotoView, ui: &mut egui::Ui) {
                 });
         }
     } else {
-        ui.add_enabled(false, egui::Button::new("Sync photos"))
+        ui.add_enabled(false, egui::Button::new(t("Sync photos")))
             .on_disabled_hover_text(if !photo_sync_on {
                 "Turn photo sync on in Settings > Sync."
             } else {
@@ -1047,8 +1048,8 @@ fn photo_hero(app: &PhotoView, ui: &mut egui::Ui) {
                 egui::Layout::top_down(egui::Align::LEFT),
                 |ui| {
                     ui.set_min_width(text_w);
-                    ui.label(egui::RichText::new(title).strong().size(20.0));
-                    let sub = ui.label(egui::RichText::new(sub).size(12.5).weak());
+                    ui.label(rt(title).strong().size(20.0));
+                    let sub = ui.label(rt(sub).size(12.5).weak());
                     if !app.photos.last_sync.is_empty() && !needs_signin {
                         sub.on_hover_text(&app.photos.last_sync);
                     }
@@ -1151,7 +1152,7 @@ pub fn draw(app: &mut PhotoView, ui: &mut egui::Ui) {
         ui.add_space(8.0);
         widgets::card(ui, None, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.label(egui::RichText::new(format!("{} selected", sel.len())).strong());
+                ui.label(rt(format!("{} selected", sel.len())).strong());
                 ui.add_space(4.0);
                 if ui
                     .add_enabled(can_act, egui::Button::new(format!("Download {}", sel.len())))
@@ -1192,11 +1193,11 @@ pub fn draw(app: &mut PhotoView, ui: &mut egui::Ui) {
                 {
                     *app.dialog = Some(super::Dialog::ConfirmPhotoDelete { uids: sel.clone() });
                 }
-                if ui.button("Clear selection").clicked() {
+                if ui.tbutton("Clear selection").clicked() {
                     app.photos.sel.clear();
                 }
                 ui.separator();
-                if ui.button("Open folder").clicked() {
+                if ui.tbutton("Open folder").clicked() {
                     let _ = std::fs::create_dir_all(&dir);
                     open_path(&dir);
                 }
@@ -1210,7 +1211,7 @@ pub fn draw(app: &mut PhotoView, ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
                 widgets::busy_spinner(ui, app.ctx.prefs.motion_enabled());
                 ui.label(
-                    egui::RichText::new(if app.ctx.health.phase.as_deref() == Some("photos") {
+                    rt(if app.ctx.health.phase.as_deref() == Some("photos") {
                         "Syncing photos\u{2026}"
                     } else {
                         "Waiting for the file sync to finish\u{2026}"
@@ -1228,14 +1229,14 @@ pub fn draw(app: &mut PhotoView, ui: &mut egui::Ui) {
         widgets::card(ui, None, |ui| {
             ui.horizontal_wrapped(|ui| {
                 if ui
-                    .add_enabled(!app.photos.busy, egui::Button::new("Reload"))
+                    .add_enabled(!app.photos.busy, egui::Button::new(t("Reload")))
                     .on_hover_text("Reload the photo timeline.")
                     .clicked()
                 {
                     refresh(app);
                 }
                 ui.label(
-                    egui::RichText::new(&error).color(theme::danger_text(ui.visuals())),
+                    rt(&error).color(theme::danger_text(ui.visuals())),
                 );
             });
         });
@@ -1243,7 +1244,7 @@ pub fn draw(app: &mut PhotoView, ui: &mut egui::Ui) {
 
     if !app.photos.status.is_empty() {
         ui.add_space(8.0);
-        ui.label(egui::RichText::new(&app.photos.status).weak());
+        ui.label(rt(&app.photos.status).weak());
     }
 
     let failed_issues = app.photos.upload_failed.clone();
@@ -1266,13 +1267,13 @@ pub fn draw(app: &mut PhotoView, ui: &mut egui::Ui) {
                 if !app.photos.loading && app.photos.error.is_empty() {
                     ui.add_space(18.0);
                     ui.label(
-                        egui::RichText::new("No photos in your timeline yet.")
+                        rt("No photos in your timeline yet.")
                             .weak()
                             .size(13.5),
                     );
                     ui.add_space(4.0);
                     ui.label(
-                        egui::RichText::new("Photos you upload from the Proton apps appear here.")
+                        rt("Photos you upload from the Proton apps appear here.")
                             .weak()
                             .size(12.0),
                     );
@@ -1287,7 +1288,7 @@ pub fn draw(app: &mut PhotoView, ui: &mut egui::Ui) {
             for (day, group) in app.photos.groups.clone() {
                 ui.add_space(12.0);
                 let header_y = ui.cursor().top();
-                ui.label(egui::RichText::new(&day).strong().size(13.5));
+                ui.label(rt(&day).strong().size(13.5));
                 ui.add_space(4.0);
                 widgets::card(ui, None, |ui| {
                     // One grid for every card: the size depends on the width
@@ -1608,7 +1609,7 @@ fn tile(
             resp.on_hover_text(tip);
 
             ui.add_space(2.0);
-            ui.label(egui::RichText::new(widgets::elide(&p.name, 17)).size(11.0));
+            ui.label(rt(widgets::elide(&p.name, 17)).size(11.0));
             let color = if matches!(
                 state,
                 TileState::Incomplete | TileState::Mismatch | TileState::Duplicate
@@ -1618,7 +1619,7 @@ fn tile(
                 ui.visuals().weak_text_color()
             };
             ui.label(
-                egui::RichText::new(widgets::elide(&preview_caption, 24))
+                rt(widgets::elide(&preview_caption, 24))
                     .size(10.0)
                     .color(color),
             );

@@ -13,6 +13,7 @@ pub mod recovery;
 pub mod settings;
 pub mod widgets;
 
+use crate::i18n::{TrUi, rt};
 use crate::{
     cli, conf, health, journal, notify, paths::Paths, prefs, release, service, system_theme, theme,
     tray, util,
@@ -592,12 +593,12 @@ fn shortcut_grid(ui: &mut egui::Ui, id: &str, rows: &[(&str, &str)]) {
         .show(ui, |ui| {
             for (keys, action) in rows {
                 ui.label(
-                    egui::RichText::new(*keys)
+                    rt(*keys)
                         .monospace()
                         .strong()
                         .size(12.5),
                 );
-                ui.label(egui::RichText::new(*action).size(12.5).weak());
+                ui.label(rt(*action).size(12.5).weak());
                 ui.end_row();
             }
         });
@@ -1938,7 +1939,7 @@ impl App {
             if compact {
                 ui.add(
                     egui::Label::new(
-                        egui::RichText::new("Proton Drive").strong().size(14.0),
+                        rt("Proton Drive").strong().size(14.0),
                     )
                     .truncate(),
                 );
@@ -1946,13 +1947,13 @@ impl App {
                 ui.vertical(|ui| {
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new("Proton Drive").strong().size(14.5),
+                            rt("Proton Drive").strong().size(14.5),
                         )
                         .truncate(),
                     );
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new("Linux · Community edition")
+                            rt("Linux · Community edition")
                                 .size(10.5)
                                 .weak(),
                         )
@@ -1992,7 +1993,7 @@ impl App {
                             );
                             ui.add(
                                 egui::Label::new(
-                                    egui::RichText::new(health::short_label(self.status_key()))
+                                    rt(health::short_label(self.status_key()))
                                         .size(13.0),
                                 )
                                 .truncate(),
@@ -2006,7 +2007,7 @@ impl App {
                             })
                             .unwrap_or_else(|| "Community edition".to_string());
                         ui.add(
-                            egui::Label::new(egui::RichText::new(when).size(11.5).weak())
+                            egui::Label::new(rt(when).size(11.5).weak())
                                 .truncate(),
                         );
                     });
@@ -2185,7 +2186,7 @@ impl App {
                     ui.vertical(|ui| {
                         ui.add(
                             egui::Label::new(
-                                egui::RichText::new(email.as_deref().unwrap_or(label))
+                                rt(email.as_deref().unwrap_or(label))
                                     .strong()
                                     .size(13.0),
                             )
@@ -2202,7 +2203,7 @@ impl App {
                             );
                             ui.add(
                                 egui::Label::new(
-                                    egui::RichText::new(self.side_label()).size(11.5).weak(),
+                                    rt(self.side_label()).size(11.5).weak(),
                                 )
                                 .truncate(),
                             );
@@ -2383,7 +2384,7 @@ impl App {
                             ui.ctx().accesskit_node_builder(resp.id, |n| {
                                 n.set_live(egui::accesskit::Live::Assertive);
                             });
-                            if ui.small_button("Dismiss").clicked() {
+                            if ui.tsmall_button("Dismiss").clicked() {
                                 dismiss = true;
                             }
                         } else {
@@ -2465,7 +2466,7 @@ impl App {
                         ));
                         ui.add_space(10.0);
                         ui.label(
-                            egui::RichText::new(crate::i18n::tr(
+                            rt(crate::i18n::tr(
                                 "Your password goes to Proton's official CLI, never to \
                                  this app.",
                                 "Kata laluan anda hanya diberikan kepada CLI rasmi \
@@ -2483,7 +2484,7 @@ impl App {
                                 next = Some(1);
                             }
                             if ui
-                                .button(crate::i18n::tr("Skip setup", "Langkau persediaan"))
+                                .tbutton(crate::i18n::tr("Skip setup", "Langkau persediaan"))
                                 .clicked()
                             {
                                 finish = true;
@@ -2492,7 +2493,7 @@ impl App {
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
                             ui.label(
-                                egui::RichText::new(crate::i18n::tr(
+                                rt(crate::i18n::tr(
                                     "Language:",
                                     "Bahasa:",
                                 ))
@@ -2504,7 +2505,7 @@ impl App {
                                 crate::i18n::Language::Malay,
                             ] {
                                 if ui
-                                    .selectable_label(
+                                    .tselectable_label(
                                         crate::i18n::current() == lang,
                                         lang.label(),
                                     )
@@ -2553,7 +2554,7 @@ impl App {
                                     next = Some(2);
                                 }
                                 if ui
-                                    .button(crate::i18n::tr(
+                                    .tbutton(crate::i18n::tr(
                                         "I'm already signed in",
                                         "Saya sudah log masuk",
                                     ))
@@ -2564,7 +2565,7 @@ impl App {
                             });
                         }
                         ui.add_space(10.0);
-                        if ui.button(crate::i18n::tr("Back", "Kembali")).clicked() {
+                        if ui.tbutton(crate::i18n::tr("Back", "Kembali")).clicked() {
                             next = Some(0);
                         }
                     }
@@ -2580,13 +2581,13 @@ impl App {
                         ));
                         ui.add(
                             egui::Label::new(
-                                egui::RichText::new(&local).monospace().strong(),
+                                rt(&local).monospace().strong(),
                             )
                             .wrap(),
                         );
                         ui.add_space(8.0);
                         ui.label(
-                            egui::RichText::new(crate::i18n::tr(
+                            rt(crate::i18n::tr(
                                 "Change it now, or later in Settings. The folder must \
                                  be on a local disk, not a network mount.",
                                 "Tukar sekarang atau kemudian dalam Tetapan. Folder \
@@ -2604,7 +2605,7 @@ impl App {
                                 finish = true;
                             }
                             if ui
-                                .button(crate::i18n::tr(
+                                .tbutton(crate::i18n::tr(
                                     "Choose folder...",
                                     "Pilih folder...",
                                 ))
@@ -2614,7 +2615,7 @@ impl App {
                                 self.settings_tab = 0;
                                 finish = true;
                             }
-                            if ui.button("Back").clicked() {
+                            if ui.tbutton("Back").clicked() {
                                 next = Some(1);
                             }
                         });
@@ -2648,14 +2649,14 @@ impl App {
             ui.horizontal(|ui| {
                 ui.spinner();
                 ui.label(
-                    egui::RichText::new(self.upd.label.clone())
+                    rt(self.upd.label.clone())
                         .strong()
                         .size(14.0),
                 );
             });
             ui.add_space(6.0);
             ui.label(
-                egui::RichText::new(crate::i18n::tr(
+                rt(crate::i18n::tr(
                     "The download and signature check can take a few minutes. \
                      The app restarts when it is done.",
                     "Muat turun dan semakan tandatangan mungkin mengambil beberapa \
@@ -2731,7 +2732,7 @@ impl App {
                     .open(&mut open)
                     .show(ctx, |ui| {
                         ui.label(
-                            egui::RichText::new("Anywhere")
+                            rt("Anywhere")
                                 .strong()
                                 .size(12.5),
                         );
@@ -2747,7 +2748,7 @@ impl App {
                         );
                         ui.add_space(12.0);
                         ui.label(
-                            egui::RichText::new("In My Files")
+                            rt("In My Files")
                                 .strong()
                                 .size(12.5),
                         );
@@ -2784,7 +2785,7 @@ impl App {
                         if settings::root_change_pending(&self.ctx.conf, &self.draft) {
                             ui.add_space(6.0);
                             ui.label(
-                                egui::RichText::new(
+                                rt(
                                     "The sync folder or remote root changed. Saving archives \
                                      the current sync history and clears cached cloud rows \
                                      before the next sync.",
@@ -2795,7 +2796,7 @@ impl App {
                         }
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            let cancel = ui.button("Cancel");
+                            let cancel = ui.tbutton("Cancel");
                             focus_first(&mut focus_pending, &cancel);
                             if cancel.clicked() || escape {
                                 act = Some(DlgAct::Close);
@@ -2820,7 +2821,7 @@ impl App {
                         );
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            let cancel = ui.button("Cancel");
+                            let cancel = ui.tbutton("Cancel");
                             focus_first(&mut focus_pending, &cancel);
                             if cancel.clicked() || escape {
                                 act = Some(DlgAct::Close);
@@ -2839,15 +2840,15 @@ impl App {
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                     .open(&mut open)
                     .show(ctx, |ui| {
-                        let first = ui.button("Pause for 15 minutes");
+                        let first = ui.tbutton("Pause for 15 minutes");
                         focus_first(&mut focus_pending, &first);
                         if first.clicked() {
                             act = Some(DlgAct::Pause(Some(900)));
                         }
-                        if ui.button("Pause for 1 hour").clicked() {
+                        if ui.tbutton("Pause for 1 hour").clicked() {
                             act = Some(DlgAct::Pause(Some(3600)));
                         }
-                        if ui.button("Pause until I resume").clicked() {
+                        if ui.tbutton("Pause until I resume").clicked() {
                             act = Some(DlgAct::Pause(None));
                         }
                         if escape {
@@ -2866,14 +2867,14 @@ impl App {
                     .open(&mut open)
                     .show(ctx, |ui| {
                         ui.label(
-                            egui::RichText::new(widgets::elide(&cwd.to_string_lossy(), 70)).weak(),
+                            rt(widgets::elide(&cwd.to_string_lossy(), 70)).weak(),
                         );
                         ui.add_space(6.0);
                         egui::ScrollArea::vertical()
                             .max_height(340.0)
                             .show(ui, |ui| {
                                 if let Some(parent) = cwd.parent()
-                                    && ui.button("\u{2191}  Go up").clicked()
+                                    && ui.tbutton("\u{2191}  Go up").clicked()
                                 {
                                     act = Some(DlgAct::BrowseGo(parent.to_path_buf()));
                                 }
@@ -2888,14 +2889,14 @@ impl App {
                                     .unwrap_or_default();
                                 dirs.sort();
                                 for name in dirs {
-                                    if ui.button(format!("\u{25b8}  {name}")).clicked() {
+                                    if ui.tbutton(format!("\u{25b8}  {name}")).clicked() {
                                         act = Some(DlgAct::BrowseGo(cwd.join(name)));
                                     }
                                 }
                             });
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            let cancel = ui.button("Cancel");
+                            let cancel = ui.tbutton("Cancel");
                             focus_first(&mut focus_pending, &cancel);
                             if cancel.clicked() || escape {
                                 act = Some(DlgAct::Close);
@@ -2947,7 +2948,7 @@ impl App {
                         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            let cancel = ui.button("Cancel");
+                            let cancel = ui.tbutton("Cancel");
                             focus_first(&mut focus_pending, &cancel);
                             if cancel.clicked() || escape {
                                 act = Some(DlgAct::Close);
@@ -2983,7 +2984,7 @@ impl App {
                         ));
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            let cancel = ui.button("Cancel");
+                            let cancel = ui.tbutton("Cancel");
                             focus_first(&mut focus_pending, &cancel);
                             if cancel.clicked() || escape {
                                 act = Some(DlgAct::Close);
@@ -3029,7 +3030,7 @@ impl App {
                         ui.label("This approval applies once to this exact set of files.");
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            let cancel = ui.button("Cancel");
+                            let cancel = ui.tbutton("Cancel");
                             focus_first(&mut focus_pending, &cancel);
                             if cancel.clicked() || escape {
                                 act = Some(DlgAct::Close);
@@ -3066,7 +3067,7 @@ impl App {
                         ));
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            let cancel = ui.button("Cancel");
+                            let cancel = ui.tbutton("Cancel");
                             focus_first(&mut focus_pending, &cancel);
                             if cancel.clicked() || escape {
                                 act = Some(DlgAct::Close);
@@ -3093,7 +3094,7 @@ impl App {
                         ui.label(format!("Permanently delete {word}? This cannot be undone."));
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            let cancel = ui.button("Cancel");
+                            let cancel = ui.tbutton("Cancel");
                             focus_first(&mut focus_pending, &cancel);
                             if cancel.clicked() || escape {
                                 act = Some(DlgAct::Close);
@@ -3118,7 +3119,7 @@ impl App {
                         );
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            let cancel = ui.button("Cancel");
+                            let cancel = ui.tbutton("Cancel");
                             focus_first(&mut focus_pending, &cancel);
                             if cancel.clicked() || escape {
                                 act = Some(DlgAct::Close);
@@ -3143,7 +3144,7 @@ impl App {
                         );
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {
-                            let cancel = ui.button("Cancel");
+                            let cancel = ui.tbutton("Cancel");
                             focus_first(&mut focus_pending, &cancel);
                             if cancel.clicked() || escape {
                                 act = Some(DlgAct::Close);
@@ -3172,7 +3173,7 @@ impl App {
                         ui.add_space(10.0);
                         let can = self.cloud.picker.as_ref().is_some_and(|p| p.sel.is_some());
                         ui.horizontal(|ui| {
-                            let cancel = ui.button("Cancel");
+                            let cancel = ui.tbutton("Cancel");
                             focus_first(&mut focus_pending, &cancel);
                             if cancel.clicked() || escape {
                                 act = Some(DlgAct::Close);
@@ -3219,14 +3220,14 @@ impl App {
         ui.horizontal(|ui| {
             ui.add_space(depth as f32 * 16.0);
             if ui
-                .button(if expanded { "\u{25be}" } else { "\u{25b8}" })
+                .tbutton(if expanded { "\u{25be}" } else { "\u{25b8}" })
                 .clicked()
             {
                 let mut view = self.cloud_view();
                 cloud::picker_expand(&mut view, rel.to_string());
                 self.finish_cloud_login();
             }
-            if ui.selectable_label(selected, label).clicked() {
+            if ui.tselectable_label(selected, label).clicked() {
                 *act = Some(DlgAct::MoveSel(rel.to_string()));
             }
         });

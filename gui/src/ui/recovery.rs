@@ -5,6 +5,7 @@
 //! Listings and mutations run on worker threads. The core manifest takes a
 //! short lock, so the engine can record a new trash while the GUI is reading.
 
+use crate::i18n::{rt, t, TrUi};
 use super::{Back, Toast, widgets};
 use crate::paths::Paths;
 use eframe::egui;
@@ -133,7 +134,7 @@ pub fn draw(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
                         || ctx.state.snapshot_busy
                         || ctx.state.snapshots_loading;
                     if ui
-                        .add_enabled(!busy, egui::Button::new("Refresh"))
+                        .add_enabled(!busy, egui::Button::new(t("Refresh")))
                         .on_hover_text("Re-read conflict copies and the local trash")
                         .clicked()
                     {
@@ -145,9 +146,7 @@ pub fn draw(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
             });
             ui.add_space(4.0);
             ui.label(
-                egui::RichText::new(
-                    "Review conflict copies and restore files that were deleted locally.",
-                )
+                rt("Review conflict copies and restore files that were deleted locally.")
                 .size(12.5)
                 .weak(),
             );
@@ -165,9 +164,7 @@ fn draw_conflicts(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
     widgets::section_label(ui, "Conflict copies");
     ui.add_space(3.0);
     ui.label(
-        egui::RichText::new(
-            "The local edit is at the canonical name. The conflict copy is the cloud revision kept beside it.",
-        )
+        rt("The local edit is at the canonical name. The conflict copy is the cloud revision kept beside it.")
         .size(12.0)
         .weak(),
     );
@@ -175,7 +172,7 @@ fn draw_conflicts(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
 
     if !ctx.state.conflict_status.is_empty() {
         ui.label(
-            egui::RichText::new(&ctx.state.conflict_status)
+            rt(&ctx.state.conflict_status)
                 .size(12.5)
                 .color(crate::theme::success_text(ui.visuals())),
         );
@@ -192,11 +189,11 @@ fn draw_conflicts(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
                 "Conflict action failed"
             }),
             |ui| {
-                ui.label(egui::RichText::new(error).size(12.5));
+                ui.label(rt(error).size(12.5));
                 ui.add_space(8.0);
                 ui.horizontal_wrapped(|ui| {
                     if ui
-                        .button(if load_failed { "Try again" } else { "Dismiss" })
+                        .tbutton(if load_failed { "Try again" } else { "Dismiss" })
                         .clicked()
                     {
                         ctx.state.conflict_error = None;
@@ -217,7 +214,7 @@ fn draw_conflicts(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
     if ctx.state.conflicts_loading {
         ui.horizontal(|ui| {
             widgets::busy_spinner(ui, ctx.motion);
-            ui.label(egui::RichText::new("Scanning for conflict copies\u{2026}").weak());
+            ui.label(rt("Scanning for conflict copies\u{2026}").weak());
         });
         return;
     }
@@ -226,9 +223,7 @@ fn draw_conflicts(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
     if rows.is_empty() {
         widgets::card(ui, Some("No conflict copies"), |ui| {
             ui.label(
-                egui::RichText::new(
-                    "When both sides change, the engine keeps the cloud revision here as a separate file and syncs the local edit normally. Nothing was overwritten.",
-                )
+                rt("When both sides change, the engine keeps the cloud revision here as a separate file and syncs the local edit normally. Nothing was overwritten.")
                 .size(12.5)
                 .weak(),
             );
@@ -237,7 +232,7 @@ fn draw_conflicts(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
     }
 
     ui.label(
-        egui::RichText::new(if rows.len() == 1 {
+        rt(if rows.len() == 1 {
             "1 conflict to review".to_string()
         } else {
             format!("{} conflicts to review", rows.len())
@@ -262,12 +257,12 @@ fn conflict_card(ctx: &mut RecoveryCtx, ui: &mut egui::Ui, row: &ConflictRow) {
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.add(
-                egui::Label::new(egui::RichText::new(&c.canonical_rel).strong().size(13.5))
+                egui::Label::new(rt(&c.canonical_rel).strong().size(13.5))
                     .truncate(),
             );
             ui.add(
                 egui::Label::new(
-                    egui::RichText::new(format!("Conflict copy: {}", c.conflict_rel))
+                    rt(format!("Conflict copy: {}", c.conflict_rel))
                         .size(11.5)
                         .weak(),
                 )
@@ -283,12 +278,10 @@ fn conflict_card(ctx: &mut RecoveryCtx, ui: &mut egui::Ui, row: &ConflictRow) {
             if let Some(remote) = &row.remote_mtime {
                 meta.push_str(&format!(" \u{b7} last synced cloud time {remote}"));
             }
-            ui.add(egui::Label::new(egui::RichText::new(meta).size(11.5).weak()).truncate());
+            ui.add(egui::Label::new(rt(meta).size(11.5).weak()).truncate());
             if !c.canonical_exists {
                 ui.label(
-                    egui::RichText::new(
-                        "The canonical file is missing; using the conflict copy will restore it.",
-                    )
+                    rt("The canonical file is missing; using the conflict copy will restore it.")
                     .size(11.5)
                     .color(crate::theme::warning_text(ui.visuals())),
                 );
@@ -311,7 +304,7 @@ fn conflict_card(ctx: &mut RecoveryCtx, ui: &mut egui::Ui, row: &ConflictRow) {
                         "Keep current",
                     ),
                 };
-                ui.label(egui::RichText::new(question).size(12.0));
+                ui.label(rt(question).size(12.0));
                 ui.add_space(4.0);
                 ui.horizontal_wrapped(|ui| {
                     if ui
@@ -321,7 +314,7 @@ fn conflict_card(ctx: &mut RecoveryCtx, ui: &mut egui::Ui, row: &ConflictRow) {
                         ctx.state.confirm_conflict = None;
                         start_conflict_action(ctx, row, choice);
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.tbutton("Cancel").clicked() {
                         ctx.state.confirm_conflict = None;
                     }
                 });
@@ -332,7 +325,7 @@ fn conflict_card(ctx: &mut RecoveryCtx, ui: &mut egui::Ui, row: &ConflictRow) {
                 if ui
                     .add_enabled(
                         !ctx.state.conflict_busy,
-                        egui::Button::new("Use conflict copy"),
+                        egui::Button::new(t("Use conflict copy")),
                     )
                     .on_hover_text("Put the cloud revision at the canonical name; the current file moves to local trash.")
                     .clicked()
@@ -343,7 +336,7 @@ fn conflict_card(ctx: &mut RecoveryCtx, ui: &mut egui::Ui, row: &ConflictRow) {
                 if ui
                     .add_enabled(
                         c.canonical_exists && !ctx.state.conflict_busy,
-                        egui::Button::new("Keep current"),
+                        egui::Button::new(t("Keep current")),
                     )
                     .on_hover_text("Keep the canonical file; move the conflict copy to local trash.")
                     .clicked()
@@ -354,14 +347,14 @@ fn conflict_card(ctx: &mut RecoveryCtx, ui: &mut egui::Ui, row: &ConflictRow) {
                 if ui
                     .add_enabled(
                         !ctx.state.conflict_busy,
-                        egui::Button::new("Keep both"),
+                        egui::Button::new(t("Keep both")),
                     )
                     .on_hover_text("Leave both files in place and hide this conflict until one changes.")
                     .clicked()
                 {
                     start_keep_both(ctx, row);
                 }
-                if ui.button("Open folder").clicked() {
+                if ui.tbutton("Open folder").clicked() {
                     open_parent(ctx, &c.canonical_rel);
                 }
             });
@@ -372,9 +365,7 @@ fn draw_snapshots(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
     widgets::section_label(ui, "State snapshots");
     ui.add_space(3.0);
     ui.label(
-        egui::RichText::new(
-            "A snapshot preserves the last-synced history, not your files. One is taken automatically before a root change, an approved mass delete, or an update.",
-        )
+        rt("A snapshot preserves the last-synced history, not your files. One is taken automatically before a root change, an approved mass delete, or an update.")
         .size(12.0)
         .weak(),
     );
@@ -382,7 +373,7 @@ fn draw_snapshots(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
 
     if !ctx.state.snapshot_status.is_empty() {
         ui.label(
-            egui::RichText::new(&ctx.state.snapshot_status)
+            rt(&ctx.state.snapshot_status)
                 .size(12.5)
                 .color(crate::theme::success_text(ui.visuals())),
         );
@@ -399,11 +390,11 @@ fn draw_snapshots(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
                 "Snapshot action failed"
             }),
             |ui| {
-                ui.label(egui::RichText::new(error).size(12.5));
+                ui.label(rt(error).size(12.5));
                 ui.add_space(8.0);
                 ui.horizontal_wrapped(|ui| {
                     if ui
-                        .button(if load_failed { "Try again" } else { "Dismiss" })
+                        .tbutton(if load_failed { "Try again" } else { "Dismiss" })
                         .clicked()
                     {
                         ctx.state.snapshot_error = None;
@@ -425,20 +416,20 @@ fn draw_snapshots(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
         if ui
             .add_enabled(
                 !ctx.state.snapshot_busy,
-                egui::Button::new("Create snapshot"),
+                egui::Button::new(t("Create snapshot")),
             )
             .on_hover_text("Save the current sync history as a restore point.")
             .clicked()
         {
             start_snapshot_create(ctx);
         }
-        if ui.button("Open snapshot folder").clicked() {
+        if ui.tbutton("Open snapshot folder").clicked() {
             open_snapshot_folder(ctx);
         }
         if ui
             .add_enabled(
                 !ctx.state.check_busy,
-                egui::Button::new("Run recovery check"),
+                egui::Button::new(t("Run recovery check")),
             )
             .on_hover_text(
                 "Read the sync history, snapshots, local trash and conflict copies; write the result to the state folder.",
@@ -449,7 +440,7 @@ fn draw_snapshots(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
         }
         let count = ctx.state.snapshots.len();
         ui.label(
-            egui::RichText::new(if count == 1 {
+            rt(if count == 1 {
                 "1 snapshot".to_string()
             } else {
                 format!("{count} snapshots")
@@ -463,7 +454,7 @@ fn draw_snapshots(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
     if ctx.state.snapshots_loading {
         ui.horizontal(|ui| {
             widgets::busy_spinner(ui, ctx.motion);
-            ui.label(egui::RichText::new("Loading snapshots\u{2026}").weak());
+            ui.label(rt("Loading snapshots\u{2026}").weak());
         });
         return;
     }
@@ -472,9 +463,7 @@ fn draw_snapshots(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
     if snapshots.is_empty() {
         widgets::card(ui, None, |ui| {
             ui.label(
-                egui::RichText::new(
-                    "No snapshots yet. Create one before a risky change, or wait for the automatic snapshot before a root change, mass delete or update.",
-                )
+                rt("No snapshots yet. Create one before a risky change, or wait for the automatic snapshot before a root change, mass delete or update.")
                 .size(12.5)
                 .weak(),
             );
@@ -501,7 +490,7 @@ fn snapshot_card(ctx: &mut RecoveryCtx, ui: &mut egui::Ui, snap: &SnapshotInfo) 
                 .unwrap_or_else(|| "unknown time".into());
             let reason = snap.reason.replace('-', " ");
             ui.add(
-                egui::Label::new(egui::RichText::new(when).strong().size(13.5)).truncate(),
+                egui::Label::new(rt(when).strong().size(13.5)).truncate(),
             );
             let size = super::cloud::fmt_size(snap.bytes);
             let mut meta = format!(
@@ -514,12 +503,10 @@ fn snapshot_card(ctx: &mut RecoveryCtx, ui: &mut egui::Ui, snap: &SnapshotInfo) 
             if !snap.valid || !snap.roots_match {
                 meta.push_str(" \u{b7} not restorable");
             }
-            ui.add(egui::Label::new(egui::RichText::new(meta).size(11.5).weak()).truncate());
+            ui.add(egui::Label::new(rt(meta).size(11.5).weak()).truncate());
             if !snap.roots_match {
                 ui.label(
-                    egui::RichText::new(
-                        "This history belongs to different sync roots. Switch back to those roots before restoring it.",
-                    )
+                    rt("This history belongs to different sync roots. Switch back to those roots before restoring it.")
                     .size(11.5)
                     .color(crate::theme::warning_text(ui.visuals())),
                 );
@@ -528,9 +515,7 @@ fn snapshot_card(ctx: &mut RecoveryCtx, ui: &mut egui::Ui, snap: &SnapshotInfo) 
 
             if ctx.state.confirm_snapshot.as_deref() == Some(snap.path.as_path()) {
                 ui.label(
-                    egui::RichText::new(
-                        "Restore this snapshot? The current state is snapshotted first, then the engine re-plans before any transfer.",
-                    )
+                    rt("Restore this snapshot? The current state is snapshotted first, then the engine re-plans before any transfer.")
                     .size(12.0),
                 );
                 ui.add_space(4.0);
@@ -538,14 +523,14 @@ fn snapshot_card(ctx: &mut RecoveryCtx, ui: &mut egui::Ui, snap: &SnapshotInfo) 
                     if ui
                         .add_enabled(
                             !ctx.state.snapshot_busy,
-                            egui::Button::new("Restore this snapshot"),
+                            egui::Button::new(t("Restore this snapshot")),
                         )
                         .clicked()
                     {
                         ctx.state.confirm_snapshot = None;
                         start_snapshot_restore(ctx, snap.clone());
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.tbutton("Cancel").clicked() {
                         ctx.state.confirm_snapshot = None;
                     }
                 });
@@ -558,9 +543,7 @@ fn snapshot_card(ctx: &mut RecoveryCtx, ui: &mut egui::Ui, snap: &SnapshotInfo) 
                 == Some(snap.path.as_path())
             {
                 ui.label(
-                    egui::RichText::new(
-                        "Delete this restore point? Your files are not touched.",
-                    )
+                    rt("Delete this restore point? Your files are not touched.")
                     .size(12.0),
                 );
                 ui.add_space(4.0);
@@ -568,14 +551,14 @@ fn snapshot_card(ctx: &mut RecoveryCtx, ui: &mut egui::Ui, snap: &SnapshotInfo) 
                     if ui
                         .add_enabled(
                             !ctx.state.snapshot_busy,
-                            egui::Button::new("Delete snapshot"),
+                            egui::Button::new(t("Delete snapshot")),
                         )
                         .clicked()
                     {
                         ctx.state.confirm_delete_snapshot = None;
                         start_snapshot_delete(ctx, snap.path.clone());
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.tbutton("Cancel").clicked() {
                         ctx.state.confirm_delete_snapshot = None;
                     }
                 });
@@ -586,7 +569,7 @@ fn snapshot_card(ctx: &mut RecoveryCtx, ui: &mut egui::Ui, snap: &SnapshotInfo) 
                 if ui
                     .add_enabled(
                         snap.valid && snap.roots_match && !ctx.state.snapshot_busy,
-                        egui::Button::new("Restore"),
+                        egui::Button::new(t("Restore")),
                     )
                     .on_hover_text(
                         "Put this sync history back, then let the engine plan against the current files.",
@@ -598,7 +581,7 @@ fn snapshot_card(ctx: &mut RecoveryCtx, ui: &mut egui::Ui, snap: &SnapshotInfo) 
                 if ui
                     .add_enabled(
                         !ctx.state.snapshot_busy,
-                        egui::Button::new("Delete"),
+                        egui::Button::new(t("Delete")),
                     )
                     .on_hover_text("Delete this restore point. Your files are not touched.")
                     .clicked()
@@ -613,9 +596,7 @@ fn draw_trash(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
     widgets::section_label(ui, "Local trash");
     ui.add_space(3.0);
     ui.label(
-        egui::RichText::new(
-            "Files deleted locally are kept here until you restore or permanently delete them.",
-        )
+        rt("Files deleted locally are kept here until you restore or permanently delete them.")
         .size(12.0)
         .weak(),
     );
@@ -623,7 +604,7 @@ fn draw_trash(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
 
     if !ctx.state.status.is_empty() {
         ui.label(
-            egui::RichText::new(&ctx.state.status)
+            rt(&ctx.state.status)
                 .size(12.5)
                 .color(crate::theme::success_text(ui.visuals())),
         );
@@ -640,11 +621,11 @@ fn draw_trash(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
                 "Recovery action failed"
             }),
             |ui| {
-                ui.label(egui::RichText::new(error).size(12.5));
+                ui.label(rt(error).size(12.5));
                 ui.add_space(8.0);
                 ui.horizontal_wrapped(|ui| {
                     if ui
-                        .button(if load_failed { "Try again" } else { "Dismiss" })
+                        .tbutton(if load_failed { "Try again" } else { "Dismiss" })
                         .clicked()
                     {
                         ctx.state.error = None;
@@ -653,7 +634,7 @@ fn draw_trash(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
                             refresh_trash(ctx);
                         }
                     }
-                    if ui.button("Open trash folder").clicked() {
+                    if ui.tbutton("Open trash folder").clicked() {
                         open_trash_folder(ctx);
                     }
                 });
@@ -668,7 +649,7 @@ fn draw_trash(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
     if ctx.state.loading {
         ui.horizontal(|ui| {
             widgets::busy_spinner(ui, ctx.motion);
-            ui.label(egui::RichText::new("Loading local trash\u{2026}").weak());
+            ui.label(rt("Loading local trash\u{2026}").weak());
         });
         return;
     }
@@ -677,14 +658,12 @@ fn draw_trash(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
     if entries.is_empty() {
         widgets::card(ui, None, |ui| {
             ui.label(
-                egui::RichText::new(
-                    "No local trash. Files deleted locally will appear here and can be restored to their original folder.",
-                )
+                rt("No local trash. Files deleted locally will appear here and can be restored to their original folder.")
                 .size(12.5)
                 .weak(),
             );
             ui.add_space(8.0);
-            if ui.button("Open trash folder").clicked() {
+            if ui.tbutton("Open trash folder").clicked() {
                 open_trash_folder(ctx);
             }
         });
@@ -694,7 +673,7 @@ fn draw_trash(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
     let bytes: u64 = entries.iter().map(|e| e.size).sum();
     let total = super::cloud::fmt_size(bytes);
     ui.label(
-        egui::RichText::new(if entries.len() == 1 {
+        rt(if entries.len() == 1 {
             if total.is_empty() {
                 "1 deleted item".to_string()
             } else {
@@ -710,9 +689,7 @@ fn draw_trash(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
     );
     if bytes >= 1 << 30 {
         ui.label(
-            egui::RichText::new(
-                "Local trash is using more than 1 GB. Permanently delete items you no longer need.",
-            )
+            rt("Local trash is using more than 1 GB. Permanently delete items you no longer need.")
             .size(11.5)
             .color(crate::theme::warning_text(ui.visuals())),
         );
@@ -724,11 +701,11 @@ fn draw_trash(ctx: &mut RecoveryCtx, ui: &mut egui::Ui) {
     }
     ui.add_space(2.0);
     ui.horizontal_wrapped(|ui| {
-        if ui.button("Open trash folder").clicked() {
+        if ui.tbutton("Open trash folder").clicked() {
             open_trash_folder(ctx);
         }
         ui.label(
-            egui::RichText::new(format!(
+            rt(format!(
                 "Manifest: {}",
                 ctx.paths.state_dir.join("trash-manifest.json").display()
             ))
@@ -748,7 +725,7 @@ fn entry_card(ctx: &mut RecoveryCtx, ui: &mut egui::Ui, entry: &Entry) {
             ui.set_min_width(ui.available_width());
             ui.add(
                 egui::Label::new(
-                    egui::RichText::new(&entry.original_rel)
+                    rt(&entry.original_rel)
                         .strong()
                         .size(13.5),
                 )
@@ -768,14 +745,12 @@ fn entry_card(ctx: &mut RecoveryCtx, ui: &mut egui::Ui, entry: &Entry) {
                 meta.push_str(" \u{b7} legacy entry");
             }
             ui.add(
-                egui::Label::new(egui::RichText::new(meta).size(11.5).weak())
+                egui::Label::new(rt(meta).size(11.5).weak())
                     .truncate(),
             );
             if entry.legacy {
                 ui.label(
-                    egui::RichText::new(
-                        "The original name was not recorded; the stored path is shown.",
-                    )
+                    rt("The original name was not recorded; the stored path is shown.")
                     .size(11.5)
                     .weak(),
                 );
@@ -783,7 +758,7 @@ fn entry_card(ctx: &mut RecoveryCtx, ui: &mut egui::Ui, entry: &Entry) {
             ui.add_space(7.0);
             ui.horizontal_wrapped(|ui| {
                 if ui
-                    .add_enabled(!ctx.state.busy, egui::Button::new("Restore"))
+                    .add_enabled(!ctx.state.busy, egui::Button::new(t("Restore")))
                     .on_hover_text(
                         "Put the item back at its original path. Existing files are never overwritten.",
                     )
@@ -801,7 +776,7 @@ fn entry_card(ctx: &mut RecoveryCtx, ui: &mut egui::Ui, entry: &Entry) {
                         ctx.state.confirm_delete = None;
                         start_delete(ctx, entry.clone());
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.tbutton("Cancel").clicked() {
                         ctx.state.confirm_delete = None;
                     }
                 } else if ui

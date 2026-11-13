@@ -6,6 +6,7 @@
 //! walk (remote-snapshot.json); a fresh listing always loads behind it, so
 //! nothing ever waits on the network to be visible.
 
+use crate::i18n::{rt, t, TrUi};
 use super::{AppCtx, Back, Dialog, Page, Toast, widgets};
 use crate::{cli, health, notify, portal, theme};
 use eframe::egui;
@@ -1362,7 +1363,7 @@ fn page_head(app: &mut CloudView, ui: &mut egui::Ui) {
             if trash_view {
                 if can_transfer
                     && ui
-                        .add_enabled(!busy, egui::Button::new("Empty trash"))
+                        .add_enabled(!busy, egui::Button::new(t("Empty trash")))
                         .on_hover_text("Permanently delete everything in the trash")
                         .clicked()
                 {
@@ -1382,7 +1383,7 @@ fn page_head(app: &mut CloudView, ui: &mut egui::Ui) {
                     pick_upload_files(app);
                 }
                 let new_folder = ui
-                    .add_enabled_ui(!busy, |ui| ui.button("New folder"))
+                    .add_enabled_ui(!busy, |ui| ui.tbutton("New folder"))
                     .inner
                     .clicked();
                 if new_folder {
@@ -1418,7 +1419,7 @@ fn sign_in_banner(app: &mut CloudView, ui: &mut egui::Ui) {
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new(message)
+                    rt(message)
                         .size(13.0),
                 );
                 ui.with_layout(
@@ -1426,7 +1427,7 @@ fn sign_in_banner(app: &mut CloudView, ui: &mut egui::Ui) {
                     |ui| {
                         if signing_in {
                             ui.label(
-                                egui::RichText::new("Signing in\u{2026}")
+                                rt("Signing in\u{2026}")
                                     .size(12.5)
                                     .weak(),
                             );
@@ -1450,7 +1451,7 @@ fn top_icon_button(ui: &mut egui::Ui, kind: widgets::TopIcon, enabled: bool, hov
     let resp = ui
         .add_enabled(
             enabled,
-            egui::Button::new(egui::RichText::new("")).min_size(egui::vec2(30.0, 30.0)),
+            egui::Button::new(rt("")).min_size(egui::vec2(30.0, 30.0)),
         )
         .on_hover_text(hover);
     resp.widget_info(|| {
@@ -1542,7 +1543,7 @@ fn top_row(app: &mut CloudView, ui: &mut egui::Ui) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let search = ui.add_sized(
                 egui::vec2(search_w, 28.0),
-                egui::TextEdit::singleline(&mut app.cloud.query).hint_text("Search files..."),
+                egui::TextEdit::singleline(&mut app.cloud.query).hint_text(rt("Search files...")),
             );
             if *app.search_focus {
                 search.request_focus();
@@ -1584,21 +1585,21 @@ fn breadcrumb(app: &mut CloudView, ui: &mut egui::Ui, crumb_w: f32) {
             ui.spacing_mut().item_spacing.x = 2.0;
             for (i, (seg, prefix)) in segs.iter().enumerate() {
                 if i > 0 {
-                    ui.label(egui::RichText::new("\u{203a}").weak().size(12.0));
+                    ui.label(rt("\u{203a}").weak().size(12.0));
                 }
                 if seg == "..." {
-                    ui.label(egui::RichText::new("\u{2026}").weak().size(13.5));
+                    ui.label(rt("\u{2026}").weak().size(13.5));
                     continue;
                 }
                 let current = i == segs.len() - 1;
                 let label = widgets::elide(seg, 34);
                 if current {
-                    ui.label(egui::RichText::new(&label).strong().size(13.5))
+                    ui.label(rt(&label).strong().size(13.5))
                         .on_hover_text(format!("/{prefix}"));
                 } else {
                     let resp = ui
                         .add(
-                            egui::Label::new(egui::RichText::new(&label).size(13.5))
+                            egui::Label::new(rt(&label).size(13.5))
                                 .sense(egui::Sense::click()),
                         )
                         .on_hover_text(format!("/{prefix}"));
@@ -1680,26 +1681,26 @@ fn header_cell(app: &mut CloudView, ui: &mut egui::Ui, w: f32, label: &str, col:
         if right {
             child.add_space(8.0);
             child.label(
-                egui::RichText::new(label.to_uppercase())
+                rt(label.to_uppercase())
                     .size(11.5)
                     .strong()
                     .color(color),
             );
             if active {
                 let c = if app.cloud.sort_desc { "\u{25be}" } else { "\u{25b4}" };
-                child.label(egui::RichText::new(c).size(10.0).color(accent));
+                child.label(rt(c).size(10.0).color(accent));
             }
         } else {
             child.add_space(32.0);
             child.label(
-                egui::RichText::new(label.to_uppercase())
+                rt(label.to_uppercase())
                     .size(11.5)
                     .strong()
                     .color(color),
             );
             if active {
                 let c = if app.cloud.sort_desc { "\u{25be}" } else { "\u{25b4}" };
-                child.label(egui::RichText::new(c).size(10.0).color(accent));
+                child.label(rt(c).size(10.0).color(accent));
             }
         }
     }
@@ -1834,16 +1835,16 @@ fn table(app: &mut CloudView, ui: &mut egui::Ui) {
                             if loading {
                                 widgets::busy_spinner(ui, app.ctx.prefs.motion_enabled());
                                 ui.add_space(8.0);
-                                ui.label(egui::RichText::new("Loading files\u{2026}").weak());
+                                ui.label(rt("Loading files\u{2026}").weak());
                             } else if query_active {
                                 ui.label(
-                                    egui::RichText::new("No files match")
+                                    rt("No files match")
                                         .strong()
                                         .size(15.0),
                                 );
                                 ui.add_space(2.0);
                                 ui.label(
-                                    egui::RichText::new(format!(
+                                    rt(format!(
                                         "\u{201c}{}\u{201d}",
                                         app.cloud.query.trim()
                                     ))
@@ -1851,23 +1852,23 @@ fn table(app: &mut CloudView, ui: &mut egui::Ui) {
                                     .weak(),
                                 );
                                 ui.add_space(8.0);
-                                if ui.button("Clear search").clicked() {
+                                if ui.tbutton("Clear search").clicked() {
                                     app.cloud.query.clear();
                                 }
                             } else if load_failed && app.can_transfer() {
                                 ui.label(
-                                    egui::RichText::new("Couldn't open this folder")
+                                    rt("Couldn't open this folder")
                                         .strong()
                                         .size(15.0),
                                 );
                                 ui.add_space(2.0);
                                 ui.label(
-                                    egui::RichText::new("Check your connection and try again.")
+                                    rt("Check your connection and try again.")
                                         .size(12.5)
                                         .weak(),
                                 );
                                 ui.add_space(8.0);
-                                if ui.button("Retry").clicked() {
+                                if ui.tbutton("Retry").clicked() {
                                     reload(app);
                                 }
                             } else if !app.can_transfer() {
@@ -1892,29 +1893,25 @@ fn table(app: &mut CloudView, ui: &mut egui::Ui) {
                                 ui.add_space(10.0);
                                 if trash_view {
                                     ui.label(
-                                        egui::RichText::new("Sign in to see your trash")
+                                        rt("Sign in to see your trash")
                                             .strong()
                                             .size(15.0),
                                     );
                                     ui.add_space(2.0);
                                     ui.label(
-                                        egui::RichText::new(
-                                            "Deleted files stay here until you sign in.",
-                                        )
+                                        rt("Deleted files stay here until you sign in.")
                                         .size(12.5)
                                         .weak(),
                                     );
                                 } else {
                                     ui.label(
-                                        egui::RichText::new("Sign in to see your files")
+                                        rt("Sign in to see your files")
                                             .strong()
                                             .size(15.0),
                                     );
                                     ui.add_space(2.0);
                                     ui.label(
-                                        egui::RichText::new(
-                                            "Your files will appear here after you sign in.",
-                                        )
+                                        rt("Your files will appear here after you sign in.")
                                         .size(12.5)
                                         .weak(),
                                     );
@@ -1926,7 +1923,7 @@ fn table(app: &mut CloudView, ui: &mut egui::Ui) {
                                 );
                                 if signing_in {
                                     ui.label(
-                                        egui::RichText::new("Signing in…")
+                                        rt("Signing in…")
                                             .size(12.5)
                                             .weak(),
                                     );
@@ -1960,13 +1957,11 @@ fn table(app: &mut CloudView, ui: &mut egui::Ui) {
                                 } else {
                                     "This folder is empty"
                                 };
-                                ui.label(egui::RichText::new(msg).strong().size(15.0));
+                                ui.label(rt(msg).strong().size(15.0));
                                 ui.add_space(2.0);
                                 if !trash_view {
                                     ui.label(
-                                        egui::RichText::new(
-                                            "Drop files here or use Upload.",
-                                        )
+                                        rt("Drop files here or use Upload.")
                                         .size(12.5)
                                         .weak(),
                                     );
@@ -1991,7 +1986,7 @@ fn table(app: &mut CloudView, ui: &mut egui::Ui) {
                             if ui
                                 .add_enabled(
                                     can_transfer,
-                                    egui::Button::new("Empty trash"),
+                                    egui::Button::new(t("Empty trash")),
                                 )
                                 .clicked()
                             {
@@ -2001,32 +1996,32 @@ fn table(app: &mut CloudView, ui: &mut egui::Ui) {
                             return;
                         }
                         if ui
-                            .add_enabled(can_transfer, egui::Button::new("New folder..."))
+                            .add_enabled(can_transfer, egui::Button::new(t("New folder...")))
                             .clicked()
                         {
                             ui.close();
                             menu_item = Some("newfolder");
                         }
                         if ui
-                            .add_enabled(can_transfer, egui::Button::new("Upload files..."))
+                            .add_enabled(can_transfer, egui::Button::new(t("Upload files...")))
                             .clicked()
                         {
                             ui.close();
                             menu_item = Some("uploadfiles");
                         }
                         if ui
-                            .add_enabled(can_transfer, egui::Button::new("Upload folder..."))
+                            .add_enabled(can_transfer, egui::Button::new(t("Upload folder...")))
                             .clicked()
                         {
                             ui.close();
                             menu_item = Some("uploadfolder");
                         }
                         ui.separator();
-                        if ui.button("Select all").clicked() {
+                        if ui.tbutton("Select all").clicked() {
                             ui.close();
                             menu_item = Some("selectall");
                         }
-                        if ui.button("Refresh").clicked() {
+                        if ui.tbutton("Refresh").clicked() {
                             ui.close();
                             menu_item = Some("refresh");
                         }
@@ -2221,7 +2216,7 @@ fn row(
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
     let name_resp =
-        name_ui.label(egui::RichText::new(name_text).size(14.0).color(name_color));
+        name_ui.label(rt(name_text).size(14.0).color(name_color));
     name_resp.context_menu(|ui| row_menu_body(app, ui, menu_item));
 
     // Size (right-aligned, files only).
@@ -2237,7 +2232,7 @@ fn row(
         );
         size_ui.add_space(8.0);
         let size_resp =
-            size_ui.label(egui::RichText::new(fmt_size(e.size)).size(12.5).color(weak));
+            size_ui.label(rt(fmt_size(e.size)).size(12.5).color(weak));
         size_resp.context_menu(|ui| row_menu_body(app, ui, menu_item));
     }
 
@@ -2254,7 +2249,7 @@ fn row(
         );
         mtime_ui.add_space(8.0);
         let mtime_resp =
-            mtime_ui.label(egui::RichText::new(e.mtime.clone()).size(12.5).color(weak));
+            mtime_ui.label(rt(e.mtime.clone()).size(12.5).color(weak));
         mtime_resp.context_menu(|ui| row_menu_body(app, ui, menu_item));
     }
 
@@ -2368,7 +2363,7 @@ fn row_menu_body(app: &mut CloudView, ui: &mut egui::Ui, menu_item: &mut Option<
     let can_transfer = app.can_transfer();
     if app.cloud.trash_view {
         if ui
-            .add_enabled(can_transfer, egui::Button::new("Restore"))
+            .add_enabled(can_transfer, egui::Button::new(t("Restore")))
             .clicked()
         {
             ui.close();
@@ -2376,7 +2371,7 @@ fn row_menu_body(app: &mut CloudView, ui: &mut egui::Ui, menu_item: &mut Option<
         }
         ui.separator();
         if ui
-            .add_enabled(can_transfer, egui::Button::new("Delete permanently"))
+            .add_enabled(can_transfer, egui::Button::new(t("Delete permanently")))
             .clicked()
         {
             ui.close();
@@ -2387,32 +2382,32 @@ fn row_menu_body(app: &mut CloudView, ui: &mut egui::Ui, menu_item: &mut Option<
     let sel = &app.cloud.sel;
     if sel.is_empty() {
         if ui
-            .add_enabled(can_transfer, egui::Button::new("New folder..."))
+            .add_enabled(can_transfer, egui::Button::new(t("New folder...")))
             .clicked()
         {
             ui.close();
             *menu_item = Some("newfolder");
         }
         if ui
-            .add_enabled(can_transfer, egui::Button::new("Upload files..."))
+            .add_enabled(can_transfer, egui::Button::new(t("Upload files...")))
             .clicked()
         {
             ui.close();
             *menu_item = Some("uploadfiles");
         }
         if ui
-            .add_enabled(can_transfer, egui::Button::new("Upload folder..."))
+            .add_enabled(can_transfer, egui::Button::new(t("Upload folder...")))
             .clicked()
         {
             ui.close();
             *menu_item = Some("uploadfolder");
         }
         ui.separator();
-        if ui.button("Select all").clicked() {
+        if ui.tbutton("Select all").clicked() {
             ui.close();
             *menu_item = Some("selectall");
         }
-        if ui.button("Refresh").clicked() {
+        if ui.tbutton("Refresh").clicked() {
             ui.close();
             *menu_item = Some("refresh");
         }
@@ -2424,48 +2419,48 @@ fn row_menu_body(app: &mut CloudView, ui: &mut egui::Ui, menu_item: &mut Option<
             .find(|x| x.rel == sel[0])
             .cloned();
         if let Some(it) = entry {
-            if it.dir && ui.button("Open").clicked() {
+            if it.dir && ui.tbutton("Open").clicked() {
                 ui.close();
                 *menu_item = Some("open");
             } else if !it.dir
                 && !it.doc
                 && ui
-                    .add_enabled(can_transfer, egui::Button::new("Download"))
+                    .add_enabled(can_transfer, egui::Button::new(t("Download")))
                     .clicked()
             {
                 ui.close();
                 *menu_item = Some("download");
             }
             if ui
-                .add_enabled(can_transfer, egui::Button::new("Rename..."))
+                .add_enabled(can_transfer, egui::Button::new(t("Rename...")))
                 .clicked()
             {
                 ui.close();
                 *menu_item = Some("rename");
             }
             if ui
-                .add_enabled(can_transfer, egui::Button::new("Duplicate"))
+                .add_enabled(can_transfer, egui::Button::new(t("Duplicate")))
                 .clicked()
             {
                 ui.close();
                 *menu_item = Some("duplicate");
             }
             ui.separator();
-            if ui.button("Details").clicked() {
+            if ui.tbutton("Details").clicked() {
                 ui.close();
                 *menu_item = Some("details");
             }
         }
         ui.separator();
         if ui
-            .add_enabled(can_transfer, egui::Button::new("Move to..."))
+            .add_enabled(can_transfer, egui::Button::new(t("Move to...")))
             .clicked()
         {
             ui.close();
             *menu_item = Some("move");
         }
         if ui
-            .add_enabled(can_transfer, egui::Button::new("Move to trash"))
+            .add_enabled(can_transfer, egui::Button::new(t("Move to trash")))
             .clicked()
         {
             ui.close();
@@ -2484,14 +2479,14 @@ fn row_menu_body(app: &mut CloudView, ui: &mut egui::Ui, menu_item: &mut Option<
         }
         ui.separator();
         if ui
-            .add_enabled(can_transfer, egui::Button::new("Move to..."))
+            .add_enabled(can_transfer, egui::Button::new(t("Move to...")))
             .clicked()
         {
             ui.close();
             *menu_item = Some("move");
         }
         if ui
-            .add_enabled(can_transfer, egui::Button::new("Move to trash"))
+            .add_enabled(can_transfer, egui::Button::new(t("Move to trash")))
             .clicked()
         {
             ui.close();
@@ -2635,13 +2630,13 @@ fn bottom_row(app: &mut CloudView, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             let short = widgets::elide(&status, 52);
             let resp = ui
-                .add(egui::Label::new(egui::RichText::new(short).size(12.5).weak()).truncate());
+                .add(egui::Label::new(rt(short).size(12.5).weak()).truncate());
             if resp.hovered() {
                 let full = if status_tip.is_empty() { status } else { status_tip };
                 resp.clone().on_hover_text(full);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(egui::RichText::new(&items).size(12.0).weak());
+                ui.label(rt(&items).size(12.0).weak());
             });
         });
         return;
@@ -2650,7 +2645,7 @@ fn bottom_row(app: &mut CloudView, ui: &mut egui::Ui) {
     let mut menu_item: Option<&'static str> = None;
     ui.horizontal_wrapped(|ui| {
         ui.label(
-            egui::RichText::new(format!("{} selected", sel.len()))
+            rt(format!("{} selected", sel.len()))
                 .strong()
                 .size(12.5),
         );
@@ -2660,25 +2655,25 @@ fn bottom_row(app: &mut CloudView, ui: &mut egui::Ui) {
             // button, Enter/Space opens it, and the menu is arrow-navigable.
             ui.menu_button("More", |ui| {
                 if sel.len() == 1 {
-                    if ui.button("Open").clicked() {
+                    if ui.tbutton("Open").clicked() {
                         ui.close();
                         menu_item = Some("open");
                     }
-                    if ui.button("Rename...").clicked() {
+                    if ui.tbutton("Rename...").clicked() {
                         ui.close();
                         menu_item = Some("rename");
                     }
-                    if ui.button("Duplicate").clicked() {
+                    if ui.tbutton("Duplicate").clicked() {
                         ui.close();
                         menu_item = Some("duplicate");
                     }
-                    if ui.button("Details").clicked() {
+                    if ui.tbutton("Details").clicked() {
                         ui.close();
                         menu_item = Some("details");
                     }
                     ui.separator();
                 }
-                if ui.button("Move to...").clicked() {
+                if ui.tbutton("Move to...").clicked() {
                     ui.close();
                     menu_item = Some("move");
                 }
@@ -2688,7 +2683,7 @@ fn bottom_row(app: &mut CloudView, ui: &mut egui::Ui) {
         }
         if trash_view {
             if ui
-                .add_enabled(!busy && can_transfer, egui::Button::new("Restore"))
+                .add_enabled(!busy && can_transfer, egui::Button::new(t("Restore")))
                 .clicked()
             {
                 action_restore(app);
@@ -2703,7 +2698,7 @@ fn bottom_row(app: &mut CloudView, ui: &mut egui::Ui) {
             }
         } else {
             if ui
-                .add_enabled(dl_enabled, egui::Button::new("Download"))
+                .add_enabled(dl_enabled, egui::Button::new(t("Download")))
                 .clicked()
             {
                 pick_download(app);
@@ -2711,7 +2706,7 @@ fn bottom_row(app: &mut CloudView, ui: &mut egui::Ui) {
             if ui
                 .add_enabled(
                     !busy && can_transfer,
-                    egui::Button::new("Move to trash"),
+                    egui::Button::new(t("Move to trash")),
                 )
                 .on_hover_text("Move the selected items to the Proton trash")
                 .clicked()
@@ -2720,7 +2715,7 @@ fn bottom_row(app: &mut CloudView, ui: &mut egui::Ui) {
             }
         }
         if ui
-            .button("Clear")
+            .tbutton("Clear")
             .on_hover_text("Clear the selection")
             .clicked()
         {
@@ -2733,7 +2728,7 @@ fn bottom_row(app: &mut CloudView, ui: &mut egui::Ui) {
             ui.separator();
             let short = widgets::elide(&status, 32);
             let resp = ui.add(
-                egui::Label::new(egui::RichText::new(short).size(12.0).weak()).truncate(),
+                egui::Label::new(rt(short).size(12.0).weak()).truncate(),
             );
             if resp.hovered() {
                 let full = if status_tip.is_empty() { status } else { status_tip };
@@ -3021,12 +3016,12 @@ fn tree_rows(app: &mut CloudView, ui: &mut egui::Ui, parent: &str, depth: usize)
         let indent = 16.0 + depth as f32 * 14.0;
         if app.cloud.tree_loading.contains(parent) {
             ui.add_space(indent);
-            ui.label(egui::RichText::new("Loading...").size(12.0).weak());
+            ui.label(rt("Loading...").size(12.0).weak());
         } else if let Some(at) = app.cloud.tree_failed.get(parent)
             && epoch_now() - *at < 30.0
         {
             ui.add_space(indent);
-            ui.label(egui::RichText::new("Couldn't load. Try again.").size(11.5).weak());
+            ui.label(rt("Couldn't load. Try again.").size(11.5).weak());
         }
         return;
     };

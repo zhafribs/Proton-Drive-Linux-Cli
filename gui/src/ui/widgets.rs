@@ -1,6 +1,8 @@
 //! Shared visual pieces: cards, toggles, buttons, the animated status orb,
 //! avatars, and the activity/recent rows.
 
+use crate::i18n::{TrUi, rt};
+use crate::i18n::t;
 use crate::journal::{ChangeRow, Dir};
 use crate::theme;
 use eframe::egui;
@@ -10,11 +12,12 @@ use eframe::egui;
 /// lavender page.
 pub fn card(ui: &mut egui::Ui, title: Option<&str>, add: impl FnOnce(&mut egui::Ui)) {
     let frame = theme::card_frame(ui);
+    let title = title.map(str::to_string).map(|s| t(&s));
     frame.show(ui, |ui| {
         // Proton's cards always span the content column.
         ui.set_min_width(ui.available_width());
-        if let Some(t) = title {
-            let heading = ui.label(egui::RichText::new(t).strong().size(15.0));
+        if let Some(t) = title.as_deref() {
+            let heading = ui.label(rt(t).strong().size(15.0));
             heading.widget_info(|| {
                 egui::WidgetInfo::labeled(egui::Role::Heading, true, t)
             });
@@ -26,14 +29,16 @@ pub fn card(ui: &mut egui::Ui, title: Option<&str>, add: impl FnOnce(&mut egui::
 
 /// Uppercase muted section label ("NEVER SYNC FILES MATCHING").
 pub fn section_label(ui: &mut egui::Ui, text: &str) {
-    let resp = ui.label(egui::RichText::new(text.to_uppercase()).size(11.0).weak());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Heading, ui.is_enabled(), text));
+    let text = t(text);
+    let resp = ui.label(rt(text.to_uppercase()).size(11.0).weak());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Heading, ui.is_enabled(), &text));
     ui.add_space(4.0);
 }
 /// The 24 pt page title, exposed as a heading for screen readers.
 pub fn page_title(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    let resp = ui.label(egui::RichText::new(text).strong().size(24.0));
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Heading, ui.is_enabled(), text));
+    let text = t(text);
+    let resp = ui.label(rt(&text).strong().size(24.0));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Heading, ui.is_enabled(), &text));
     resp
 }
 /// Keep keyboard focus visible inside a ScrollArea. egui 0.37 does not
@@ -52,8 +57,10 @@ pub fn scroll_focused_into_view(ui: &egui::Ui) {
 /// One compact metric card (label, large value, context line). Shared by
 /// Home and Photos so their summary rows look identical.
 pub fn metric(ui: &mut egui::Ui, label: &str, value: &str, sub: &str) {
+    let label = t(label);
+    let sub = t(sub);
     card(ui, None, |ui| {
-        ui.label(egui::RichText::new(label).size(11.5).weak());
+        ui.label(rt(&label).size(11.5).weak());
         ui.add_space(2.0);
         // A long value ("415.7 MB") must stay on one line in the narrow
         // three-column row; the smaller size applies only in that case.
@@ -63,17 +70,18 @@ pub fn metric(ui: &mut egui::Ui, label: &str, value: &str, sub: &str) {
             23.0
         };
         ui.add(
-            egui::Label::new(egui::RichText::new(value).strong().size(value_size))
+            egui::Label::new(rt(value).strong().size(value_size))
                 .truncate(),
         )
         .on_hover_text(value);
-        ui.label(egui::RichText::new(sub).size(11.0).weak());
+        ui.label(rt(&sub).size(11.0).weak());
     });
 }
 
 /// A status pill: tinted track, colored dot, short label. Shared by Home and
 /// Photos so a status reads the same everywhere.
 pub fn status_pill(ui: &mut egui::Ui, key: &str, label: &str) {
+    let label = t(label);
     let color = theme::status_color(key);
     let text = theme::status_text_color(key, ui.visuals());
     egui::Frame::new()
@@ -87,7 +95,7 @@ pub fn status_pill(ui: &mut egui::Ui, key: &str, label: &str) {
             let text_w = ui
                 .painter()
                 .layout_no_wrap(
-                    label.to_string(),
+                    label.clone(),
                     egui::FontId::proportional(11.5),
                     text,
                 )
@@ -105,9 +113,9 @@ pub fn status_pill(ui: &mut egui::Ui, key: &str, label: &str) {
                     );
                     ui.painter().circle_filled(rect.center(), 3.5, color);
                     let resp =
-                        ui.label(egui::RichText::new(label).size(11.5).color(text));
+                        ui.label(rt(&label).size(11.5).color(text));
                     resp.widget_info(|| {
-                        egui::WidgetInfo::labeled(egui::Role::Status, true, label)
+                        egui::WidgetInfo::labeled(egui::Role::Status, true, &label)
                     });
                     ui.ctx().accesskit_node_builder(resp.id, |n| {
                         n.set_live(egui::accesskit::Live::Polite)
@@ -118,16 +126,19 @@ pub fn status_pill(ui: &mut egui::Ui, key: &str, label: &str) {
 }
 
 pub fn primary_button(ui: &mut egui::Ui, text: &str) -> bool {
-    primary_button_response(ui, text).clicked()
+    let text = t(text);
+    primary_button_response(ui, &text).clicked()
 }
 
 /// The same primary button, returned as a response for focus management.
 pub fn primary_button_response(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    primary_button_hint_response(ui, text, "")
+    let text = t(text);
+    primary_button_hint_response(ui, &text, "")
 }
 
 pub fn primary_button_hint(ui: &mut egui::Ui, text: &str, hint: &str) -> bool {
-    primary_button_hint_response(ui, text, hint).clicked()
+    let text = t(text);
+    primary_button_hint_response(ui, &text, hint).clicked()
 }
 
 pub fn primary_button_hint_response(
@@ -136,7 +147,7 @@ pub fn primary_button_hint_response(
     hint: &str,
 ) -> egui::Response {
     let response = ui.add(
-        egui::Button::new(egui::RichText::new(text).color(egui::Color32::WHITE))
+        egui::Button::new(rt(text).color(egui::Color32::WHITE))
             .fill(theme::ACCENT)
             .stroke(egui::Stroke::NONE)
             .corner_radius(theme::pill()),
@@ -161,9 +172,12 @@ pub fn primary_button_hint_response(
 /// Full-width primary CTA, for popups and empty states. Painted rather than
 /// stretched from a `Button` so the label stays centered.
 pub fn primary_button_full(ui: &mut egui::Ui, text: &str) -> bool {
+    let text = t(text);
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), text));
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &text)
+    });
     let radius = theme::pill();
     let fill = if response.hovered() {
         theme::ACCENT.gamma_multiply(0.92)
@@ -174,7 +188,7 @@ pub fn primary_button_full(ui: &mut egui::Ui, text: &str) -> bool {
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
-        text,
+        &text,
         egui::FontId::proportional(13.0),
         egui::Color32::WHITE,
     );
@@ -210,6 +224,7 @@ pub fn avatar(ui: &egui::Ui, center: egui::Pos2, radius: f32, initial: &str) {
 }
 
 pub fn secondary_button_hint(ui: &mut egui::Ui, text: &str, hint: &str) -> bool {
+    let text = t(text);
     let response = ui.add(egui::Button::new(text).corner_radius(theme::pill()));
     if !hint.is_empty() {
         response.clone().on_hover_text(hint);
@@ -218,9 +233,10 @@ pub fn secondary_button_hint(ui: &mut egui::Ui, text: &str, hint: &str) -> bool 
 }
 
 pub fn danger_ghost_button(ui: &mut egui::Ui, text: &str) -> bool {
+    let text = t(text);
     let red = theme::danger_text(ui.visuals());
     let response = ui.add(
-        egui::Button::new(egui::RichText::new(text).color(red))
+        egui::Button::new(rt(text).color(red))
             // Keep the surface behind the red text on hover/focus too; the
             // accent active fill drops the text below AA.
             .fill(theme::glass_fill(ui.visuals()))
@@ -274,7 +290,9 @@ pub fn busy_spinner(ui: &mut egui::Ui, animate: bool) {
 
 /// Toggle row: checkbox + optional hover explanation.
 pub fn toggle(ui: &mut egui::Ui, label: &str, value: &mut bool, hint: Option<&str>) -> bool {
-    let response = ui.checkbox(value, label);
+    let label = t(label);
+    let hint = hint.map(t);
+    let response = ui.tcheckbox(value, label);
     if let Some(h) = hint {
         response.clone().on_hover_text(h);
     }
@@ -507,7 +525,7 @@ pub fn move_row_compact(ui: &mut egui::Ui, row: &ChangeRow, when: &str) {
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
     let name = name_ui.add(
-        egui::Label::new(egui::RichText::new(row.name.clone()).strong().size(13.5)).truncate(),
+        egui::Label::new(rt(row.name.clone()).strong().size(13.5)).truncate(),
     );
     name.on_hover_text(row.rel.clone());
 
@@ -560,7 +578,7 @@ pub fn move_row(ui: &mut egui::Ui, row: &ChangeRow, parent: &str, when: &str) {
     );
     text_ui.set_max_width(text_rect.width());
     let name = text_ui.add(
-        egui::Label::new(egui::RichText::new(row.name.clone()).strong().size(14.0)).truncate(),
+        egui::Label::new(rt(row.name.clone()).strong().size(14.0)).truncate(),
     );
     name.on_hover_text(row.rel.clone());
     let mut meta = row.label().to_string();
@@ -568,7 +586,7 @@ pub fn move_row(ui: &mut egui::Ui, row: &ChangeRow, parent: &str, when: &str) {
         meta.push_str(" \u{b7} ");
         meta.push_str(parent);
     }
-    text_ui.add(egui::Label::new(egui::RichText::new(meta).size(12.0).weak()).truncate());
+    text_ui.add(egui::Label::new(rt(meta).size(12.0).weak()).truncate());
 
     ui.painter().text(
         egui::pos2(rect.right() - 8.0, rect.top() + 10.0),
@@ -781,6 +799,7 @@ pub fn nav_icon(painter: &egui::Painter, r: egui::Rect, kind: NavIcon, c: egui::
 /// row also draws a small accent bar on its left edge - the "you are here"
 /// cue that holds even in monochrome.
 pub fn nav_row(ui: &mut egui::Ui, icon: NavIcon, label: &str, selected: bool) -> bool {
+    let label = t(label);
     let (rect, resp) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 38.0), egui::Sense::click());
     let fill = if selected {
@@ -801,7 +820,7 @@ pub fn nav_row(ui: &mut egui::Ui, icon: NavIcon, label: &str, selected: bool) ->
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     resp.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::Role::ListItem, ui.is_enabled(), label)
+        egui::WidgetInfo::labeled(egui::Role::ListItem, ui.is_enabled(), &label)
     });
     ui.ctx()
         .accesskit_node_builder(resp.id, |n| n.set_selected(selected));
@@ -846,7 +865,7 @@ pub fn nav_row(ui: &mut egui::Ui, icon: NavIcon, label: &str, selected: bool) ->
     ui.painter().text(
         rect.left_center() + egui::vec2(42.0, 0.0),
         egui::Align2::LEFT_CENTER,
-        label,
+        &label,
         egui::FontId::proportional(14.5),
         color,
     );

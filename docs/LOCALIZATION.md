@@ -1,28 +1,31 @@
 # Language support
 
-The UI language is stored as `language=en|ms` in the preferences file.
+The UI language is stored as `language=en|ms` in the preferences file and can
+be changed during first-run setup or in Settings → Appearance.
 
-## Bahasa Melayu (beta)
+## Bahasa Melayu
 
 Covered:
 
-- first-run setup wizard
-- sidebar navigation and account menu
-- sync status titles, subtitles and the status card
-- Home: actions, metrics, cloud storage, sync details, activity preview
+- all pages: Home, My files, Photos, Activity, Settings, About, Recovery
+- first-run wizard, all dialogs, menus, tray entries and notifications
+- sync status, empty states, errors shown by the app, update progress
+- counts, relative times and journal verbs (`4 item`, `12 minit lalu`,
+  `Dimuat naik · ...`)
 
-Not covered yet:
+Not translated:
 
-- My files, Photos, Activity, Settings, About and Recovery bodies
-- dialogs, validation messages and notifications
-- dates and relative times
+- file and folder names from the cloud or disk
+- raw CLI/API error text, which is quoted verbatim so it can be searched
+- the language names themselves in the selector
 
-The Appearance panel says this explicitly. A partially translated page is
-worse than an honest English fallback, so untranslated strings stay English
-rather than being machine-translated.
+The catalog lives in `gui/src/i18n.rs`. `tr()` is used where the string is
+known at the call site; `t()`/`rt()` translate static and formatted display
+text. Unknown strings fall back to English rather than showing a blank.
 
 ## Adding a language
 
-`gui/src/i18n.rs` holds the runtime table. `tr("English", "translation")` is
-used at the call site; untranslated code is obvious because it has no `tr`
-wrapper. Add the enum variant, the preference code, and a selector entry.
+1. Add a variant and code in `gui/src/i18n.rs`.
+2. Add the selector entry.
+3. Extend `t()` and the `tr()` call sites.
+4. Run `scripts/ui-check.sh` and inspect `docs/audit/m11/` for clipped text.

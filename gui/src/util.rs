@@ -23,13 +23,17 @@ pub fn rel_time(dt: Option<DateTime<FixedOffset>>) -> String {
     let now = Utc::now().with_timezone(&dt.timezone());
     let secs = (now - dt).num_seconds().max(0);
     if secs < 45 {
-        "just now".into()
+        crate::i18n::tr("just now", "sebentar tadi").into()
     } else if secs < 3600 {
-        format!("{} min ago", (secs / 60).max(1))
+        format!(
+            "{} {}",
+            (secs / 60).max(1),
+            crate::i18n::tr("min ago", "minit lalu")
+        )
     } else if secs < 86400 {
-        format!("{} h ago", secs / 3600)
+        format!("{} {}", secs / 3600, crate::i18n::tr("h ago", "jam lalu"))
     } else {
-        format!("{} d ago", secs / 86400)
+        format!("{} {}", secs / 86400, crate::i18n::tr("d ago", "hari lalu"))
     }
 }
 

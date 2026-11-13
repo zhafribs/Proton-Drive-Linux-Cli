@@ -223,8 +223,8 @@ fn fixture(page: Page) -> App {
 /// `scale` is the interface scale (50/100/200%). The window size is in
 /// logical points, so a 720x400 physical capture at 50% is a 1440x800 point
 /// layout and at 200% it is a 720x400 point layout on a 2x surface.
-fn harness(page: Page, size: egui::Vec2, scale: f32) -> Harness<'static, App> {
-    let mut harness = Harness::builder()
+fn build_harness(page: Page, size: egui::Vec2, scale: f32) -> Harness<'static, App> {
+    Harness::builder()
         .with_size(size)
         .with_pixels_per_point(scale)
         .with_context_setup(|ctx| {
@@ -232,7 +232,11 @@ fn harness(page: Page, size: egui::Vec2, scale: f32) -> Harness<'static, App> {
                 egui_system_font_provider::SystemFontProvider::new(),
             ));
         })
-        .build_ui_state(|ui, app: &mut App| app.draw(ui), fixture(page));
+        .build_ui_state(|ui, app: &mut App| app.draw(ui), fixture(page))
+}
+
+fn harness(page: Page, size: egui::Vec2, scale: f32) -> Harness<'static, App> {
+    let mut harness = build_harness(page, size, scale);
     harness.run();
     harness
 }
@@ -316,7 +320,13 @@ fn save_png(image: &image::RgbaImage, path: &std::path::Path) {
 
 fn capture(page: Page, physical: egui::Vec2, scale: f32) {
     let logical = physical / scale;
-    let mut harness = harness(page, logical, scale);
+    let mut harness = build_harness(page, logical, scale);
+    // Some pages keep a spinner repainting; step a fixed number of frames
+    // instead of waiting for a settle that will never come.
+    for _ in 0..4 {
+        harness.step();
+    }
+    harness.check_accessibility();
     let image = harness.render().expect("wgpu screenshot");
     assert_eq!((image.width(), image.height()), (physical.x as u32, physical.y as u32));
     let colors: std::collections::HashSet<[u8; 4]> =
@@ -438,4 +448,87 @@ fn update_progress_renders_without_missing_names() {
         harness.step();
     }
     harness.check_accessibility();
+}
+
+#[test]
+fn every_page_renders_in_malay() {
+    crate::i18n::set_thread(Some(crate::i18n::Language::Malay));
+    for page in [
+        Page::Home,
+        Page::Cloud,
+        Page::Photos,
+        Page::Activity,
+        Page::Settings,
+        Page::About,
+        Page::Recovery,
+    ] {
+        let _ = harness(page, egui::vec2(720.0, 400.0), 1.0);
+    }
+    for step in 0..3 {
+        let mut harness = harness(Page::Home, egui::vec2(720.0, 400.0), 1.0);
+        harness.state_mut().onboarding = Some(step);
+        harness.run();
+    }
+    crate::i18n::set_thread(None);
+}
+
+#[test]
+fn malay_screenshot_matrix() {
+    crate::i18n::set_thread(Some(crate::i18n::Language::Malay));
+    for page in [
+        Page::Home,
+        Page::Cloud,
+        Page::Photos,
+        Page::Activity,
+        Page::Settings,
+        Page::About,
+        Page::Recovery,
+    ] {
+        capture(page, egui::vec2(1024.0, 720.0), 1.0);
+    }
+    crate::i18n::set_thread(None);
+}
+
+#[test]
+fn dialogs_render_in_malay() {
+    crate::i18n::set_thread(Some(crate::i18n::Language::Malay));
+    let dialogs = vec![
+        Dialog::Info {
+            title: "About this update".into(),
+            body: "SHA-256 verified before install.".into(),
+        },
+        Dialog::ConfirmSave,
+        Dialog::ConfirmLogout,
+        Dialog::PauseMenu,
+        Dialog::DirBrowse {
+            cwd: std::path::PathBuf::from("/home/you/ProtonDrive"),
+        },
+        Dialog::Input {
+            title: "New folder".into(),
+            label: "Folder name".into(),
+            intent: InputIntent::CloudNewFolder,
+        },
+        Dialog::Shortcuts,
+        Dialog::ConfirmTrash { n: 3 },
+        Dialog::ConfirmDelete { n: 2 },
+        Dialog::ConfirmEmptyTrash,
+        Dialog::ConfirmClearCache,
+        Dialog::ConfirmPhotoDelete {
+            uids: vec!["a".into(), "b".into()],
+        },
+        Dialog::CloudMove,
+        Dialog::ConfirmHeldDeletes {
+            local: 2,
+            cloud: 3,
+            local_digest: "local".into(),
+            cloud_digest: "cloud".into(),
+            sample: vec!["Documents/report.pdf".into()],
+        },
+    ];
+    for dialog in dialogs {
+        let mut harness = harness(Page::Cloud, egui::vec2(720.0, 400.0), 1.0);
+        harness.state_mut().dialog = Some(dialog);
+        harness.run();
+    }
+    crate::i18n::set_thread(None);
 }

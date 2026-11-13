@@ -25,8 +25,8 @@ impl Cooldowns {
 /// Fire-and-forget notification (icon when we can find it, app name as title
 /// prefix when the daemon shows nothing else).
 pub fn send(title: &str, body: &str) {
-    let title = title.to_string();
-    let body = body.to_string();
+    let title = crate::i18n::t(title);
+    let body = crate::i18n::t(body);
     std::thread::spawn(move || {
         let mut n = notify_rust::Notification::new();
         n.summary(&title).body(&body);

@@ -2,6 +2,7 @@
 //! updates, install helpers, advanced tuning - plus the conf/unit write flow
 //! (`do_save`), all with the PyQt app's exact labels and validations.
 
+use crate::i18n::{rt, t, TrUi};
 use super::{AppCtx, Dialog, Toast, UpdateUi, widgets};
 use crate::{conf, desktop, service, theme};
 use eframe::egui;
@@ -377,7 +378,7 @@ fn tab_bar(app: &mut SettingsView, ui: &mut egui::Ui) {
         for (i, label) in TAB_LABELS.iter().enumerate() {
             let selected = *app.settings_tab == i;
             let resp = ui.add(
-                egui::Button::new(egui::RichText::new(*label).size(13.0))
+                egui::Button::new(rt(*label).size(13.0))
                     .selected(selected)
                     .corner_radius(crate::theme::pill()),
             );
@@ -416,14 +417,14 @@ fn save_bar(app: &mut SettingsView, ui: &mut egui::Ui) {
             request_save(app);
         }
         let discard_resp = ui
-            .button("Discard all changes")
+            .tbutton("Discard all changes")
             .on_hover_text(
                 "Restores all settings, including appearance and notification changes.",
             );
         if discard_resp.clicked() {
             discard(app);
         }
-        ui.label(egui::RichText::new(app.save_hint.clone()).weak());
+        ui.label(rt(app.save_hint.clone()).weak());
     });
 }
 
@@ -864,7 +865,7 @@ fn folder_card(app: &mut SettingsView, ui: &mut egui::Ui) {
                 ui.label(app.draft.local.clone());
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Choose folder...").clicked() {
+                if ui.tbutton("Choose folder...").clicked() {
                     let start = super::expand_user(&app.draft.local);
                     let start = if start.is_dir() {
                         start
@@ -874,7 +875,7 @@ fn folder_card(app: &mut SettingsView, ui: &mut egui::Ui) {
                     *app.dialog = Some(Dialog::DirBrowse { cwd: start });
                 }
                 if ui
-                    .button("Check folder")
+                    .tbutton("Check folder")
                     .on_hover_text("Look for symlinks before syncing.")
                     .clicked()
                 {
@@ -889,7 +890,7 @@ fn what_syncs_card(app: &mut SettingsView, ui: &mut egui::Ui) {
     widgets::card(ui, Some("What gets synced"), |ui| {
         let mut selective = app.draft.selective;
         if ui
-            .checkbox(
+            .tcheckbox(
                 &mut selective,
                 "Only sync the folders I pick (instead of everything)",
             )
@@ -918,11 +919,11 @@ fn what_syncs_card(app: &mut SettingsView, ui: &mut egui::Ui) {
             sel_tree(app, ui, "");
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
-                if ui.button("Refresh folder list").clicked() {
+                if ui.tbutton("Refresh folder list").clicked() {
                     refresh_roots(app);
                 }
                 ui.label(
-                    egui::RichText::new(app.draft.sel_hint.clone())
+                    rt(app.draft.sel_hint.clone())
                         .size(12.0)
                         .weak(),
                 );
@@ -933,7 +934,7 @@ fn what_syncs_card(app: &mut SettingsView, ui: &mut egui::Ui) {
         widgets::section_label(ui, "NEVER SYNC FILES MATCHING");
         ui.add(
             egui::TextEdit::singleline(&mut app.draft.exclude)
-                .hint_text("For example:  *.tmp, .cache, *.iso")
+                .hint_text(rt("For example:  *.tmp, .cache, *.iso"))
                 .desired_width(f32::INFINITY),
         );
     });
@@ -954,7 +955,7 @@ fn photos_card(app: &mut SettingsView, ui: &mut egui::Ui) {
         labeled_control(ui, "Photo folder", |ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut app.draft.photos_local)
-                    .hint_text("~/ProtonPhotos")
+                    .hint_text(rt("~/ProtonPhotos"))
                     .desired_width(f32::INFINITY),
             );
         });
@@ -973,7 +974,7 @@ fn how_often_card(app: &mut SettingsView, ui: &mut egui::Ui) {
                 .selected_text(conf::INTERVAL_CHOICES[app.draft.interval_idx].0)
                 .show_ui(ui, |ui| {
                     for (i, (label, _)) in conf::INTERVAL_CHOICES.iter().enumerate() {
-                        ui.selectable_value(&mut app.draft.interval_idx, i, *label);
+                        ui.tselectable_value(&mut app.draft.interval_idx, i, *label);
                     }
                 });
         });
@@ -1038,7 +1039,7 @@ fn number_combo(
         .selected_text(number_display(*value, range.clone()))
         .show_ui(ui, |ui| {
             for option in number_options(range.clone()) {
-                ui.selectable_value(value, option, number_display(option, range.clone()));
+                ui.tselectable_value(value, option, number_display(option, range.clone()));
             }
         })
         .response;
@@ -1051,7 +1052,7 @@ fn performance_card(app: &mut SettingsView, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Performance"), |ui| {
         let mut fast = app.draft.fast_start;
         if ui
-            .checkbox(&mut fast, "Start from the last metadata snapshot")
+            .tcheckbox(&mut fast, "Start from the last metadata snapshot")
             .on_hover_text(
                 "The last remote tree is shown immediately while a background audit \
                  catches up. Deletes and edits to existing files wait until that audit \
@@ -1063,7 +1064,7 @@ fn performance_card(app: &mut SettingsView, ui: &mut egui::Ui) {
         }
         let mut auto = app.draft.auto_workers;
         if ui
-            .checkbox(&mut auto, "Adapt parallel scans to available memory")
+            .tcheckbox(&mut auto, "Adapt parallel scans to available memory")
             .on_hover_text(
                 "Starts from your scan-worker limit and lowers it when memory is tight; \
                  it never goes above that limit.",
@@ -1096,13 +1097,13 @@ fn performance_card(app: &mut SettingsView, ui: &mut egui::Ui) {
         });
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Run full check now").clicked() {
+            if ui.tbutton("Run full check now").clicked() {
                 match service::request_full_check(&app.ctx.paths) {
                     Ok(()) => app.toast("Full check requested - checking now."),
                     Err(e) => app.toast_error(format!("Could not request a full check: {e}")),
                 }
             }
-            if ui.button("Clear snapshot cache").clicked() {
+            if ui.tbutton("Clear snapshot cache").clicked() {
                 *app.dialog = Some(Dialog::ConfirmClearCache);
             }
         });
@@ -1113,28 +1114,28 @@ fn notifications_card(app: &mut SettingsView, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Notifications"), |ui| {
         let mut v = app.draft.note_errors;
         if ui
-            .checkbox(&mut v, "Tell me if something fails to sync")
+            .tcheckbox(&mut v, "Tell me if something fails to sync")
             .changed()
         {
             app.draft.note_errors = v;
         }
         let mut v = app.draft.note_conflicts;
         if ui
-            .checkbox(&mut v, "Tell me if a file was edited in two places at once")
+            .tcheckbox(&mut v, "Tell me if a file was edited in two places at once")
             .changed()
         {
             app.draft.note_conflicts = v;
         }
         let mut v = app.draft.note_done;
         if ui
-            .checkbox(&mut v, "Tell me when syncing finished")
+            .tcheckbox(&mut v, "Tell me when syncing finished")
             .changed()
         {
             app.draft.note_done = v;
         }
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Send a test notification").clicked() {
+            if ui.tbutton("Send a test notification").clicked() {
                 crate::notify::send("Proton Drive", "This is what notifications look like.");
             }
         });
@@ -1149,10 +1150,8 @@ fn background_card(app: &mut SettingsView, ui: &mut egui::Ui) {
         }
         if !app.tray_present {
             ui.label(
-                egui::RichText::new(
-                    "No system tray is available on this desktop. Closing quits, and \
-                     the quiet-start option is ignored.",
-                )
+                rt(t("No system tray is available on this desktop. Closing quits, and \
+                     the quiet-start option is ignored."))
                 .size(11.5)
                 .weak(),
             );
@@ -1168,15 +1167,13 @@ fn background_card(app: &mut SettingsView, ui: &mut egui::Ui) {
 
         if service::uses_supervisor() {
             ui.label(
-                egui::RichText::new(
-                    "Without systemd, sync starts when the app opens. Use \"Open Proton Drive when I log in\" to start it at login.",
-                )
+                rt("Without systemd, sync starts when the app opens. Use \"Open Proton Drive when I log in\" to start it at login.")
                 .size(11.5)
                 .weak(),
             );
         } else {
             let mut v = app.draft.autostart;
-            if ui.checkbox(&mut v, "Start syncing when I log in").changed() {
+            if ui.tcheckbox(&mut v, "Start syncing when I log in").changed() {
                 app.draft.autostart = v;
                 app.draft.autostart_touched = true;
             }
@@ -1184,7 +1181,7 @@ fn background_card(app: &mut SettingsView, ui: &mut egui::Ui) {
 
         let mut v = app.draft.appstart;
         if ui
-            .checkbox(&mut v, "Open Proton Drive when I log in")
+            .tcheckbox(&mut v, "Open Proton Drive when I log in")
             .changed()
         {
             app.draft.appstart = v;
@@ -1202,7 +1199,7 @@ fn appearance_card(app: &mut SettingsView, ui: &mut egui::Ui) {
                 .show_ui(ui, |ui| {
                     for (i, t) in THEMES.iter().enumerate() {
                         if ui
-                            .selectable_value(&mut app.draft.theme_idx, i, *t)
+                            .tselectable_value(&mut app.draft.theme_idx, i, *t)
                             .changed()
                         {
                             // Theme and scale preview live; Discard restores
@@ -1226,7 +1223,7 @@ fn appearance_card(app: &mut SettingsView, ui: &mut egui::Ui) {
             };
             ui.add_space(2.0);
             ui.label(
-                egui::RichText::new(format!("System theme: {detected}"))
+                rt(format!("System theme: {detected}"))
                     .size(11.5)
                     .weak(),
             )
@@ -1244,7 +1241,7 @@ fn appearance_card(app: &mut SettingsView, ui: &mut egui::Ui) {
                         crate::i18n::Language::Malay,
                     ] {
                         if ui
-                            .selectable_value(&mut app.draft.language, lang, lang.label())
+                            .tselectable_value(&mut app.draft.language, lang, lang.label())
                             .changed()
                         {
                             crate::i18n::set(lang);
@@ -1255,10 +1252,8 @@ fn appearance_card(app: &mut SettingsView, ui: &mut egui::Ui) {
                 });
         });
         ui.label(
-            egui::RichText::new(
-                "Bahasa Melayu currently covers first-run setup, the sidebar, \
-                 status and Home; other pages remain English.",
-            )
+            rt(t("Bahasa Melayu currently covers first-run setup, the sidebar, \
+                 status and Home; other pages remain English."))
             .size(11.0)
             .weak(),
         );
@@ -1289,7 +1284,7 @@ fn appearance_card(app: &mut SettingsView, ui: &mut egui::Ui) {
                 ui.horizontal_wrapped(|ui| {
                     for (name, preset) in PRESETS {
                         let selected = pct == preset;
-                        if ui.selectable_label(selected, name).clicked() {
+                        if ui.tselectable_label(selected, name).clicked() {
                             pct = preset;
                             changed = true;
                             apply = true;
@@ -1324,10 +1319,10 @@ fn appearance_card(app: &mut SettingsView, ui: &mut egui::Ui) {
                     }
                     ui.add_sized(
                         [42.0, 20.0],
-                        egui::Label::new(egui::RichText::new(format!("{pct}%")).strong()),
+                        egui::Label::new(rt(format!("{pct}%")).strong()),
                     );
                     if ui
-                        .small_button("Reset")
+                        .tsmall_button("Reset")
                         .on_hover_text("Reset to 100%.")
                         .clicked()
                     {
@@ -1339,9 +1334,7 @@ fn appearance_card(app: &mut SettingsView, ui: &mut egui::Ui) {
                 if pct == crate::prefs::UiScale::MIN {
                     ui.add_space(2.0);
                     ui.label(
-                        egui::RichText::new(
-                            "50% is the minimum; text is very small on a 1080p display.",
-                        )
+                        rt("50% is the minimum; text is very small on a 1080p display.")
                         .size(11.5)
                         .weak(),
                     );
@@ -1365,10 +1358,8 @@ fn updates_card(app: &mut SettingsView, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Updates"), |ui| {
         if crate::paths::in_flatpak() {
             ui.label(
-                egui::RichText::new(
-                    "This Flatpak is updated by your software center. The app still \
-                     checks for new versions so you can see when one is available.",
-                )
+                rt(t("This Flatpak is updated by your software center. The app still \
+                     checks for new versions so you can see when one is available."))
                 .size(11.5)
                 .weak(),
             );
@@ -1380,14 +1371,12 @@ fn updates_card(app: &mut SettingsView, ui: &mut egui::Ui) {
         }
         ui.add_space(4.0);
         if !app.upd.label.is_empty() {
-            ui.label(egui::RichText::new(app.upd.label.clone()).size(12.0).weak());
+            ui.label(rt(app.upd.label.clone()).size(12.0).weak());
         }
         if !crate::release::updater_feed_trusted() {
             ui.label(
-                egui::RichText::new(
-                    "This build does not trust its update feed; download the latest \
-                     release manually.",
-                )
+                rt(t("This build does not trust its update feed; download the latest \
+                     release manually."))
                 .size(11.0)
                 .color(crate::theme::ERROR),
             );
@@ -1395,20 +1384,20 @@ fn updates_card(app: &mut SettingsView, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         let has_update = app.upd.available.is_some() && app.ctx.paths.appimage.is_some();
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Check now").clicked() {
+            if ui.tbutton("Check now").clicked() {
                 app.action_check_updates();
             }
             if has_update
                 && ui
                     .add_enabled(
                         !app.upd.downloading,
-                        egui::Button::new("Download and restart"),
+                        egui::Button::new(t("Download and restart")),
                     )
                     .clicked()
             {
                 app.action_download_update();
             }
-            if ui.button("Open download page").clicked() {
+            if ui.tbutton("Open download page").clicked() {
                 open_url(crate::paths::RELEASE_PAGE);
             }
         });
@@ -1419,10 +1408,8 @@ fn install_card(app: &mut SettingsView, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Installing on Linux"), |ui| {
         if crate::paths::in_flatpak() {
             ui.label(
-                egui::RichText::new(
-                    "Managed by Flatpak: the menu entry, updates and login all \
-                     belong to the sandbox. Sync starts when this window opens.",
-                )
+                rt(t("Managed by Flatpak: the menu entry, updates and login all \
+                     belong to the sandbox. Sync starts when this window opens."))
                 .size(11.5)
                 .weak(),
             );
@@ -1430,7 +1417,7 @@ fn install_card(app: &mut SettingsView, ui: &mut egui::Ui) {
         }
         let installed = desktop::menu_installed(&app.ctx.paths);
         ui.label(
-            egui::RichText::new(if installed {
+            rt(if installed {
                 "Installed in your app menu."
             } else {
                 "Not in your app menu yet."
@@ -1440,14 +1427,14 @@ fn install_card(app: &mut SettingsView, ui: &mut egui::Ui) {
         );
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Add to my app menu").clicked() {
+            if ui.tbutton("Add to my app menu").clicked() {
                 if desktop::set_menu(&app.ctx.paths, true) {
                     app.toast("Added to your app menu.");
                 } else {
                     app.toast_error("Could not add the app-menu entry.");
                 }
             }
-            if ui.button("Remove from app menu").clicked() {
+            if ui.tbutton("Remove from app menu").clicked() {
                 if desktop::set_menu(&app.ctx.paths, false) {
                     app.toast("Removed from your app menu.");
                 } else {
@@ -1478,14 +1465,14 @@ fn fine_tuning_card(app: &mut SettingsView, ui: &mut egui::Ui) {
 fn troubleshooting_card(app: &mut SettingsView, ui: &mut egui::Ui) {
     widgets::card(ui, Some("If something goes wrong"), |ui| {
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Restart syncing now").clicked() {
+            if ui.tbutton("Restart syncing now").clicked() {
                 app.action_restart_service();
             }
-            if ui.button("Open settings file").clicked() {
+            if ui.tbutton("Open settings file").clicked() {
                 let p = app.ctx.paths.conf_file.clone();
                 open_url(&p.to_string_lossy());
             }
-            if ui.button("Copy the log command").clicked() {
+            if ui.tbutton("Copy the log command").clicked() {
                 ui.ctx()
                     .copy_text("journalctl --user -u proton-sync -f".to_string());
                 app.toast("copied to clipboard");
@@ -1498,7 +1485,7 @@ fn env_card(app: &mut SettingsView, ui: &mut egui::Ui) {
     widgets::card(ui, Some("Extra environment variables"), |ui| {
         ui.add(
             egui::TextEdit::multiline(&mut app.draft.env_text)
-                .hint_text("One KEY=VALUE per line, e.g.\nHTTPS_PROXY=http://proxy:3128")
+                .hint_text(rt("One KEY=VALUE per line, e.g.\nHTTPS_PROXY=http://proxy:3128"))
                 .desired_rows(3)
                 .desired_width(f32::INFINITY),
         );
@@ -1532,9 +1519,9 @@ fn sel_tree(app: &mut SettingsView, ui: &mut egui::Ui, parent: &str) {
     let kids = app.draft.children.get(parent).cloned().unwrap_or_default();
     if kids.is_empty() {
         if app.draft.loading.contains(parent) {
-            ui.label(egui::RichText::new("Loading...").weak());
+            ui.label(rt("Loading...").weak());
         } else if parent.is_empty() {
-            ui.label(egui::RichText::new("...").weak());
+            ui.label(rt("...").weak());
         }
         return;
     }

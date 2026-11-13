@@ -1,16 +1,18 @@
-## 3.32.0 — 2026-11-13
+## 3.33.0 — 2026-11-13
 
-### Reliability evidence
+### Complete Bahasa Melayu interface
 
-- **Sixty-cycle soak test.** Local and cloud churn for 60 process cycles; both
-  trees and `state.json` must converge with no conflicts or stale rows.
-- **Opt-in live E2E.** `scripts/live-e2e.sh` creates a temporary folder in a
-  real account, uploads, lists, downloads and byte-compares one file, then
-  trashes the folder. It is not run in CI because it needs a signed-in account.
-- **Fault matrix retained.** Session/network classification, failed upload,
-  short download, atomic state snapshots and update rollback remain covered by
-  the existing tests.
-- **Scan baseline re-run:** 10,000 local files scanned in 14 ms three times.
+- **All pages and dialogs.** My files, Photos, Activity, Settings, About,
+  Recovery, the first-run wizard, dialogs, empty states, menus, tray entries,
+  notifications and update progress now use the Malay catalog.
+- **Dynamic text.** Counts, relative times and journal verbs are translated
+  by shape (`12 minit lalu`, `4 item`, `Dimuat naik · ...`), not left in
+  English.
+- **Language selector** no longer says beta; the note explains that file names
+  and raw CLI errors remain as reported.
+- **Reliability evidence:** 60-cycle two-sided soak test, opt-in real-account
+  live E2E (`scripts/live-e2e.sh`), update/rollback and sync fault matrix,
+  and a fresh 10,000-file scan baseline (14 ms x3).
 
 ## 3.31.3 — 2026-11-13
 

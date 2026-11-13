@@ -4,6 +4,7 @@
 //! change journal. Menu actions hand messages back to the UI thread over
 //! the existing `Back` channel (ksni calls them on its own service thread).
 
+use crate::i18n::t;
 use crate::journal::ChangeRow;
 use crate::ui::Back;
 use crate::util::rel_time;
@@ -222,10 +223,10 @@ impl AppTray {
     }
 }
 
-fn item(label: &str, tx: &Sender<Back>, msg: Back) -> ksni::menu::StandardItem<AppTray> {
+fn item(label: impl Into<String>, tx: &Sender<Back>, msg: Back) -> ksni::menu::StandardItem<AppTray> {
     let tx = tx.clone();
     ksni::menu::StandardItem {
-        label: label.to_string(),
+        label: label.into(),
         activate: Box::new(move |_| {
             let _ = tx.send(msg.clone());
         }),
@@ -272,13 +273,13 @@ impl ksni::Tray for AppTray {
         let tx = &self.tx;
         let mut m: Vec<ksni::MenuItem<Self>> = Vec::new();
 
-        m.push(item("Open Proton Drive", tx, Back::ShowWindow).into());
+        m.push(item(t("Open Proton Drive"), tx, Back::ShowWindow).into());
         m.push(ksni::MenuItem::Separator);
 
-        let mut sync = item("Sync now", tx, Back::TraySyncNow);
+        let mut sync = item(t("Sync now"), tx, Back::TraySyncNow);
         sync.enabled = self.active;
         m.push(sync.into());
-        m.push(item("Open local folder", tx, Back::TrayOpenFolder).into());
+        m.push(item(t("Open local folder"), tx, Back::TrayOpenFolder).into());
         m.push(ksni::MenuItem::Separator);
 
         // Qt: inactive -> "Resume sync" acts immediately; active -> the
@@ -286,25 +287,25 @@ impl ksni::Tray for AppTray {
         if self.active {
             m.push(
                 SubMenu {
-                    label: "Pause sync".into(),
+                    label: t("Pause sync"),
                     submenu: vec![
-                        item("Pause for 15 minutes", tx, Back::TrayPause(Some(900))).into(),
-                        item("Pause for 1 hour", tx, Back::TrayPause(Some(3600))).into(),
-                        item("Pause until I resume", tx, Back::TrayPause(None)).into(),
+                        item(t("Pause for 15 minutes"), tx, Back::TrayPause(Some(900))).into(),
+                        item(t("Pause for 1 hour"), tx, Back::TrayPause(Some(3600))).into(),
+                        item(t("Pause until I resume"), tx, Back::TrayPause(None)).into(),
                     ],
                     ..Default::default()
                 }
                 .into(),
             );
         } else {
-            m.push(item("Resume sync", tx, Back::TrayResume).into());
+            m.push(item(t("Resume sync"), tx, Back::TrayResume).into());
         }
         m.push(ksni::MenuItem::Separator);
 
         let recent: Vec<ksni::MenuItem<Self>> = if self.recent.is_empty() {
             vec![
                 StandardItem {
-                    label: "Nothing yet".into(),
+                    label: t("Nothing yet"),
                     enabled: false,
                     ..Default::default()
                 }
@@ -318,14 +319,14 @@ impl ksni::Tray for AppTray {
         };
         m.push(
             SubMenu {
-                label: "Recent files".into(),
+                label: t("Recent files"),
                 submenu: recent,
                 ..Default::default()
             }
             .into(),
         );
         m.push(ksni::MenuItem::Separator);
-        m.push(item("Quit", tx, Back::TrayQuit).into());
+        m.push(item(t("Quit"), tx, Back::TrayQuit).into());
         m
     }
 }
@@ -349,7 +350,7 @@ pub fn spawn(tx: Sender<Back>, base_rgba: Vec<u8>, base_w: usize) -> Option<Tray
     use ksni::blocking::TrayMethods;
     let tray = AppTray {
         status_key: "unknown".into(),
-        title: "Checking your files...".into(),
+        title: t("Checking your files..."),
         active: false,
         recent: Vec::new(),
         base_rgba,
