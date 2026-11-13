@@ -18,9 +18,14 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 
 fn temp_dir(tag: &str) -> PathBuf {
+    // Every harness gets its own prefs/state. Tests for the same page run in
+    // parallel, and a shared directory let one test's Save/onboarding rewrite
+    // another test's fixture.
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!(
-        "pd-ui-audit-{}-{tag}",
-        std::process::id()
+        "pd-ui-audit-{}-{tag}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("state")).unwrap();
