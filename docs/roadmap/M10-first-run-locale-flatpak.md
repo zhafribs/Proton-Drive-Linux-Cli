@@ -1,6 +1,6 @@
 # Milestone M10 — First Run, Language and Flatpak
 
-**Status:** in progress — target `v0.9.0-gui3.31.0`
+**Status:** complete — released as `v0.9.0-gui3.31.0`, fixed in `v0.9.0-gui3.31.1`
 **Theme:** make the first launch explain itself, give Malay speakers a real
 main screen, and ship a sandboxed package that tells the truth about its
 limits.

@@ -1,0 +1,77 @@
+# Release evidence — v0.9.0-gui3.31.1 (M10)
+
+Tag: v0.9.0-gui3.31.1
+Scope: M10 — First Run, Language and Flatpak, plus the 3.31.1 updater fix.
+3.31.0 shipped the feature set; 3.31.1 fixes the key-revocation feed host
+allowlist that blocked in-app updates from 3.28.0–3.31.0.
+
+## Assets (3.31.1)
+
+  ProtonDrive-CLI-0.9.0-GUI-3.31.1-x86_64.AppImage   52783608 bytes
+  ProtonDrive-CLI-0.9.0-GUI-3.31.1-aarch64.AppImage  51419656 bytes
+  proton-drive_0.9.0+gui3.31.1_amd64.deb             51889464 bytes
+  proton-drive_0.9.0+gui3.31.1_arm64.deb             50505592 bytes
+  proton-drive_0.9.0+gui3.31.1_x86_64.flatpak        40083416 bytes
+  revocations.json                                   68 bytes
+  revocations.json.sig                               64 bytes
+  SHA256SUMS                                         551 bytes
+  SHA256SUMS.sig                                     64 bytes
+
+Published SHA-256:
+
+  86f35c42e1492310d15aed5a1f8abc91bba0225268aa6a92d9217bb79f7067c7  x86_64 AppImage
+  542f875156e036d333a9b00052101adbd22ba9781bea902af69cc7b776b1d793  aarch64 AppImage
+  702dab3f22f32698afa2d7b4d4d2b927ef84b3368109e3b33b3c9d22badf68e6  amd64 .deb
+  935278b0c0245bd3bf713d001173644b25ee56245d3701f1c80170fa5accfed5  arm64 .deb
+  9addb0753b3a352179753255829edb2fdbb55d85eed21a615289d9358afa0d77  x86_64 .flatpak
+
+## Published-release verification
+
+`scripts/verify-release.sh v0.9.0-gui3.31.1`:
+
+  x86_64 AppImage: OK
+  aarch64 AppImage: OK
+  amd64 .deb: OK
+  arm64 .deb: OK
+  x86_64 .flatpak: OK
+  signature: SHA256SUMS OK
+  signature: revocations.json OK
+  smoke ok: gui 3.31.1, cli true
+  GLIBC_2.28 on both architectures (AppRun, GUI, engine)
+  deb payloads OK
+
+The published Flatpak was installed with `flatpak install --user`, run with
+`--smoke` (`gui 3.31.1`, cli true), then uninstalled. The in-sandbox CLI
+reports `cli-drive@0.9.0` and the session probe succeeds.
+
+## M10 deliverables
+
+- **First-run wizard:** welcome → sign in → folder, shown once, skippable,
+  rendered by the UI audit. Flatpak shows the exact `flatpak run` sign-in
+  command instead of trying to open a host terminal.
+- **Flatpak:** manifest, wrapper, desktop entry, icons, metainfo and sandbox
+  permissions; release asset and CI install/smoke check. Updates and host
+  menu/autostart toggles are explicitly Flatpak-aware.
+- **Bahasa Melayu (beta):** language preference and first-run choice;
+  translated setup, sidebar, sync status and Home. Other pages stay English
+  and the UI says so; see `docs/LOCALIZATION.md`.
+- **3.31.1 update fix:** the release-download allowlist now trusts exactly
+  `security/key-revocations.json` and `.sig` on `raw.githubusercontent.com`.
+  An ignored live-network test fetched the feed, verified the successor
+  signature, and passed.
+
+## Gate results
+
+- 316 tests passed, 5 ignored (one is the live key-feed network test).
+- clippy clean (`-D warnings`).
+- Release-gate fixtures 12/12; UI audit passed.
+- `scripts/check-release.sh`: OK — CLI 0.9.0, GUI 3.31.1.
+- CI runs: 43268878752 (3.31.0) and 43273389023 (3.31.1) — verify and
+  release succeeded.
+- CI reproducibility: `reproducible: both builds are byte-identical`.
+- Releases retained: 41.
+
+## Note
+
+Users on 3.28.0–3.31.0 cannot update in-app because of the allowlist bug.
+They must install 3.31.1 once by hand; later updates work normally.
