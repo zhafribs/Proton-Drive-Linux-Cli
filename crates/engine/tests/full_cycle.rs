@@ -254,3 +254,77 @@ fn short_download_never_becomes_the_local_file() {
     assert!(!local.join("short.txt").exists());
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Sixty consecutive process cycles with local and cloud churn. The E2E tests
+/// prove one transition; this proves the loop does not drift, duplicate or
+/// silently stop applying changes over time.
+#[test]
+fn sixty_cycles_keep_both_sides_and_state_converged() {
+    fn files(root: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+        let mut out = std::collections::BTreeMap::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in fs::read_dir(&dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.is_file() {
+                    let rel = path
+                        .strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned();
+                    out.insert(rel, fs::read(&path).unwrap());
+                }
+            }
+        }
+        out
+    }
+
+    let (dir, conf, local, state, remote) = setup("soak");
+    for i in 0..12 {
+        fs::write(local.join(format!("seed-{i}.txt")), format!("seed {i}")).unwrap();
+    }
+    cycle(&conf, &state, &remote, false);
+
+    for i in 0..60 {
+        fs::write(
+            local.join(format!("soak-{i}.txt")),
+            format!("local cycle {i}"),
+        )
+        .unwrap();
+        if i % 3 == 0 {
+            fs::write(
+                remote.join(format!("cloud-{i}.txt")),
+                format!("cloud cycle {i}"),
+            )
+            .unwrap();
+        }
+        if i > 10 && i % 5 == 0 {
+            let _ = fs::remove_file(remote.join(format!("cloud-{}.txt", i - 10)));
+        }
+        if i > 10 && i % 7 == 0 {
+            let _ = fs::remove_file(local.join(format!("soak-{}.txt", i - 10)));
+        }
+        cycle(&conf, &state, &remote, false);
+    }
+
+    // One settling cycle, then both trees and the state must agree.
+    cycle(&conf, &state, &remote, false);
+    let l = files(&local);
+    let r = files(&remote);
+    assert_eq!(l.keys().collect::<Vec<_>>(), r.keys().collect::<Vec<_>>());
+    for (name, bytes) in &l {
+        assert_eq!(r.get(name), Some(bytes), "{name} differs between sides");
+    }
+    let saved = proton_core::state::read(&state_file(&state));
+    for name in l.keys() {
+        assert!(saved.contains_key(name), "state lost {name}");
+    }
+    assert!(
+        !l.keys().any(|n| n.contains("conflict")),
+        "a soak cycle created a conflict: {:?}",
+        l.keys().filter(|n| n.contains("conflict")).collect::<Vec<_>>()
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

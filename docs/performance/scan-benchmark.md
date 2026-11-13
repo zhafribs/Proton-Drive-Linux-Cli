@@ -12,3 +12,9 @@ Baseline (x86_64 dev machine, release build, warm page cache):
 
 This measures local metadata scanning only: no network, no hashing, no
 transfer. It is a regression signal, not a whole-cycle performance claim.
+
+## 2026-11-13 re-baseline
+
+`./scripts/bench-scan.sh 10000` on the same class of x86_64 dev machine
+(release, warm cache): 14 ms / 14 ms / 14 ms. The local metadata scan has not
+regressed since the 2026-10 baseline.

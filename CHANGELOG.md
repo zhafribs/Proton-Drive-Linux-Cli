@@ -1,3 +1,17 @@
+## 3.32.0 — 2026-11-13
+
+### Reliability evidence
+
+- **Sixty-cycle soak test.** Local and cloud churn for 60 process cycles; both
+  trees and `state.json` must converge with no conflicts or stale rows.
+- **Opt-in live E2E.** `scripts/live-e2e.sh` creates a temporary folder in a
+  real account, uploads, lists, downloads and byte-compares one file, then
+  trashes the folder. It is not run in CI because it needs a signed-in account.
+- **Fault matrix retained.** Session/network classification, failed upload,
+  short download, atomic state snapshots and update rollback remain covered by
+  the existing tests.
+- **Scan baseline re-run:** 10,000 local files scanned in 14 ms three times.
+
 ## 3.31.3 — 2026-11-13
 
 ### Update feedback and diagnostics
