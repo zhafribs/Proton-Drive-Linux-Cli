@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// The GUI's own version (the release tag is `v<CLI>-gui<GUI>`).
-pub const GUI_VERSION: &str = "3.31.2";
+pub const GUI_VERSION: &str = "3.31.3";
 
 /// The systemd user unit path (shared with `service.rs`).
 pub fn service_unit_path() -> PathBuf {
@@ -200,8 +200,19 @@ fn spawn_detached(target: &Path) {
 
 /// Read-only support report for a machine that will not sync. It never opens
 /// a window or takes the GUI lock; every call is bounded.
+/// Write to the diagnostic sink without panicking when the reader closes the
+/// pipe (e.g. `--diagnose | head`). Rust's `println!` aborts on EPIPE.
+macro_rules! diag {
+    ($out:expr, $($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!($out, $($arg)*);
+    }};
+}
+
 fn diagnose() -> Result<(), String> {
     use std::net::{TcpStream, ToSocketAddrs};
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
 
     let p = paths::resolve();
     let prefs = prefs::Prefs::load(&p.prefs_file);
@@ -218,18 +229,18 @@ fn diagnose() -> Result<(), String> {
         .unwrap_or_else(|| "~/ProtonDrive".to_string());
     let h = health::read(&p.health_file);
 
-    println!("Proton Drive for Linux {GUI_VERSION}");
-    println!("Platform {} {}", std::env::consts::OS, std::env::consts::ARCH);
-    println!("Config {}", p.conf_file.display());
-    println!("State {}", p.state_dir.display());
-    println!("Local {local} (exists: {})", Path::new(&local).is_dir());
-    println!("Remote {remote}");
-    println!(
+    diag!(out, "Proton Drive for Linux {GUI_VERSION}");
+    diag!(out, "Platform {} {}", std::env::consts::OS, std::env::consts::ARCH);
+    diag!(out, "Config {}", p.conf_file.display());
+    diag!(out, "State {}", p.state_dir.display());
+    diag!(out, "Local {local} (exists: {})", Path::new(&local).is_dir());
+    diag!(out, "Remote {remote}");
+    diag!(out, 
         "Theme {} · interface {}%",
         prefs.theme().as_str(),
         prefs.ui_scale().percent()
     );
-    println!(
+    diag!(out, 
         "Service active={} enabled={} supervisor={}",
         service::is_active(),
         service::is_enabled(),
@@ -238,35 +249,40 @@ fn diagnose() -> Result<(), String> {
 
     match cli::resolve_cli() {
         Some(cli) => {
-            println!("CLI {}", cli.display());
-            println!("CLI version {}", cli::cli_version(&cli));
-            println!("Session probe (fs info {remote}):");
+            diag!(out, "CLI {}", cli.display());
+            diag!(out, "CLI version {}", cli::cli_version(&cli));
+            diag!(out, "Session probe (fs info {remote}):");
             match cli::probe_session(&cli, &remote) {
-                Ok(out) => println!("  ok: {}", out.lines().next().unwrap_or("").trim()),
-                Err(e) => println!("  failed: {e}"),
+                Ok(probe) => diag!(
+                    out,
+                    "  ok: {}",
+                    probe.lines().next().unwrap_or("").trim()
+                ),
+                Err(e) => diag!(out, "  failed: {e}"),
             }
         }
-        None => println!("CLI not found"),
+        None => diag!(out, "CLI not found"),
     }
 
-    print!("Network drive-api.proton.me:443 ... ");
+    diag!(out, "Network drive-api.proton.me:443 ...");
     match "drive-api.proton.me:443".to_socket_addrs().ok().and_then(|mut a| a.next()) {
         Some(addr) => match TcpStream::connect_timeout(&addr, Duration::from_secs(5)) {
-            Ok(_) => println!("connected ({addr})"),
-            Err(e) => println!("failed ({addr}): {e}"),
+            Ok(_) => diag!(out, "connected ({addr})"),
+            Err(e) => diag!(out, "failed ({addr}): {e}"),
         },
-        None => println!("DNS resolution failed"),
+        None => diag!(out, "DNS resolution failed"),
     }
 
-    println!("\nhealth.json:");
-    println!(
+    diag!(out, "\nhealth.json:");
+    diag!(out, 
         "{}",
         serde_json::to_string_pretty(&h).unwrap_or_else(|_| "unreadable".to_string())
     );
-    println!("\nRecent engine log:");
+    diag!(out, "\nRecent engine log:");
     for line in service::journal_lines(80) {
-        println!("{line}");
+        diag!(out, "{line}");
     }
+    let _ = std::io::Write::flush(&mut out);
     Ok(())
 }
 

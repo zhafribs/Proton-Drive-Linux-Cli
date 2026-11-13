@@ -427,3 +427,15 @@ fn onboarding_steps_render_without_missing_names() {
         assert_eq!(harness.state().onboarding, Some(step));
     }
 }
+
+#[test]
+fn update_progress_renders_without_missing_names() {
+    let mut harness = harness(Page::Home, egui::vec2(720.0, 400.0), 1.0);
+    harness.state_mut().upd.downloading = true;
+    harness.state_mut().upd.label = "Downloading and verifying the update...".into();
+    // The spinner requests repaints forever; step instead of run().
+    for _ in 0..4 {
+        harness.step();
+    }
+    harness.check_accessibility();
+}

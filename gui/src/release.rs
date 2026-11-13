@@ -1426,6 +1426,23 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "network: builds the real 3.31.2 download plan and verifies its signed manifest"]
+    fn live_update_plan_to_3312_verifies_feed_and_manifest() {
+        let dir = std::env::temp_dir().join(format!("pd-update-plan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("current.AppImage");
+        std::fs::write(&target, b"x").unwrap();
+        let rel = rel("0.9.0", "3.31.2");
+        let plan = download_plan(&rel, "x86_64", Some(&target)).unwrap();
+        let manifest = http_get_text_retry(&plan.sums_url, 60).unwrap();
+        let signature = http_get_bytes_retry(&plan.sig_url, 60, 1024).unwrap();
+        check_manifest_trust(manifest.as_bytes(), &signature).unwrap();
+        assert!(sum_for(&manifest, &plan.name).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     #[ignore = "network: fetches the live key-revocation feed"]
     fn live_key_revocation_feed_is_reachable_and_signed() {
         let feed = http_get_text_retry(KEY_REVOCATIONS_URL, 30).unwrap();

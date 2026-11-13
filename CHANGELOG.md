@@ -1,3 +1,14 @@
+## 3.31.3 — 2026-11-13
+
+### Update feedback and diagnostics
+
+- **Visible update progress.** Downloading an update now shows a modal with a
+  spinner and an explanation instead of a silent multi-minute wait. It stays
+  above every page until the app restarts.
+- **`--diagnose` survives a closed pipe.** Piping it to `head` no longer
+  aborts with `failed printing to stdout: Broken pipe`.
+- **Update start toast.** Starting a download also queues a visible message.
+
 ## 3.31.2 — 2026-11-13
 
 ### Updater clarity

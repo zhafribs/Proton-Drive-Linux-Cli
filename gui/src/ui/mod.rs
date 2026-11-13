@@ -1382,6 +1382,7 @@ impl App {
         }
         self.upd.downloading = true;
         self.upd.label = "Downloading and verifying the update...".into();
+        self.toast("Downloading the update. This can take a few minutes.");
         let tx = self.ctx.tx.clone();
         // x86_64 / aarch64, the release filenames' arch (uname -m).
         let arch = std::env::consts::ARCH;
@@ -2627,6 +2628,46 @@ impl App {
         }
     }
 
+    /// A silent 50 MB download looked like a hang. This stays above every
+    /// page until the signed update is installed and the app restarts.
+    fn update_progress_ui(&mut self, ctx: &egui::Context) {
+        if !self.upd.downloading {
+            return;
+        }
+        egui::Window::new(crate::i18n::tr(
+            "Updating Proton Drive",
+            "Mengemas kini Proton Drive",
+        ))
+        .id(egui::Id::unique("update-progress"))
+        .collapsible(false)
+        .resizable(false)
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(
+                    egui::RichText::new(self.upd.label.clone())
+                        .strong()
+                        .size(14.0),
+                );
+            });
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(crate::i18n::tr(
+                    "The download and signature check can take a few minutes. \
+                     The app restarts when it is done.",
+                    "Muat turun dan semakan tandatangan mungkin mengambil beberapa \
+                     minit. Aplikasi akan dimulakan semula selepas selesai.",
+                ))
+                .size(11.5)
+                .weak(),
+            );
+        });
+        ctx.request_repaint_after(Duration::from_millis(100));
+    }
+
     fn dialog_ui(&mut self, ctx: &egui::Context) {
         let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
         let Some(dlg) = self.dialog.clone() else {
@@ -3619,6 +3660,7 @@ impl App {
         }
         self.dialog_ui(&ctx);
         self.onboarding_ui(&ctx);
+        self.update_progress_ui(&ctx);
     }
 }
 
