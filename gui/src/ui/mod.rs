@@ -358,6 +358,9 @@ pub struct App {
     /// The zoom whose minimum window size has been applied. Changing it grows
     /// the window to the smallest layout that still fits every page.
     scale_applied: Option<f32>,
+    /// When an interactive resize started; the size is written once it has
+    /// been stable for a moment instead of on every frame of a drag.
+    size_dirty_since: Option<Instant>,
     /// New colour schemes from `system_theme::watch` (OS flips).
     theme_rx: mpsc::Receiver<prefs::Theme>,
     pub icon_tex: Option<egui::TextureHandle>,
@@ -892,6 +895,7 @@ impl App {
             preview_theme: None,
             preview_scale: None,
             scale_applied: None,
+            size_dirty_since: None,
             theme_rx,
             icon_tex,
             tray,
@@ -1826,6 +1830,31 @@ impl App {
     }
 
     // ------------------------------------------------------------- window
+
+    /// Persist the last user resize after it settles. Hiding to tray and
+    /// quitting still save immediately, but a crash or a long-running session
+    /// now keeps the size the user actually chose.
+    fn persist_size_when_settled(&mut self, ctx: &egui::Context) {
+        let Some(sz) = ctx.input(|i| i.viewport().inner_rect.map(|r| r.size())) else {
+            self.size_dirty_since = None;
+            return;
+        };
+        let zoom = ctx.zoom_factor();
+        let (w, h) = ((sz.x * zoom).round() as u32, (sz.y * zoom).round() as u32);
+        if (w, h) == (self.ctx.prefs.window_w, self.ctx.prefs.window_h) {
+            self.size_dirty_since = None;
+            return;
+        }
+        let now = Instant::now();
+        match self.size_dirty_since {
+            Some(since) if now.duration_since(since) >= Duration::from_secs(2) => {
+                self.ctx.prefs.set_window_size(w, h);
+                self.size_dirty_since = None;
+            }
+            None => self.size_dirty_since = Some(now),
+            _ => {}
+        }
+    }
 
     fn remember_window_size(&mut self, ctx: &egui::Context) {
         let size = ctx.input(|i| i.viewport().inner_rect.map(|r| r.size()));
@@ -3536,6 +3565,8 @@ impl eframe::App for App {
                 }
             }
         }
+
+        self.persist_size_when_settled(ctx);
 
         // Awake once a second for relative times and the status pollers. The
         // poller does not own the egui context, so this is also what delivers

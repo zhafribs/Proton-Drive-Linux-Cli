@@ -212,6 +212,7 @@ fn fixture(page: Page) -> App {
         preview_theme: None,
         preview_scale: None,
         scale_applied: None,
+        size_dirty_since: None,
         theme_rx: mpsc::channel().1,
         icon_tex: None,
         tray: None,

@@ -124,7 +124,9 @@ impl Prefs {
             .and_then(|s| s.split_once('x'))
             .and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?)))
             .map(|(w, h)| (w.max(min_w), h.max(min_h)))
-            .unwrap_or((940.max(min_w), 780.max(min_h)));
+            // First-open size measured from the running 100%-scale window on
+            // the reference desktop. The user's own resize is stored below.
+            .unwrap_or((818.max(min_w), 747.max(min_h)));
         let nav = Self::nav_width(values.get("nav_width"));
         Prefs {
             file: file.to_path_buf(),
@@ -291,6 +293,15 @@ mod tests {
         std::fs::write(&p, "[General]\nui_scale=50\nwindow_size=360x200\n").unwrap();
         let pr = Prefs::load(&p);
         assert_eq!((pr.window_w, pr.window_h), (360, 200));
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn first_open_uses_the_measured_default_window() {
+        let p = std::env::temp_dir().join(format!("pdprefs-default-{}.conf", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let pr = Prefs::load(&p);
+        assert_eq!((pr.window_w, pr.window_h), (818, 747));
         std::fs::remove_file(&p).ok();
     }
 

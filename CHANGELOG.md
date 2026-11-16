@@ -1,3 +1,15 @@
+## 3.33.2 — 2026-11-16
+
+### Window size
+
+- **First-open default is 818×747**, the measured size of the running window
+  on the reference desktop.
+- **Resizes persist automatically** after the window has been stable for two
+  seconds, in addition to the existing save on hide/quit. A crash no longer
+  loses the last size.
+- Existing `window_size` values keep working; the user's last chosen size is
+  still restored on the next launch.
+
 ## 3.33.1 — 2026-11-16
 
 ### Remote rename/move fix
