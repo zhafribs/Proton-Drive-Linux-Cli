@@ -1,0 +1,51 @@
+# Release evidence — v0.9.0-gui3.33.2
+
+Tag: v0.9.0-gui3.33.2
+Purpose: use the measured current window size as the first-open default and
+persist the user's resizes without waiting for a clean quit.
+
+## Measured window
+
+The running Proton Drive window (`xdotool`, 100% interface scale) was:
+
+```
+X=511 Y=65 WIDTH=818 HEIGHT=747
+```
+
+This is a client area of **818×747** physical pixels.
+
+## Changes
+
+- `Prefs::load` now defaults to **818×747** instead of 940×780 when no
+  `window_size` has been saved. The layout floor still clamps it at smaller
+  scales or bogus values.
+- The user's current `window_size` was written as `818x747`, so the next
+  launch restores the size shown now.
+- `persist_size_when_settled` saves a resize after it has been stable for two
+  seconds. Hiding to tray and quitting still save immediately. A crash no
+  longer loses the last user-chosen size.
+- Test: a missing `window_size` loads as `(818, 747)`.
+
+## Assets (3.33.2)
+
+  ProtonDrive-CLI-0.9.0-GUI-3.33.2-x86_64.AppImage   52804088 bytes
+  ProtonDrive-CLI-0.9.0-GUI-3.33.2-aarch64.AppImage  51423752 bytes
+  proton-drive_0.9.0+gui3.33.2_amd64.deb             51909600 bytes
+  proton-drive_0.9.0+gui3.33.2_arm64.deb             50505780 bytes
+  proton-drive_0.9.0+gui3.33.2_x86_64.flatpak        40114864 bytes
+
+SHA-256 (signed SHA256SUMS):
+
+  771ce7f6740e8ef6be0dfbdff568c807ef86c2262e29c2bd7e98742606905785  x86_64 AppImage
+  b752dbd90d766b97e2687d4c23a8796c3b8824c3e9ddf770f41ad80cbd133b7c  aarch64 AppImage
+  eaddd0def7b4c5e66d1fadd39f3a1eb25996691b0a24f3346aed123555913aa8  amd64 .deb
+  4b5e2036df2dd91d42e654ed2ffe11822e80733a1e58af54c3de5641248b162b  arm64 .deb
+  17e5d5b05ceeb12d378e072b3127ca9b83e01dc207c505cd7f2d2fe741a25c10  x86_64 .flatpak
+
+## Verification
+
+- 325 tests passed, 6 ignored; clippy clean.
+- CI run `43886977603`: verify and release succeeded.
+- CI reproducibility: both builds byte-identical.
+- Local smoke: `gui 3.33.2`.
+- The affected config now contains `window_size=818x747`.
