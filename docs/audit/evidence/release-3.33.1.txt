@@ -1,0 +1,65 @@
+# Release evidence — v0.9.0-gui3.33.1
+
+Tag: v0.9.0-gui3.33.1
+Purpose: fix the remote rename/move bug that turned the status red after a
+local folder rename or cross-folder move.
+
+## Root cause
+
+`Action::MvRemote` called:
+
+```
+fs move <old> <target-parent> <new-name>
+```
+
+The official CLI's verbs are:
+
+```
+filesystem move PATH... PARENT     # keeps the basename
+filesystem rename PATH NAME        # changes the basename
+```
+
+The third argument was rejected with `Path "<name>" not supported`. The engine
+marked both the old and new path as failed, so `health.failed` became 2 and the
+status turned red even though the files were safe. Restarting or resyncing
+retried the same rejected command.
+
+## Fix
+
+- Rename-only: `fs rename <old> <new-name>`.
+- Parent change only: `fs move <old> <new-parent>`.
+- Both: `fs move`, then `fs rename <new-parent>/<old-name> <new-name>`.
+- Failure logs the actual CLI error and marks both paths failed.
+
+Regression tests assert the exact argument order for rename-only and
+cross-folder move+rename.
+
+## Assets
+
+  ProtonDrive-CLI-0.9.0-GUI-3.33.1-x86_64.AppImage   52791800 bytes
+  ProtonDrive-CLI-0.9.0-GUI-3.33.1-aarch64.AppImage  51427848 bytes
+  proton-drive_0.9.0+gui3.33.1_amd64.deb              51898988 bytes
+  proton-drive_0.9.0+gui3.33.1_arm64.deb              50512456 bytes
+  proton-drive_0.9.0+gui3.33.1_x86_64.flatpak         40101136 bytes
+
+SHA-256 (signed SHA256SUMS):
+
+  357442f056e4d7efced88c6755c7889cdeedc46b262d32eb51e496cfd8fa8263  x86_64 AppImage
+  aec9d769ee9653476d9f174edaba895e89244a43151d1ba7762975af3ff17811  aarch64 AppImage
+  cc3e05da21835c7b73a9fa869e4168322b6c0febe8eb2ce645505f2eb8d4ca65  amd64 .deb
+  0544a958a30ec3d9c5d29d5653893e257f80d07dce04cb4daaf439f09474359e  arm64 .deb
+  baee1c0f99fad7b17eec1b2dc0a9f8d0ff0bd5be1d17ffd368878ec1872b24aa  x86_64 .flatpak
+
+## Verification
+
+- 324 tests passed, 6 ignored; clippy clean.
+- CI run `43882547344`: verify and release succeeded.
+- CI reproducibility: both builds byte-identical.
+- Local `fs move` and `fs rename` argument tests passed.
+- The affected folder was moved manually with the correct two-argument
+  `fs move`; the next engine cycle reported `status: ok`, `failed: 0`.
+
+## Note
+
+Users on `3.31.x`–`3.33.0` must update to `3.33.1` to stop the failed move
+from recurring. The already-moved folder does not need a resync.
