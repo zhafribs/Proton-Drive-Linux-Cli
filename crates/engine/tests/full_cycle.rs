@@ -108,11 +108,17 @@ if cmd == "fs":
         d.mkdir(parents=True, exist_ok=True)
         print("{}")
     elif sub == "move":
-        src = path_of(rel_of(args[2]))
-        parent = path_of(rel_of(args[3]))
+        parent = path_of(rel_of(args[-1]))
         parent.mkdir(parents=True, exist_ok=True)
+        for rpath in args[2:-1]:
+            src = path_of(rel_of(rpath))
+            if src.exists():
+                shutil.move(str(src), str(parent / src.name))
+        print("{}")
+    elif sub == "rename":
+        src = path_of(rel_of(args[2]))
         if src.exists():
-            shutil.move(str(src), str(parent / args[4]))
+            shutil.move(str(src), str(src.parent / args[3]))
         print("{}")
     else:
         print("{}")

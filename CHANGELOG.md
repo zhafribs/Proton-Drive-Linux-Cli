@@ -1,3 +1,16 @@
+## 3.33.1 — 2026-11-16
+
+### Remote rename/move fix
+
+- **Cloud paths use the CLI's real verbs.** The engine passed a third
+  “new name” argument to `fs move`, which the official CLI rejects with
+  `Path ... not supported`. A local folder rename or cross-folder move
+  therefore failed twice and turned the status red. Name changes now use
+  `fs rename`; parent changes use `fs move` first, then rename when both
+  changed.
+- **Regression tests** assert the exact `fs rename` and `fs move` argument
+  order for rename-only and cross-folder move+rename.
+
 ## 3.33.0 — 2026-11-13
 
 ### Complete Bahasa Melayu interface

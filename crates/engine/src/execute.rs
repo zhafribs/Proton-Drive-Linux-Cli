@@ -464,6 +464,43 @@ fn conflict_rel(rel: &str, ts: &str, local_root: &Path) -> String {
     unreachable!()
 }
 
+/// Rename or move one cloud path using the CLI's real verbs:
+/// `move PATH... PARENT` keeps the basename, `rename PATH NAME` changes it.
+/// A third "new name" argument to move is rejected by the official CLI.
+fn move_remote(cli: &Cli, remote_root: &str, old: &str, new: &str) -> Result<()> {
+    let old_parent = parent_of(old);
+    let new_parent = parent_of(new);
+    let old_name = name_of(old);
+    let new_name = name_of(new);
+    if old_parent != new_parent {
+        let old_rpath = cli::remote_path(remote_root, old);
+        let parent_rpath = cli::remote_path(remote_root, &new_parent);
+        cli.run(
+            &["fs", "move", &old_rpath, &parent_rpath],
+            false,
+            Some(300),
+            true,
+        )?;
+    }
+    if old_name != new_name {
+        let moved_rel = if old_parent == new_parent {
+            old.to_string()
+        } else if new_parent.is_empty() {
+            old_name.to_string()
+        } else {
+            format!("{new_parent}/{old_name}")
+        };
+        let moved_rpath = cli::remote_path(remote_root, &moved_rel);
+        cli.run(
+            &["fs", "rename", &moved_rpath, &cli::escape(&new_name)],
+            false,
+            Some(300),
+            true,
+        )?;
+    }
+    Ok(())
+}
+
 pub fn execute(
     actions: &[Action],
     remote: &RemoteTree,
@@ -552,16 +589,8 @@ pub fn execute(
                 }
             }
             Action::MvRemote { old, new } => {
-                let old_rpath = cli::remote_path(remote_root, old);
-                let parent_rpath = cli::remote_path(remote_root, &parent_of(new));
-                let name = name_of(new);
-                let res = cli.run(
-                    &["fs", "move", &old_rpath, &parent_rpath, &cli::escape(&name)],
-                    false,
-                    Some(300),
-                    true,
-                );
-                if res.is_err() {
+                if let Err(e) = move_remote(&cli, remote_root, old, new) {
+                    eprintln!("FAILED move {old} -> {new}: {e:#}");
                     failed.insert(old.clone());
                     failed.insert(new.clone());
                 } else {
@@ -882,6 +911,51 @@ mod tests {
         perms.set_mode(0o755);
         fs::set_permissions(&path, perms).unwrap();
         Cli::for_test(path)
+    }
+
+    fn fake_cli_logging(dir: &std::path::Path) -> (Cli, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("fake-proton-drive");
+        let log = dir.join("fake-proton-drive.log");
+        fs::write(
+            &path,
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"${0}.log\"\nexit 0\n",
+        )
+        .unwrap();
+        let mut perms = fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms).unwrap();
+        (Cli::for_test(path), log)
+    }
+
+    #[test]
+    fn remote_rename_uses_the_rename_verb_and_keeps_the_parent() {
+        let root = temp("rename-remote");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let (cli, log) = fake_cli_logging(&root);
+        move_remote(&cli, "/my-files", "Docs/old.txt", "Docs/new.txt").unwrap();
+        let calls = fs::read_to_string(log).unwrap();
+        assert_eq!(
+            calls.trim(),
+            "fs rename /my-files/Docs/old.txt new.txt"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn remote_cross_folder_move_then_rename_uses_two_real_verbs() {
+        let root = temp("move-remote");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let (cli, log) = fake_cli_logging(&root);
+        move_remote(&cli, "/my-files", "Docs/old.txt", "Other/new.txt").unwrap();
+        let calls = fs::read_to_string(log).unwrap();
+        assert_eq!(
+            calls.trim(),
+            "fs move /my-files/Docs/old.txt /my-files/Other\nfs rename /my-files/Other/old.txt new.txt"
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     /// The download script's last argument is the target directory.
