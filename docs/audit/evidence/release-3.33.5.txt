@@ -1,0 +1,46 @@
+# Release evidence — v0.9.0-gui3.33.5
+
+Tag: v0.9.0-gui3.33.5
+Purpose: make the Photos “needs attention” hold actionable instead of a
+warning with no user-facing remedy.
+
+## Changes
+
+- Added a card under the Photos hero when the photo summary needs attention:
+  - **Open photo folder** — inspect or move the stale local copies.
+  - **Retry** — request another photo pass.
+  - **Reset baseline** — only for the incomplete-timeline hold.
+- **Reset baseline** opens a confirmation dialog, then:
+  - archives `photos-state.json` and `photos-sync.json` with a timestamp,
+  - removes `.proton-photos-hold`,
+  - starts a fresh photo pass.
+  - It does **not** delete any photo file. The dialog explains that local
+    photos left in the folder will be uploaded again, so a cloud deletion
+    needs the stale local copies removed first.
+- Both English and Bahasa Melayu strings were added.
+- UI audit renders the card at 720×400 in both languages.
+
+## Assets
+
+  ProtonDrive-CLI-0.9.0-GUI-3.33.5-x86_64.AppImage   52787704 bytes
+  ProtonDrive-CLI-0.9.0-GUI-3.33.5-aarch64.AppImage  51423752 bytes
+  proton-drive_0.9.0+gui3.33.5_amd64.deb             51897452 bytes
+  proton-drive_0.9.0+gui3.33.5_arm64.deb             50508044 bytes
+  proton-drive_0.9.0+gui3.33.5_x86_64.flatpak        41458160 bytes
+
+SHA-256 (signed SHA256SUMS):
+
+  8968e2165244f7d04232b494f767f0e6a07e7c1a32998c213435d40cd03389af  x86_64 AppImage
+  5b3c5583f74492be4b0c14815081fa7512056a70439cdc4d4b03e165d28dbb7c  aarch64 AppImage
+  9e08aa920442688521382d165320cea8d7bb96156dfcb2b4a5359e5837d2978c  amd64 .deb
+  3bb71461acf8a195f642f92ee6c21def877b43ed15952171ddf7689ec22bd510  arm64 .deb
+  c0963dd26d5989e50d5b6d5be3bb55d3b1b2ff3f86102e41efaf0daa811eab4f  x86_64 .flatpak
+
+## Verification
+
+- 328 tests passed, 6 ignored; clippy clean.
+- CI run `44301208065`: verify and release succeeded.
+- CI reproducibility: both builds byte-identical.
+- Local smoke: `gui 3.33.5`.
+- Regression test: reset archives state, removes the hold marker, leaves
+  `keep.jpg` untouched, and writes a `.bak-<timestamp>` file.
