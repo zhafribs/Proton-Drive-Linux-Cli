@@ -1,0 +1,55 @@
+# Release evidence — v0.9.0-gui3.33.4
+
+Tag: v0.9.0-gui3.33.4
+Purpose: stop the repeated "1 file(s) uploaded" notification caused by the
+photo pass restoring a stale file-cycle health snapshot.
+
+## Root cause
+
+`run_photos` copies the current health, sets `phase = "photos"`, runs the
+photo pass, then restores the snapshot. That snapshot can still contain
+`uploaded = 1` from the last real file upload. The GUI's transition check saw:
+
+```
+syncing → ok, uploaded = 1, phase = photos
+```
+
+and fired the "All done — 1 file(s) uploaded" notification again, even though
+no file was uploaded. Photo requests every few minutes made it repeat.
+
+## Fix
+
+`done_notification(previous, health)` now requires:
+
+- `previous == "syncing"`
+- `health.status == "ok"`
+- `health.phase == None` (a real file cycle, not the photo restore)
+- at least one uploaded/downloaded file
+
+Regression test covers the photo-phase snapshot, a normal completion and a
+non-transition.
+
+## Assets
+
+  ProtonDrive-CLI-0.9.0-GUI-3.33.4-x86_64.AppImage   52804088 bytes
+  ProtonDrive-CLI-0.9.0-GUI-3.33.4-aarch64.AppImage  51423752 bytes
+  proton-drive_0.9.0+gui3.33.4_amd64.deb             51911816 bytes
+  proton-drive_0.9.0+gui3.33.4_arm64.deb             50504780 bytes
+  proton-drive_0.9.0+gui3.33.4_x86_64.flatpak        41463520 bytes
+
+SHA-256 (signed SHA256SUMS):
+
+  d9ce52404c24134112eaa23be204b8d986b72cb34fbea02bf3e168581f2579a5  x86_64 AppImage
+  10f91021fa03d02804ec0db5fd4d8abc53936d5fd21a2ad5128114371d856eee  aarch64 AppImage
+  6fbfec85d72589671fa76f6be8f1d128e7742d72914338bcb9417673c9d70535  amd64 .deb
+  40f3aadab7f90a7078059554352618e5b49e795020e1adf1276a04f326d5159c  arm64 .deb
+  0e01e526f7d7702fcd7c62ab0fb156d6a321699a771f250b9bbf9695727095cd  x86_64 .flatpak
+
+## Verification
+
+- 326 tests passed, 6 ignored; clippy clean.
+- CI run `44295359860`: verify and release succeeded.
+- CI reproducibility: both builds byte-identical.
+- Local smoke: `gui 3.33.4`.
+- Local repository was pulled to `3.33.3` before this fix and pushed as
+  `3.33.4`; `main` is current.
