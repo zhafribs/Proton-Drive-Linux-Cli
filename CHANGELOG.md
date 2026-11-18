@@ -1,3 +1,12 @@
+## 3.33.3 — 2026-11-18
+
+### Release automation
+
+- Scheduled rebuilds no longer fail the release gate the day after the last
+  commit: the gate now compares the metainfo release date against the same
+  commit timestamp the build stamps it with, instead of the calendar day of
+  the verification run.
+
 ## 3.33.2 — 2026-11-16
 
 ### Window size

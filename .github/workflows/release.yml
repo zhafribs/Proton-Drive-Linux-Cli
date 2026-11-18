@@ -263,7 +263,11 @@ jobs:
       - name: Verify the release gate
         env:
           ALLOW_SAME_VERSION: ${{ inputs.force_rebuild || false }}
-        run: ./scripts/check-release.sh
+        # The build stamps the metainfo release date from SOURCE_DATE_EPOCH
+        # (the HEAD commit time), so the gate must compare against the same
+        # epoch; with the calendar day it would fail every scheduled run
+        # after the commit's own day.
+        run: SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" ./scripts/check-release.sh
 
       - name: Generate release notes
         run: ./scripts/release-notes.sh "${{ steps.upstream.outputs.version }}" > "$RUNNER_TEMP/release-notes.md"

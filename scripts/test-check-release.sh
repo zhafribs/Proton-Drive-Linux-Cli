@@ -84,6 +84,18 @@ expect_fail() {
 
 expect_ok
 
+# The workflow stamps the built metainfo from SOURCE_DATE_EPOCH (the commit
+# time), which on a scheduled rebuild is not today; the gate must compare
+# against the same epoch, not the calendar day of the check run.
+epoch="$(date -u -d '3 days ago' +%s)"
+root="$(fixture)"
+sed -i "s|date=\"[0-9-]*\"|date=\"$(date -u -d "@$epoch" +%F)\"|" \
+    "$root/build/ProtonDrive-CLI.AppDir/usr/share/metainfo/io.github.zhafribs.protondrivecli.appdata.xml"
+SOURCE_DATE_EPOCH="$epoch" CHECK_RELEASE_ROOT="$root" \
+    CHECK_RELEASE_PUBLIC_KEY="$root/src/update-signing-key.pub" \
+    "$GATE" >/dev/null 2>&1 \
+    || { echo "FAIL: SOURCE_DATE_EPOCH-dated metainfo was rejected"; exit 1; }
+
 expect_fail "stale changelog" \
     'printf "## 9.9.8 — %s\n\n- old\n" "$(date -u +%F)" > "$root/CHANGELOG.md"'
 expect_fail "empty changelog body" \
@@ -128,4 +140,4 @@ ALLOW_SAME_VERSION=1 CHECK_RELEASE_ROOT="$root" CHECK_RELEASE_PUBLIC_KEY="$root/
 ALLOW_SAME_VERSION=true CHECK_RELEASE_ROOT="$root" CHECK_RELEASE_PUBLIC_KEY="$root/src/update-signing-key.pub" "$GATE" >/dev/null 2>&1 \
     || { echo "FAIL: force-rebuild true override was rejected" >&2; exit 1; }
 
-echo "check-release fixtures: 12/12 passed"
+echo "check-release fixtures: 13/13 passed"
