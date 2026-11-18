@@ -1,3 +1,15 @@
+## 3.33.4 — 2026-11-18
+
+### No repeated “file uploaded” notifications
+
+- **Photo passes no longer trigger completion notifications.** While photos
+  sync, the engine restores the file cycle's health with `phase = "photos"`.
+  The GUI treated that restored snapshot as a fresh file-cycle completion,
+  so a single old upload could be announced every few minutes. Completion
+  notifications now require a real file-cycle snapshot (`phase` empty).
+- Regression test covers the photo-phase snapshot, a normal upload and the
+  non-transition case.
+
 ## 3.33.3 — 2026-11-18
 
 ### Release automation

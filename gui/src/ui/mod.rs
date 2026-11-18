@@ -1724,10 +1724,10 @@ impl App {
     }
 
     fn on_poll(&mut self, health: health::Health, active: bool, enabled: bool) {
-        // "All done" transition notification (Qt parity).
-        if self.prev_hstatus == "syncing"
-            && health.status == "ok"
-            && (health.uploaded > 0 || health.downloaded > 0)
+        // "All done" transition notification (Qt parity). A photo pass
+        // restores the file cycle's health with `phase: photos`; notifying
+        // from that snapshot repeats an old upload every few minutes.
+        if done_notification(&self.prev_hstatus, &health)
             && self.ctx.prefs.notify_complete()
             && self.cool.cool_ok("done", 60)
         {
@@ -3696,6 +3696,16 @@ impl App {
     }
 }
 
+/// Only a completed *file* cycle may announce uploads/downloads. The photo
+/// pass re-writes the previous health with `phase = "photos"`, so using its
+/// counters caused the same "1 file(s) uploaded" notification every cycle.
+fn done_notification(previous: &str, health: &health::Health) -> bool {
+    previous == "syncing"
+        && health.status == "ok"
+        && health.phase.is_none()
+        && (health.uploaded > 0 || health.downloaded > 0)
+}
+
 /// A close/start-in-tray request only hides when a tray actually exists to
 /// restore the window from. On a tray-less desktop, closing must quit.
 fn hides_to_tray(enabled: bool, tray_available: bool) -> bool {
@@ -3712,6 +3722,29 @@ mod tray_policy_tests {
         assert!(!hides_to_tray(true, false));
         assert!(!hides_to_tray(false, true));
         assert!(!hides_to_tray(false, false));
+    }
+}
+
+#[cfg(test)]
+mod notification_tests {
+    use super::done_notification;
+    use crate::health::Health;
+
+    #[test]
+    fn a_photo_phase_restore_does_not_repeat_an_upload_notification() {
+        let file = Health {
+            status: "ok".into(),
+            uploaded: 1,
+            ..Default::default()
+        };
+        assert!(done_notification("syncing", &file));
+        let photo = Health {
+            phase: Some("photos".into()),
+            ..file.clone()
+        };
+        assert!(!done_notification("syncing", &photo));
+        assert!(!done_notification("ok", &file));
+        assert!(!done_notification("syncing", &Health::default()));
     }
 }
 
