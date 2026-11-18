@@ -210,6 +210,8 @@ pub enum Dialog {
     ConfirmPhotoDelete {
         uids: Vec<String>,
     },
+    /// Forget the photo sync baseline after the user deleted photos in Proton.
+    ConfirmPhotoBaselineReset,
     /// The "Move to..." cloud folder picker.
     CloudMove,
 }
@@ -243,6 +245,7 @@ enum DlgAct {
     },
     DeleteConfirm,
     PhotoDeleteConfirm(Vec<String>),
+    PhotoBaselineReset,
     EmptyTrashConfirm,
     ClearCache,
     MoveSel(String),  // picker row clicked
@@ -3107,6 +3110,37 @@ impl App {
                         });
                     });
             }
+            Dialog::ConfirmPhotoBaselineReset => {
+                egui::Window::new(crate::i18n::tr(
+                    "Reset photo sync baseline?",
+                    "Set semula asas penyegerakan foto?",
+                ))
+                .collapsible(false)
+                .order(egui::Order::Foreground)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    ui.label(crate::i18n::tr(
+                        "This forgets which photos were previously synced and starts a new baseline from the current cloud and photo folders. It does not delete any file. Use it after you deleted photos in Proton and the timeline looks incomplete.",
+                        "Ini melupakan foto yang pernah disegerakkan dan memulakan asas baharu daripada folder awan dan foto semasa. Tiada fail dipadam. Gunakan selepas anda memadam foto dalam Proton dan garis masa kelihatan tidak lengkap.",
+                    ));
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        let cancel = ui.tbutton(crate::i18n::tr("Cancel", "Batal"));
+                        focus_first(&mut focus_pending, &cancel);
+                        if cancel.clicked() || escape {
+                            act = Some(DlgAct::Close);
+                        }
+                        if widgets::primary_button(
+                            ui,
+                            crate::i18n::tr("Reset baseline", "Set semula asas"),
+                        ) {
+                            act = Some(DlgAct::PhotoBaselineReset);
+                        }
+                    });
+                });
+            }
             Dialog::ConfirmDelete { n } => {
                 let word = if *n == 1 {
                     "this item".to_string()
@@ -3366,6 +3400,12 @@ impl App {
                 let mut view = self.photo_view();
                 photos::delete(&mut view, uids);
                     self.finish_photo_login();
+            }
+            DlgAct::PhotoBaselineReset => {
+                self.dialog = None;
+                let mut view = self.photo_view();
+                photos::reset_baseline(&mut view);
+                self.finish_photo_login();
             }
             DlgAct::DeleteConfirm => {
                 self.dialog = None;

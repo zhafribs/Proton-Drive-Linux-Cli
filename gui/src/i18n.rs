@@ -397,6 +397,10 @@ pub fn t(text: &str) -> String {
         "Two versions were kept" => "Dua versi disimpan",
         "Sync problem" => "Masalah penyegerakan",
         "Checking your files..." => "Menyemak fail anda...",
+        "Open photo folder" => "Buka folder foto",
+        "Reset baseline" => "Set semula asas",
+        "The cloud timeline is shorter than the last known library, so deletions are paused. To finish a cloud deletion, remove the stale local copies in the photo folder first, then reset the baseline. Any local photo left will be uploaded again. Resetting does not delete files." => "Garis masa awan lebih pendek daripada pustaka terakhir yang diketahui, jadi pemadaman dijeda. Untuk menyelesaikan pemadaman awan, buang salinan tempatan yang basi dalam folder foto terlebih dahulu, kemudian set semula asas. Sebarang foto tempatan yang tinggal akan dimuat naik semula. Set semula tidak memadam fail.",
+        "Forget the previous photo list and start from the current cloud and local folders. No files are deleted." => "Lupakan senarai foto terdahulu dan mula daripada folder awan dan tempatan semasa. Tiada fail dipadam.",
         _ => {
             if let Some(out) = dynamic(key) {
                 return out;

@@ -413,6 +413,7 @@ fn dialogs_render_without_missing_names() {
         Dialog::ConfirmPhotoDelete {
             uids: vec!["a".into(), "b".into()],
         },
+        Dialog::ConfirmPhotoBaselineReset,
         Dialog::CloudMove,
         Dialog::ConfirmHeldDeletes {
             local: 2,
@@ -517,6 +518,7 @@ fn dialogs_render_in_malay() {
         Dialog::ConfirmPhotoDelete {
             uids: vec!["a".into(), "b".into()],
         },
+        Dialog::ConfirmPhotoBaselineReset,
         Dialog::CloudMove,
         Dialog::ConfirmHeldDeletes {
             local: 2,
@@ -529,6 +531,22 @@ fn dialogs_render_in_malay() {
     for dialog in dialogs {
         let mut harness = harness(Page::Cloud, egui::vec2(720.0, 400.0), 1.0);
         harness.state_mut().dialog = Some(dialog);
+        harness.run();
+    }
+    crate::i18n::set_thread(None);
+}
+
+#[test]
+fn photo_attention_card_offers_actions() {
+    for lang in [crate::i18n::Language::English, crate::i18n::Language::Malay] {
+        crate::i18n::set_thread(Some(lang));
+        let mut harness = harness(Page::Photos, egui::vec2(720.0, 400.0), 1.0);
+        let app = harness.state_mut();
+        app.photos.attention = 1;
+        app.photos.sync_error =
+            "Photo timeline looks incomplete (67 readable, 349 known). Nothing was deleted."
+                .into();
+        app.photos.last_sync_ts = Some(chrono::Utc::now().into());
         harness.run();
     }
     crate::i18n::set_thread(None);

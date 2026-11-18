@@ -506,6 +506,48 @@ pub fn request_sync(app: &mut PhotoView, uid: Option<&str>) {
     app.photos.status = "Checking for new photos...".to_string();
 }
 
+/// Forget the sync baseline after the user cleared photos in Proton. This
+/// archives the state and summary instead of deleting them, removes the hold
+/// marker, and asks the engine for a fresh photo pass. It never touches a
+/// photo file.
+pub fn reset_baseline(app: &mut PhotoView) {
+    let dir = local_dir(app);
+    if let Err(e) = reset_baseline_files(&app.ctx.paths.state_dir, &dir) {
+        app.photos.error = e;
+        return;
+    }
+    app.photos.attention = 0;
+    app.photos.sync_error.clear();
+    app.photos.last_sync.clear();
+    app.photos.last_sync_ts = None;
+    app.photos.status = "Resetting the photo baseline...".to_string();
+    request_sync(app, None);
+}
+
+fn reset_baseline_files(
+    state_dir: &std::path::Path,
+    photo_dir: &std::path::Path,
+) -> Result<(), String> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    for name in ["photos-state.json", "photos-sync.json"] {
+        let from = state_dir.join(name);
+        if from.is_file() {
+            let to = state_dir.join(format!("{name}.bak-{stamp}"));
+            std::fs::rename(&from, &to)
+                .map_err(|e| format!("could not archive {}: {e}", from.display()))?;
+        }
+    }
+    let hold = photo_dir.join(".proton-photos-hold");
+    if hold.is_file() {
+        std::fs::remove_file(&hold)
+            .map_err(|e| format!("could not remove {}: {e}", hold.display()))?;
+    }
+    Ok(())
+}
+
 pub fn download(app: &mut PhotoView, uids: Vec<String>) {
     if uids.is_empty() || app.photos.busy || app.photos.deleting {
         return;
@@ -1062,6 +1104,57 @@ fn photo_hero(app: &PhotoView, ui: &mut egui::Ui) {
     });
 }
 
+/// An actionable card under the hero. The engine's hold is a safety guard,
+/// not a dead end: the user can retry, open the folder, or reset the baseline
+/// after deliberately clearing photos in Proton.
+fn photo_attention_card(app: &mut PhotoView, ui: &mut egui::Ui) {
+    let hold = app.photos.sync_error.starts_with("Photo timeline")
+        || app.photos.sync_error.starts_with("Photo folder");
+    let dir = local_dir(app);
+    widgets::card(
+        ui,
+        Some(crate::i18n::tr(
+            "Photo sync needs attention",
+            "Penyegerakan foto perlu perhatian",
+        )),
+        |ui| {
+            if hold {
+                ui.label(rt(
+                    "The cloud timeline is shorter than the last known library, so deletions are paused. To finish a cloud deletion, remove the stale local copies in the photo folder first, then reset the baseline. Any local photo left will be uploaded again. Resetting does not delete files.",
+                ));
+            } else if !app.photos.sync_error.is_empty() {
+                ui.label(rt(&app.photos.sync_error));
+            } else {
+                ui.label(rt(format!(
+                    "{} photo(s) need attention. Conflicts keep both copies.",
+                    app.photos.attention
+                )));
+            }
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                if ui.tbutton(crate::i18n::tr("Open photo folder", "Buka folder foto")).clicked() {
+                    let _ = std::fs::create_dir_all(&dir);
+                    open_path(&dir);
+                }
+                if ui.tbutton(crate::i18n::tr("Retry", "Cuba lagi")).clicked() {
+                    request_sync(app, None);
+                }
+                if hold
+                    && ui
+                        .tbutton(crate::i18n::tr("Reset baseline", "Set semula asas"))
+                        .on_hover_text(crate::i18n::tr(
+                            "Forget the previous photo list and start from the current cloud and local folders. No files are deleted.",
+                            "Lupakan senarai foto terdahulu dan mula daripada folder awan dan tempatan semasa. Tiada fail dipadam.",
+                        ))
+                        .clicked()
+                {
+                    *app.dialog = Some(Dialog::ConfirmPhotoBaselineReset);
+                }
+            });
+        },
+    );
+}
+
 fn photo_metrics(app: &PhotoView, ui: &mut egui::Ui) {
     let cloud = if app.photos.cloud_count > 0 {
         app.photos.cloud_count
@@ -1142,6 +1235,10 @@ pub fn draw(app: &mut PhotoView, ui: &mut egui::Ui) {
         if !signed_out {
             ui.add_space(12.0);
             photo_metrics(app, ui);
+        }
+        if !signed_out && (!app.photos.sync_error.is_empty() || app.photos.attention > 0) {
+            ui.add_space(10.0);
+            photo_attention_card(app, ui);
         }
         ui.add_space(12.0);
     } else {
@@ -1655,6 +1752,32 @@ fn tile(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn baseline_reset_archives_state_and_keeps_photos() {
+        let root = std::env::temp_dir().join(format!("pd-photo-reset-{}", std::process::id()));
+        let state = root.join("state");
+        let photos = root.join("photos");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::write(state.join("photos-state.json"), b"{}").unwrap();
+        std::fs::write(state.join("photos-sync.json"), b"{}").unwrap();
+        std::fs::write(photos.join(".proton-photos-hold"), b"").unwrap();
+        std::fs::write(photos.join("keep.jpg"), b"photo").unwrap();
+        reset_baseline_files(&state, &photos).unwrap();
+        assert!(!state.join("photos-state.json").exists());
+        assert!(!state.join("photos-sync.json").exists());
+        assert!(!photos.join(".proton-photos-hold").exists());
+        assert_eq!(std::fs::read(photos.join("keep.jpg")).unwrap(), b"photo");
+        assert!(
+            std::fs::read_dir(&state)
+                .unwrap()
+                .filter_map(Result::ok)
+                .any(|e| e.file_name().to_string_lossy().starts_with("photos-state.json.bak-"))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn grid_metrics_does_not_oscillate_at_the_tile_edges() {

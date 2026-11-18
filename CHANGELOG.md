@@ -1,3 +1,19 @@
+## 3.33.5 — 2026-11-18
+
+### Actionable photo attention
+
+- **The warning is no longer a dead end.** A card under the Photos hero offers
+  **Open photo folder**, **Retry**, and, for the incomplete-timeline hold,
+  **Reset baseline**.
+- **Reset is explained and confirmed.** It archives `photos-state.json` and
+  `photos-sync.json`, removes the hold marker, and starts a fresh photo pass.
+  It does not delete photos. The dialog explains that any local photo left
+  will be uploaded again, so a cloud deletion needs the stale local copies
+  removed first.
+- **Regression test** proves the reset archives state, removes the hold and
+  leaves photo files untouched; the UI audit renders the card in both
+  languages at 720×400.
+
 ## 3.33.4 — 2026-11-18
 
 ### No repeated “file uploaded” notifications
