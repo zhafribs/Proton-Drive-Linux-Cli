@@ -99,6 +99,15 @@ Success `#16A34A` (text `#0B7A38`), warning `#D97706` (text `#9A5B00`),
 danger `#DC2626` (text `#C81E1E`), info `#1D4ED8`.
 Status is always paired with a label or icon, never color alone.
 
+File lists add one more semantic layer: the **glyph only** of a file row is
+tinted by type — folders accent violet, documents blue, images dusty rose,
+media teal, archives olive, everything else muted. The `FILE_*` tokens form a
+separate namespace: never on chrome, cards, pills or text, never a tinted chip
+or row wash, and selected rows keep the solid accent band with a white glyph.
+Each light/dark pair is contrast-tested at 3:1 on both `PAGE` and `SURFACE`,
+and the hue is reinforcement — the extension in the filename still states the
+type. Status hues stay reserved for status.
+
 ### 3.4 Typography
 - UI: egui's bundled proportional sans. Bundling Inter remains a design
   option; the current AppImage keeps egui's font to stay small.

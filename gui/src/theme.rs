@@ -25,6 +25,74 @@ pub const INFO: egui::Color32 = egui::Color32::from_rgb(0x1D, 0x4E, 0xD8);
 /// both the light and dark surfaces (WCAG non-text contrast).
 pub const MUTED: egui::Color32 = egui::Color32::from_rgb(0x6B, 0x72, 0x80);
 
+// --- file-type glyphs -------------------------------------------------------
+// A separate namespace from the status colours above: these never appear on
+// chrome, pills or surfaces. Light/dark pairs are contrast-tested on PAGE and
+// SURFACE; amber and magenta status tokens are deliberately not reused.
+pub const FILE_DOC_LIGHT: egui::Color32 = egui::Color32::from_rgb(0x1D, 0x4E, 0xD8);
+pub const FILE_DOC_DARK: egui::Color32 = egui::Color32::from_rgb(0x7D, 0xA7, 0xFF);
+pub const FILE_IMAGE_LIGHT: egui::Color32 = egui::Color32::from_rgb(0xD0, 0x5A, 0x86);
+pub const FILE_IMAGE_DARK: egui::Color32 = egui::Color32::from_rgb(0xF0, 0xA3, 0xBF);
+pub const FILE_MEDIA_LIGHT: egui::Color32 = egui::Color32::from_rgb(0x0F, 0x76, 0x6E);
+pub const FILE_MEDIA_DARK: egui::Color32 = egui::Color32::from_rgb(0x2D, 0xD4, 0xBF);
+pub const FILE_ARCHIVE_LIGHT: egui::Color32 = egui::Color32::from_rgb(0x6B, 0x6B, 0x1F);
+pub const FILE_ARCHIVE_DARK: egui::Color32 = egui::Color32::from_rgb(0xC9, 0xC4, 0x6A);
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FileKind {
+    Document,
+    Image,
+    Media,
+    Archive,
+    Other,
+}
+
+/// Classify by extension without allocating: this runs per visible row.
+pub fn file_kind(name: &str) -> FileKind {
+    let Some((_, ext)) = name.rsplit_once('.') else {
+        return FileKind::Other;
+    };
+    const DOCS: &[&str] = &[
+        "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "md", "csv", "odt", "ods",
+        "rtf",
+    ];
+    const IMAGES: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "heic", "svg", "bmp", "tif", "tiff"];
+    const MEDIA: &[&str] = &["mp4", "mkv", "webm", "mov", "avi", "mp3", "wav", "flac", "m4a", "ogg"];
+    const ARCHIVES: &[&str] = &["zip", "7z", "rar", "tar", "gz", "xz", "zst", "bz2"];
+    if DOCS.iter().any(|e| ext.eq_ignore_ascii_case(e)) {
+        FileKind::Document
+    } else if IMAGES.iter().any(|e| ext.eq_ignore_ascii_case(e)) {
+        FileKind::Image
+    } else if MEDIA.iter().any(|e| ext.eq_ignore_ascii_case(e)) {
+        FileKind::Media
+    } else if ARCHIVES.iter().any(|e| ext.eq_ignore_ascii_case(e)) {
+        FileKind::Archive
+    } else {
+        FileKind::Other
+    }
+}
+
+/// Glyph colour for a file row. Folders keep the brand accent; selection is
+/// handled by the caller so a selected row stays a solid accent band.
+pub fn file_color(name: &str, visuals: &egui::Visuals) -> egui::Color32 {
+    let dark = visuals.dark_mode;
+    match file_kind(name) {
+        FileKind::Document => {
+            if dark { FILE_DOC_DARK } else { FILE_DOC_LIGHT }
+        }
+        FileKind::Image => {
+            if dark { FILE_IMAGE_DARK } else { FILE_IMAGE_LIGHT }
+        }
+        FileKind::Media => {
+            if dark { FILE_MEDIA_DARK } else { FILE_MEDIA_LIGHT }
+        }
+        FileKind::Archive => {
+            if dark { FILE_ARCHIVE_DARK } else { FILE_ARCHIVE_LIGHT }
+        }
+        FileKind::Other => muted(visuals),
+    }
+}
+
 /// Theme-aware muted text colour with WCAG AA contrast on its own surface.
 pub fn muted(visuals: &egui::Visuals) -> egui::Color32 {
     if visuals.dark_mode {
@@ -409,6 +477,16 @@ mod tests {
     /// WCAG contrast gate for the palette: text pairs meet AA (4.5:1) and
     /// dot/indicator colours meet the non-text bar (3:1) on their surfaces.
     #[test]
+    fn file_extensions_map_to_type_glyphs() {
+        assert_eq!(file_kind("report.PDF"), FileKind::Document);
+        assert_eq!(file_kind("photo.jpeg"), FileKind::Image);
+        assert_eq!(file_kind("clip.MP4"), FileKind::Media);
+        assert_eq!(file_kind("backup.tar.gz"), FileKind::Archive);
+        assert_eq!(file_kind("README"), FileKind::Other);
+        assert_eq!(file_kind("no-extension"), FileKind::Other);
+    }
+
+    #[test]
     fn palette_meets_wcag_contrast() {
         for (fg, bg, min) in [
             (INK, SURFACE, 4.5),
@@ -440,6 +518,22 @@ mod tests {
             (info_text(&egui::Visuals::dark()), DARK_SURFACE, 3.0),
             (info_text(&egui::Visuals::light()), SURFACE, 4.5),
             (egui::Color32::WHITE, ACCENT, 4.5),
+            (FILE_DOC_LIGHT, SURFACE, 3.0),
+            (FILE_DOC_LIGHT, PAGE, 3.0),
+            (FILE_DOC_DARK, DARK_SURFACE, 3.0),
+            (FILE_DOC_DARK, DARK_PAGE, 3.0),
+            (FILE_IMAGE_LIGHT, SURFACE, 3.0),
+            (FILE_IMAGE_LIGHT, PAGE, 3.0),
+            (FILE_IMAGE_DARK, DARK_SURFACE, 3.0),
+            (FILE_IMAGE_DARK, DARK_PAGE, 3.0),
+            (FILE_MEDIA_LIGHT, SURFACE, 3.0),
+            (FILE_MEDIA_LIGHT, PAGE, 3.0),
+            (FILE_MEDIA_DARK, DARK_SURFACE, 3.0),
+            (FILE_MEDIA_DARK, DARK_PAGE, 3.0),
+            (FILE_ARCHIVE_LIGHT, SURFACE, 3.0),
+            (FILE_ARCHIVE_LIGHT, PAGE, 3.0),
+            (FILE_ARCHIVE_DARK, DARK_SURFACE, 3.0),
+            (FILE_ARCHIVE_DARK, DARK_PAGE, 3.0),
         ] {
             let r = ratio(fg, bg);
             assert!(r >= min, "ratio {r:.2} below {min}: {fg:?} on {bg:?}");

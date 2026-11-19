@@ -132,6 +132,33 @@ fn fixture(page: Page) -> App {
             mtime: "2026-11-11 09:05".into(),
             doc: false,
         },
+        cli::RemoteEntry {
+            name: "photo.jpg".into(),
+            rel: "photo.jpg".into(),
+            uid: "f3".into(),
+            dir: false,
+            size: 1_200_000,
+            mtime: "2026-11-11 10:12".into(),
+            doc: false,
+        },
+        cli::RemoteEntry {
+            name: "clip.mp4".into(),
+            rel: "clip.mp4".into(),
+            uid: "f4".into(),
+            dir: false,
+            size: 18_000_000,
+            mtime: "2026-11-11 10:15".into(),
+            doc: false,
+        },
+        cli::RemoteEntry {
+            name: "backup.zip".into(),
+            rel: "backup.zip".into(),
+            uid: "f5".into(),
+            dir: false,
+            size: 4_500_000,
+            mtime: "2026-11-11 10:20".into(),
+            doc: false,
+        },
         ],
         ..Default::default()
     };

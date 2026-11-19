@@ -2140,11 +2140,7 @@ fn row(
     if selected {
         ui.painter().rect_filled(rect, 2.0, visuals.selection.bg_fill);
     } else if resp.hovered() {
-        ui.painter().rect_filled(
-            rect,
-            2.0,
-            visuals.widgets.hovered.bg_fill.gamma_multiply(0.45),
-        );
+        ui.painter().rect_filled(rect, 2.0, visuals.widgets.hovered.bg_fill);
     }
     if resp.has_focus() {
         let ring = if selected {
@@ -2163,11 +2159,10 @@ fn row(
     let icon_color = if selected {
         visuals.selection.stroke.color
     } else if e.dir {
-        // Folders wear the Proton purple, files stay a quiet neutral - the
-        // one thing that makes a file list look "Proton Drive" at a glance.
+        // Folders keep the Proton purple; files use the semantic type glyph.
         theme::accent(ui.visuals())
     } else {
-        visuals.weak_text_color()
+        theme::file_color(&e.name, ui.visuals())
     };
     let (ix, iy) = (rect.left() + 10.0, cy - 5.0);
     if e.dir {
@@ -2187,7 +2182,7 @@ fn row(
         ui.painter().rect_filled(
             egui::Rect::from_min_size(egui::pos2(ix + 1.0, iy), egui::vec2(11.0, 12.0)),
             2.0,
-            icon_color.gamma_multiply(0.75),
+            icon_color,
         );
     }
     // The three cells render through egui labels at the exact column rects the

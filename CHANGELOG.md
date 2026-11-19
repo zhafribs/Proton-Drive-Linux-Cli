@@ -1,3 +1,21 @@
+## 3.33.6 — 2026-11-19
+
+### A little more colour in the file list
+
+- **File rows now show their type at a glance.** The glyph is tinted by kind:
+  violet folders, blue documents, dusty rose images, teal media, olive
+  archives, muted everything else. The filename still states the type, so
+  colour only reinforces it.
+- **Restraint is enforced in the tokens.** The new `FILE_*` colours live in
+  their own namespace and only ever fill the glyph — no coloured navigation,
+  no tinted cards or chips, no gradients. Selected rows keep the solid accent
+  band and a white glyph.
+- **Light and dark are separate pairs**, each contrast-tested at 3:1 on both
+  the page and card surfaces.
+- **Hover rows no longer turn grey in the light theme.** The row fill now uses
+  the theme's hover colour directly instead of a darkened blend, which had
+  dropped text and icons below AA on mouse-over.
+
 ## 3.33.5 — 2026-11-18
 
 ### Actionable photo attention
