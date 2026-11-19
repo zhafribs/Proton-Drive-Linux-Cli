@@ -1,0 +1,71 @@
+# Release evidence — v0.9.0-gui3.33.6
+
+Tag: v0.9.0-gui3.33.6
+Purpose: add a restrained, semantic colour layer to the Files list without
+turning the app into a dashboard.
+
+## Design council
+
+Three seats reviewed the proposal before implementation:
+
+- **UI designer** — PASS: glyph-only colour, separate `FILE_*` namespace,
+  folders keep the accent, selection keeps its white glyph. Image hue must
+  separate from folder violet by lightness as well as hue.
+- **Accessibility / 508** — HOLD until magenta, teal and amber left the status
+  palette and moved to tested shades; PASS once every pair was gated at 3:1 on
+  both `PAGE` and `SURFACE`. Also flagged the light hover row, which blended
+  the fill to mid grey.
+- **Finish gate** — PASS: no chips, tints, rows or filename colour; status
+  hues stay reserved for status.
+
+## Changes
+
+- File glyphs are tinted by type: violet folders, blue documents, dusty rose
+  images, teal media, olive archives, muted everything else.
+- `FILE_*` tokens live in their own namespace in `gui/src/theme.rs`; no chrome,
+  card, pill or background uses them.
+- Light and dark are separate pairs, each contrast-tested at 3:1 on `PAGE` and
+  `SURFACE`; `theme::tests` now covers all four surfaces per pair.
+- Light-theme hover rows use `ACCENT_HOVER` directly instead of a 45 %
+  darkened blend that had dropped text and icons below AA on mouse-over.
+- `docs/design/CLARITY.md` §3.3 records the glyph-only rule and the namespace
+  boundary.
+- The English and Malay screenshot matrices were regenerated.
+
+## Contrast (glyph vs. page / card)
+
+| Type | Light | SURFACE | PAGE | Dark | DARK_SURFACE | DARK_PAGE |
+|---|---|---|---|---|---|---|
+| Document | `#1D4ED8` | 6.70 | 6.22 | `#7DA7FF` | 7.48 | 8.09 |
+| Image | `#D05A86` | 3.83 | 3.55 | `#F0A3BF` | 9.05 | 9.79 |
+| Media | `#0F766E` | 5.47 | 5.08 | `#2DD4BF` | 9.54 | 10.32 |
+| Archive | `#6B6B1F` | 5.60 | 5.20 | `#C9C46A` | 9.80 | 10.60 |
+| Folder | `#7051F0` (accent) | 5.09 | 4.72 | `#A78BFF` | 6.58 | 7.12 |
+
+Worst case is 3.55:1, above the 3:1 non-text bar. Selected rows keep the
+accent band and a white glyph (5.09:1).
+
+## Assets
+
+  ProtonDrive-CLI-0.9.0-GUI-3.33.6-x86_64.AppImage   52783608 bytes
+  ProtonDrive-CLI-0.9.0-GUI-3.33.6-aarch64.AppImage  51423752 bytes
+  proton-drive_0.9.0+gui3.33.6_amd64.deb             51896604 bytes
+  proton-drive_0.9.0+gui3.33.6_arm64.deb             50509284 bytes
+  proton-drive_0.9.0+gui3.33.6_x86_64.flatpak        41455416 bytes
+
+SHA-256 (signed SHA256SUMS):
+
+  e9cbac431c9f57657d87221623fa6ec6476f24ec4c47d67ef291650114266986  x86_64 AppImage
+  dd80371aa3db6e30a7ff35e7a8943747a7e5f1c0cfcc6ad9dab7dbf11c163da1  aarch64 AppImage
+  b1a6cd951441837e7382e1def80e3e7cdab9312331b911e4d2121cce6a31efdf  amd64 .deb
+  1a3357d0fdee5528c638687693a1754196284e763674e75a89d573b3e4bba635  arm64 .deb
+  09f05367a59c36b89796a2e61de8d4ed9ccd734f23fa9307a68e0c73467c27fb  x86_64 .flatpak
+
+## Verification
+
+- 329 tests passed, 6 ignored; clippy `--release --all-targets` clean.
+- `scripts/ui-check.sh`: pages, dialogs, keyboard and screenshots passed.
+- Light and dark Files renders reviewed at 720×400 and 1024×720.
+- CI run `44529249895`: verify and release succeeded.
+- `scripts/verify-release.sh v0.9.0-gui3.33.6`: checksums, signatures, smoke
+  (`gui 3.33.6`), GLIBC floor 2.28, both `.deb` files and the Flatpak OK.
