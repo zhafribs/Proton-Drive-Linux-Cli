@@ -53,6 +53,14 @@ skill and `/pstack` command. Use it for deep-first, verified work. Its
 Cursor-only model routing, slash commands and plugins are not used here; the
 adapter at `.opencode/skills/pstack/SKILL.md` maps them.
 
+## Project Skills (.opencode/skills)
+
+- **Planning & Architecture**: `superpowers`, `grill-me`, `superstar-engineer`, `karpathy-coding`.
+- **Debugging & Auditing**: `graphify`, `understand-anything`, `thermo-nuclear-audit`, `gstack`, `agent-browser`.
+- **Discovery & Efficiency**: `find-skills`, `caveman`.
+- **UI & Taste**: `impeccable`, `design-taste-frontend`, `web-design-guidelines`, `writing-guidelines`.
+
+
 ## This project
 
 - Rust only: GUI, engine, core and AppImage `AppRun`. The official Proton CLI
