@@ -1,3 +1,26 @@
+## 3.33.7 — 2026-11-20
+
+### Photo deletions from Proton reach the local folder
+
+- **A cloud delete now deletes the local copy, even in bulk.** Deleting single
+  or many photos in Proton used to stop the whole photo pass with "timeline
+  looks incomplete" and demand **Reset baseline**. The engine now removes the
+  untouched local copies that are known to have been in sync, moving them into
+  the folder's own `.proton-photos-trash` instead of erasing them.
+- **The cloud is still protected.** A short or empty timeline never trashes a
+  cloud copy; only local removals propagate. A partial local scan or an
+  unmounted disk still holds the cycle, and unreadable timeline entries are
+  still reported instead of guessed.
+- **Clearing the cloud no longer "recovers" it from another PC.** With an empty
+  cloud, the other machine's untouched local copies are removed instead of
+  being re-uploaded. Photos that are genuinely new locally still upload.
+- **The baseline survives an API hiccup.** A short timeline is not trusted to
+  rebuild `photos-state.json`, so a temporary bad listing cannot wipe the
+  record and trigger a re-download storm.
+- **Regression tests** cover the plan contract (empty/short timelines), an
+  end-to-end cleared-cloud pass, and the unchanged empty-folder and skipped-row
+  holds.
+
 ## 3.33.6 — 2026-11-19
 
 ### A little more colour in the file list

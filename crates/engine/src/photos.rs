@@ -246,15 +246,18 @@ pub fn plan(
     p.conflicts.dedup();
     p.trash_remote.sort();
     p.remove_local.sort();
-    if !allow_deletes
-        || !folder_looks_present
-        || !remote_looks_present(remote, state, 0)
-    {
-        // Either the switch is off, or the listing smells like an unmounted
-        // disk / bad API response: do not destroy anything, just report what
-        // would have happened.
+    if !allow_deletes || !folder_looks_present {
+        // The switch is off, or the listing smells like an unmounted disk:
+        // do not destroy anything, just report what would have happened.
         p.trash_remote.clear();
         p.remove_local.clear();
+    } else if !remote_looks_present(remote, state, 0) {
+        // A short or empty timeline may be an API hiccup, so never trash a
+        // cloud copy on that evidence. Removing a local copy is reversible:
+        // it only touches files whose ctime proves the engine last saw them
+        // in sync, and it moves them into the folder's own trash. This is
+        // what lets a bulk delete in Proton reach the local folder.
+        p.trash_remote.clear();
     }
     p
 }
@@ -940,6 +943,9 @@ pub fn sync(
     };
     let local = scan_local(dir);
     let mut state = read_state(state_dir);
+    // Captured before any deletion runs. A short or empty readable timeline is
+    // not trusted to rebuild the baseline, so an API hiccup cannot wipe it.
+    let timeline_trusted = remote_looks_present(&remote, &state, skipped);
     let hold_marker = dir.join(".proton-photos-hold");
 
     // The GUI leaves this marker before downloading into a folder that is
@@ -1000,26 +1006,20 @@ pub fn sync(
         let _ = std::fs::remove_file(&hold_marker);
     }
 
-    // A short or unreadable timeline is far more likely to be an API hiccup
-    // than a mass deletion. Hold the whole cycle, keep the previous state and
-    // tell the user instead of deleting 25 photos per cycle.
-    if !remote_looks_present(&remote, &state, skipped) {
+    // Unreadable entries are genuine uncertainty: hold the whole cycle rather
+    // than guess. A readable but short or empty timeline is handled by `plan`,
+    // which propagates local removals (recoverable, into the folder's trash)
+    // but never trashes a cloud copy. A first run has no baseline to protect.
+    if skipped > 0 && !state.synced.is_empty() {
         state.hold = true;
         let _ = write_state(state_dir, &state);
         let _ = std::fs::write(&hold_marker, b"");
-        let (uploaded, upload_error) = upload_new_locals(
-            cli,
-            dir,
-            &local,
-            &remote,
-            &mut state,
-            state_dir,
-            remote.is_empty(),
-        );
+        let (uploaded, upload_error) =
+            upload_new_locals(cli, dir, &local, &remote, &mut state, state_dir, false);
         let extra = if let Some(e) = upload_error {
             format!(" {e}")
         } else if uploaded > 0 {
-            format!(" Uploaded {uploaded} new photo(s); the cloud timeline will be rechecked next cycle.")
+            format!(" Uploaded {uploaded} new photo(s).")
         } else {
             String::new()
         };
@@ -1028,19 +1028,9 @@ pub fn sync(
             remote: remote.len(),
             local: local.len(),
             uploaded,
-            error: if skipped > 0 {
-                format!(
-                    "Photo timeline: {skipped} entries could not be read. Nothing was deleted.{extra}"
-                )
-            } else {
-                format!(
-                    "Photo timeline looks incomplete ({} readable, {} known). Nothing was deleted. If you deleted these photos in Proton, move the stale local copies out of {} and remove {} to reset the baseline.{extra}",
-                    remote.len(),
-                    state.synced.len(),
-                    dir.display(),
-                    state_path(state_dir).display()
-                )
-            },
+            error: format!(
+                "Photo timeline: {skipped} entries could not be read. Nothing was deleted.{extra}"
+            ),
             attention: 1,
             ..Default::default()
         };
@@ -1262,7 +1252,7 @@ pub fn sync(
     summary.local = final_local.len();
     let shared = shared_names(&final_remote);
 
-    if hard.is_none() && final_trusted && folder_looks_present {
+    if hard.is_none() && final_trusted && folder_looks_present && timeline_trusted {
         let old_synced = state.synced.clone();
         state.synced.clear();
         for r in &final_remote {
@@ -1314,6 +1304,17 @@ pub fn sync(
             r.size == fail.size
                 && !local_by_name(&final_local, &r.name).is_some_and(|l| l.size == r.size)
         });
+    }
+    // A short or empty timeline is not trusted to rebuild the baseline, so a
+    // photo uploaded this cycle would look new again next cycle. Remember it
+    // until a trusted pass confirms it, exactly like the old hold did.
+    if !timeline_trusted {
+        let failed: BTreeSet<&str> = summary.failed.iter().map(|f| f.name.as_str()).collect();
+        for name in &p.upload {
+            if !failed.contains(name.as_str()) {
+                state.pending_uploads.insert(name.clone());
+            }
+        }
     }
     summary.conflicts = mismatch_names(&final_local, &final_remote, &shared).len();
     summary.attention = attention_count(&final_local, &final_remote, &state);
@@ -1853,6 +1854,55 @@ mod tests {
         assert!(fresh.remove_local.is_empty());
     }
 
+    /// The user cleared the cloud on another machine. The untouched local
+    /// copies must follow that deletion (into the folder's trash), not be
+    /// re-uploaded to "recover" the library.
+    #[test]
+    fn a_cleared_cloud_removes_untouched_local_copies() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("pd-photo-cleared-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let photos = root.join("photos");
+        let state_dir = root.join("state");
+        std::fs::create_dir_all(&photos).unwrap();
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let mut state = PhotoState::default();
+        for i in 0..3 {
+            let name = format!("p{i}.jpg");
+            std::fs::write(photos.join(&name), b"\xFF\xD8\xFF\x00\x00").unwrap();
+            let (ctime, ctime_nsec) = file_ctime(&std::fs::metadata(photos.join(&name)).unwrap());
+            state.synced.insert(
+                name,
+                Synced {
+                    uid: format!("u{i}"),
+                    size: 5,
+                    ctime,
+                    ctime_nsec,
+                },
+            );
+        }
+        assert!(write_state(&state_dir, &state));
+        let fake = root.join("fake-proton-drive");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\ndir=$(dirname \"$0\")\nif [ \"$1\" = photo ] && [ \"$2\" = timeline ]; then echo '[]'; elif [ \"$1\" = photo ] && [ \"$2\" = upload ]; then echo \"$@\" >> \"$dir/upload.log\"; else echo '[]'; fi\n",
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&fake).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake, perms).unwrap();
+        let cli = Cli::for_test(fake);
+
+        let summary = sync(&cli, &photos, &state_dir, true, &[]).unwrap();
+        assert!(summary.error.is_empty(), "{}", summary.error);
+        assert_eq!(summary.removed, 3);
+        assert_eq!(summary.uploaded, 0);
+        assert!(!photos.join("p0.jpg").exists());
+        assert!(photos.join(".proton-photos-trash/p0.jpg").is_file());
+        assert!(!root.join("upload.log").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// The guards: the switch, an empty folder that looks unmounted, and a
     /// timeline that lost most of the known library.
     #[test]
@@ -1869,7 +1919,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_or_short_timeline_holds_deletions() {
+    fn cloud_deletions_propagate_on_a_short_or_empty_timeline() {
         let locals = (0..10)
             .map(|i| local(&format!("p{i}.jpg"), 10))
             .collect::<Vec<_>>();
@@ -1879,15 +1929,20 @@ mod tests {
                 .collect(),
             ..Default::default()
         };
-        // Empty remote: never delete.
+        // An empty readable timeline removes every untouched local copy: the
+        // user cleared the cloud. It never trashes a cloud copy.
         let empty = plan(&locals, &[], &state, true, true);
-        assert!(empty.remove_local.is_empty());
-        // Three of ten known photos: too short, hold.
+        assert_eq!(empty.remove_local.len(), 10);
+        assert!(empty.trash_remote.is_empty());
+        // Three of ten known photos: the seven missing ones are removed, and
+        // nothing is trashed from the short listing.
         let short = (0..3)
             .map(|i| remote(&format!("u{i}"), &format!("p{i}.jpg"), 10))
             .collect::<Vec<_>>();
-        assert!(plan(&locals, &short, &state, true, true).remove_local.is_empty());
-        // Half the library is the line; five of ten is allowed.
+        let short_plan = plan(&locals, &short, &state, true, true);
+        assert_eq!(short_plan.remove_local.len(), 7);
+        assert!(short_plan.trash_remote.is_empty());
+        // Half the library behaves the same.
         let half = (0..5)
             .map(|i| remote(&format!("u{i}"), &format!("p{i}.jpg"), 10))
             .collect::<Vec<_>>();
@@ -1999,7 +2054,7 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_timeline_holds_the_whole_cycle_and_keeps_state() {
+    fn an_empty_timeline_keeps_an_unverifiable_local_file_and_state() {
         use std::os::unix::fs::PermissionsExt;
         let root = std::env::temp_dir().join(format!("pd-photo-hold-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -2021,9 +2076,11 @@ mod tests {
         let cli = Cli::for_test(fake);
 
         let summary = sync(&cli, &photos, &state_dir, true, &[]).unwrap();
-        assert!(summary.error.contains("incomplete"));
+        assert!(summary.error.is_empty(), "{}", summary.error);
         assert_eq!(summary.removed, 0);
         assert_eq!(std::fs::read(photos.join("a.jpg")).unwrap(), b"local");
+        // A short timeline is not trusted to rebuild the baseline, so the
+        // known entry is kept rather than wiped by an API hiccup.
         assert_eq!(read_state(&state_dir).synced.len(), 1);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -2423,7 +2480,7 @@ mod tests {
     }
 
     #[test]
-    fn a_short_timeline_holds_the_whole_cycle() {
+    fn a_short_timeline_never_deletes_and_keeps_the_baseline() {
         use std::os::unix::fs::PermissionsExt;
         let root = std::env::temp_dir().join(format!("pd-photo-short-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -2458,7 +2515,8 @@ mod tests {
         let cli = Cli::for_test(fake);
 
         let summary = sync(&cli, &photos, &state_dir, true, &[]).unwrap();
-        assert!(summary.error.contains("incomplete"));
+        assert!(summary.error.is_empty(), "{}", summary.error);
+        assert_eq!(summary.removed, 0);
         assert_eq!(read_state(&state_dir).synced.len(), 10);
         for i in 0..10 {
             assert!(photos.join(format!("p{i}.jpg")).exists());
