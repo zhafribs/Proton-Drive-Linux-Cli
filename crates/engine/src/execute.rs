@@ -501,6 +501,23 @@ fn move_remote(cli: &Cli, remote_root: &str, old: &str, new: &str) -> Result<()>
     Ok(())
 }
 
+/// A local move can land in a folder that exists only on disk so far. Create
+/// that folder in the cloud first; `fs move` refuses a missing destination.
+fn move_remote_into(
+    cli: &Cli,
+    remote_root: &str,
+    old: &str,
+    new: &str,
+    tree: &mut RemoteTree,
+    created: &mut BTreeSet<String>,
+) -> Result<()> {
+    let parent = parent_of(new);
+    if !parent.is_empty() {
+        ensure_remote_dir(cli, remote_root, &parent, tree, created)?;
+    }
+    move_remote(cli, remote_root, old, new)
+}
+
 pub fn execute(
     actions: &[Action],
     remote: &RemoteTree,
@@ -589,7 +606,14 @@ pub fn execute(
                 }
             }
             Action::MvRemote { old, new } => {
-                if let Err(e) = move_remote(&cli, remote_root, old, new) {
+                if let Err(e) = move_remote_into(
+                    &cli,
+                    remote_root,
+                    old,
+                    new,
+                    &mut tree,
+                    &mut created_dirs,
+                ) {
                     eprintln!("FAILED move {old} -> {new}: {e:#}");
                     failed.insert(old.clone());
                     failed.insert(new.clone());
@@ -955,6 +979,37 @@ mod tests {
             calls.trim(),
             "fs move /my-files/Docs/old.txt /my-files/Other\nfs rename /my-files/Other/old.txt new.txt"
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A file moved into a folder that exists only on disk: the cloud folder
+    /// must be created before `fs move` can land in it.
+    #[test]
+    fn remote_move_creates_a_missing_destination_folder_first() {
+        let root = temp("move-remote-new-dir");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let (cli, log) = fake_cli_logging(&root);
+        let mut tree = RemoteTree::new();
+        let mut created = BTreeSet::new();
+        move_remote_into(
+            &cli,
+            "/my-files",
+            "Docs/f.txt",
+            "Other/Gplumbing/f.txt",
+            &mut tree,
+            &mut created,
+        )
+        .unwrap();
+        let calls = fs::read_to_string(log).unwrap();
+        assert_eq!(
+            calls.trim(),
+            "fs create-folder /my-files Other\n\
+             fs create-folder /my-files/Other Gplumbing\n\
+             fs move /my-files/Docs/f.txt /my-files/Other/Gplumbing"
+        );
+        assert!(created.contains("Other"));
+        assert!(created.contains("Other/Gplumbing"));
         let _ = fs::remove_dir_all(&root);
     }
 

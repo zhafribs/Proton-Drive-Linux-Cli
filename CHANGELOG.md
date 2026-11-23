@@ -1,3 +1,14 @@
+## 3.33.9 — 2026-11-23
+
+### A file moved into a new folder now syncs
+
+- **The cloud folder is created before the move.** When a local file was moved
+  into a folder that existed only on disk, the engine planned a cloud move but
+  never created the destination folder, so every cycle failed with
+  `Node not found: <folder>` and retried forever. The destination folder (and
+  any missing parents) is now created first.
+- **Regression test** asserts the call order: `create-folder`, then `move`.
+
 ## 3.33.8 — 2026-11-23
 
 ### Cloud storage that tallies
