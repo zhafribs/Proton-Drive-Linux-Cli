@@ -1138,13 +1138,15 @@ struct QuotaFile {
     used: u64,
     total: u64,
     drive_used: u64,
+    #[serde(default)]
+    photos_used: u64,
     fetched_at: String,
 }
 
 static QUOTA: Mutex<(Option<CacheKey>, Option<QuotaFile>)> = Mutex::new((None, None));
 
 /// Account storage quota written by the engine, cached until the file changes.
-pub fn quota_usage(path: &Path) -> Option<(u64, u64, u64, String)> {
+pub fn quota_usage(path: &Path) -> Option<(u64, u64, u64, u64, String)> {
     let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok()?;
     let key = (mtime, path.to_path_buf());
     let mut guard = QUOTA.lock().unwrap();
@@ -1157,7 +1159,7 @@ pub fn quota_usage(path: &Path) -> Option<(u64, u64, u64, String)> {
     guard
         .1
         .as_ref()
-        .map(|q| (q.used, q.total, q.drive_used, q.fetched_at.clone()))
+        .map(|q| (q.used, q.total, q.drive_used, q.photos_used, q.fetched_at.clone()))
 }
 
 /// The engine's walk as the tree object, parsed once per file change. Returned

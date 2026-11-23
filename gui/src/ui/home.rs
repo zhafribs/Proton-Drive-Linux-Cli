@@ -382,7 +382,7 @@ fn cloud_storage(app: &HomeView, ui: &mut egui::Ui) {
         ui,
         Some(crate::i18n::tr("Cloud storage", "Storan awan")),
         |ui| {
-        let Some((used, total, drive, fetched)) = quota else {
+        let Some((used, total, drive, photos, fetched)) = quota else {
             ui.label(
                 rt(if app.active {
                     crate::i18n::tr(
@@ -417,8 +417,19 @@ fn cloud_storage(app: &HomeView, ui: &mut egui::Ui) {
         } else {
             (used as f32 / total as f32).clamp(0.0, 1.0)
         };
+        // Photos live in a volume of their own, so a single "Drive" figure
+        // covered both and never tallied with the Drive folder.
+        let split = if photos > 0 {
+            format!(
+                "Drive {} \u{b7} Photos {}",
+                service::human_size(drive),
+                service::human_size(photos)
+            )
+        } else {
+            format!("Drive {}", service::human_size(drive))
+        };
         ui.columns(2, |cols| {
-            storage_stat(&mut cols[0], "Used", &service::human_size(used), &format!("Drive {}", service::human_size(drive)));
+            storage_stat(&mut cols[0], "Used", &service::human_size(used), &split);
             storage_stat(&mut cols[1], "Free", &service::human_size(free), &format!("of {}", service::human_size(total)));
         });
         ui.add_space(8.0);

@@ -1,3 +1,18 @@
+## 3.33.8 — 2026-11-23
+
+### Cloud storage that tallies
+
+- **Drive and Photos are shown separately.** Proton stores photos in their own
+  volume next to the file volume, but the card added both up under "Drive", so
+  a 1.3 GB Drive folder sat under a "Drive 2.6 GB" label. The engine now reads
+  the volumes and the card shows `Drive 1.3 GB · Photos 1.3 GB`, which sums to
+  the account total.
+- **The quota refreshes every ten minutes**, not once an hour, so a delete or
+  an emptied trash reaches the card promptly instead of at the next hour.
+- **Fallbacks stay intact.** If the volume endpoint is unavailable the card
+  keeps the old single Drive figure, and an older `quota.json` without the new
+  field still parses.
+
 ## 3.33.7 — 2026-11-20
 
 ### Photo deletions from Proton reach the local folder
