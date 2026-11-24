@@ -1,0 +1,71 @@
+# Release evidence — v0.9.0-gui3.33.10
+
+Tag: v0.9.0-gui3.33.10
+Purpose: stop the hourly “1 file(s) uploaded” notification without disabling
+completion notifications.
+
+## Root cause
+
+The planner emits an `Up` action for a directory that exists only on disk, but
+`execute` deliberately skips it: the CLI creates a file's parent folders during
+the upload. The health writer counted **every** `Up` action as an upload, so a
+skipped directory incremented `uploaded` once per cycle.
+
+On this machine one internal leftover directory existed only locally:
+
+  ProtonDrive/.proton-debug-114515/   (contains only an empty
+                                       .proton-sync-staging/)
+
+It is skipped by `execute`, never recorded in state, and therefore replanned on
+every cycle. The health snapshot showed the contradiction directly:
+
+  actions: 1   uploaded: 1   local_entries: 1324   remote_entries: 1323
+
+With a one-hour interval, the GUI saw a `syncing -> ok` transition with
+`uploaded = 1` every hour and announced “1 file(s) uploaded” even though no
+file was transferred.
+
+## Fix
+
+- `uploaded` now counts only `Action::Up` nodes that are files and did not fail,
+  which is exactly the set `execute` transfers.
+- This is not notification suppression: a real file upload still increments the
+  counter and still notifies.
+- Regression tests: a directory-only cycle counts 0, a real file counts 1, and
+  a failed file is not counted.
+
+## Runtime verification
+
+Same engine state after installing 3.33.10:
+
+  before: actions: 1   uploaded: 1   local_entries: 1324   remote_entries: 1323
+  after:  actions: 1   uploaded: 0   local_entries: 1324   remote_entries: 1323
+
+The skipped directory still appears in `actions`, so the condition that caused
+the bug is present, but it no longer reports an upload.
+
+## Assets
+
+  ProtonDrive-CLI-0.9.0-GUI-3.33.10-x86_64.AppImage   52804088 bytes
+  ProtonDrive-CLI-0.9.0-GUI-3.33.10-aarch64.AppImage  51419656 bytes
+  proton-drive_0.9.0+gui3.33.10_amd64.deb             51910256 bytes
+  proton-drive_0.9.0+gui3.33.10_arm64.deb             50501052 bytes
+  proton-drive_0.9.0+gui3.33.10_x86_64.flatpak        40114272 bytes
+
+SHA-256 (signed SHA256SUMS):
+
+  2114881690ca04b7a1e7903cbb80f7ee3ce47ad3aa6eeaa769dafd7406c1223b  x86_64 AppImage
+  19a598a9fb79ce9ddb6992c4e32be7c06706c368d55674e80f7dcf17ef6c526c  aarch64 AppImage
+  ce222781c0963c297778f641149f5c442ac5ee873c065a0a1875e4dc3bc80df2  amd64 .deb
+  b35bbdb1c0fac071bee0a67a6560398cca10e5626067e665f61c3f82cff06d1f  arm64 .deb
+  d24427adc2f7e05cfc14b658cfbee741a185499f9902e536ff874f599b82df0e  x86_64 .flatpak
+
+## Verification
+
+- 336 tests passed, 6 ignored; clippy `--release --all-targets` clean.
+- Live health after install: `build 3.33.10`, `status ok`, `uploaded 0` with
+  `actions 1` and the same local/remote counts as the failing cycle.
+- CI run `45404938925`: verify and release succeeded.
+- `scripts/verify-release.sh v0.9.0-gui3.33.10`: checksums, signatures, smoke
+  (`gui 3.33.10`), GLIBC 2.28, both `.deb` files and the Flatpak OK.
+- Installed: unit and GUI moved to 3.33.10; service active.
