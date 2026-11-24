@@ -48,6 +48,20 @@ fn failure_status(message: &str) -> &'static str {
     }
 }
 
+/// Files this cycle actually transferred to the cloud.
+///
+/// The planner emits `Up` for local-only directories too, but `execute` skips
+/// those: the CLI creates a file's parent folders during the upload. Counting
+/// every `Up` made an internal leftover directory look like one uploaded file
+/// every cycle, which the GUI announced as "1 file(s) uploaded" on each poll.
+fn uploaded_files(actions: &[Action], failed: &BTreeSet<String>) -> u64 {
+    actions
+        .iter()
+        .filter(|a| matches!(a, Action::Up { node, .. } if node.is_file()))
+        .filter(|a| !failed.contains(a.rel()))
+        .count() as u64
+}
+
 fn cfg_values() -> std::collections::BTreeMap<String, String> {
     let home = dirs::home_dir().unwrap_or_else(|| std::path::Path::new("/").to_path_buf());
     let config_dir = dirs::config_dir().unwrap_or_else(|| home.join(".config"));
@@ -537,11 +551,7 @@ pub fn run_once_cycle(
         status: status.to_string(),
         cycle_seconds: Some(secs),
         actions: result.actions.len() as u64,
-        uploaded: result
-            .actions
-            .iter()
-            .filter(|a| matches!(a, Action::Up { .. }) && !failed.contains(a.rel()))
-            .count() as u64,
+        uploaded: uploaded_files(&result.actions, &failed),
         downloaded: downloaded.len() as u64,
         failed: failed.len() as u64,
         holds: result.holds as u64,
@@ -1121,6 +1131,54 @@ mod tests {
         std::fs::write(&path, b"uid-1\n\n").unwrap();
         assert_eq!(take_photo_request(&path), Some(vec!["uid-1".to_string()]));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod upload_count_tests {
+    use super::uploaded_files;
+    use crate::action::{Action, LocalEntry};
+    use std::collections::BTreeSet;
+
+    fn up_file(rel: &str) -> Action {
+        Action::Up {
+            rel: rel.into(),
+            node: LocalEntry::File {
+                mtime_ns: 1,
+                size: 2,
+            },
+        }
+    }
+
+    #[test]
+    fn a_local_only_directory_is_not_an_uploaded_file() {
+        // The hourly "1 file(s) uploaded" bug: the planner emits Up for a
+        // local-only directory, execute skips it, and the counter still said
+        // one file had been sent.
+        let actions = vec![
+            Action::Up {
+                rel: ".proton-debug-1".into(),
+                node: LocalEntry::Dir,
+            },
+            up_file("report.pdf"),
+        ];
+        assert_eq!(uploaded_files(&actions, &BTreeSet::new()), 1);
+    }
+
+    #[test]
+    fn a_failed_upload_is_not_counted() {
+        let actions = vec![up_file("report.pdf"), up_file("notes.md")];
+        let failed = BTreeSet::from(["report.pdf".to_string()]);
+        assert_eq!(uploaded_files(&actions, &failed), 1);
+    }
+
+    #[test]
+    fn a_directory_only_cycle_announces_nothing() {
+        let actions = vec![Action::Up {
+            rel: ".proton-debug-1".into(),
+            node: LocalEntry::Dir,
+        }];
+        assert_eq!(uploaded_files(&actions, &BTreeSet::new()), 0);
     }
 }
 

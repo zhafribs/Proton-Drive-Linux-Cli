@@ -1,3 +1,18 @@
+## 3.33.10 — 2026-11-24
+
+### No more hourly “1 file(s) uploaded”
+
+- **The count now matches the transfer.** A local folder that exists only on
+  disk is planned as an upload, but the engine deliberately skips it: the CLI
+  creates parent folders as part of a file upload. The health counter counted
+  that skipped folder as an uploaded file, so every hourly cycle announced
+  “1 file(s) uploaded” even when nothing was sent.
+- **Only real file uploads count.** `uploaded` now includes `Up` actions whose
+  node is a file and which did not fail, which is exactly what was transferred.
+  Genuine uploads still notify.
+- **Regression tests** cover a directory-only cycle (no notification), a real
+  file upload (one), and a failed upload (not counted).
+
 ## 3.33.9 — 2026-11-23
 
 ### A file moved into a new folder now syncs
