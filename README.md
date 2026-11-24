@@ -1,4 +1,4 @@
-# Proton Drive for Linux — AppImage, deb + Flatpak
+# Proton Drive for Linux — AppImage, deb, Flatpak + Arch
 
 ![Latest release](https://img.shields.io/github/v/release/zhafribs/Proton-Drive-Linux-Cli)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
@@ -12,13 +12,14 @@ cloud file manager, tray, notifications and in-app updates, built on Proton's
 **official, unmodified Drive CLI**.
 
 The GUI, sync engine and AppImage launcher are **Rust**; the bundled CLI is
-Proton's own Rust binary. Nothing is installed on the host — no Python, no Qt,
-no AUR.
+Proton's own Rust binary. Nothing is bundled twice: the AppImage and Flatpak
+carry the whole app, the .deb and Arch package install it natively — no Python,
+no Qt, no AUR.
 
 > Unofficial. Not affiliated with, endorsed, sponsored or supported by Proton
 > AG. "Proton Drive" is a trademark of Proton AG.
 
-**[Download the latest AppImage, .deb or Flatpak →](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/latest)**
+**[Download the latest AppImage, .deb, Flatpak or Arch package →](https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/latest)**
 
 Every published build stays on the releases page; older releases are never
 pruned automatically.
@@ -38,14 +39,21 @@ pruned automatically.
    flatpak install --user ./proton-drive_*_x86_64.flatpak
    flatpak run io.github.zhafribs.protondrivecli
    ```
+   On Arch Linux, install the native x86_64 package (no AppImage, no FUSE):
+   ```bash
+   sudo pacman -U ./proton-drive-*-x86_64.pkg.tar.zst
+   ```
+   Its in-app update button installs the next package through polkit; without
+   a polkit agent it shows the `sudo pacman -U` command instead.
 2. Run it and click **Sign in** in the bottom-left account pill — Proton's CLI
    opens a terminal for 2FA.
 3. **Settings → pick your sync folder → Save.** The app installs a systemd
    *user* service; from then on `~/ProtonDrive` mirrors your Drive.
 
-Works on x86_64 and aarch64 Linux with **glibc ≥ 2.28** and FUSE, with or
-without a systemd user session. The Flatpak is x86_64 only; see
-[docs/FLATPAK.md](docs/FLATPAK.md). If it won't start:
+The AppImages work on x86_64 and aarch64 Linux with **glibc ≥ 2.28** and FUSE,
+with or without a systemd user session. The .deb, Flatpak and Arch package are
+systemd desktop installs. The Flatpak and Arch package are x86_64 only; see
+[docs/FLATPAK.md](docs/FLATPAK.md). If an AppImage won't start:
 install `libfuse2` / `fuse2` / `fuse-libs`, or run with
 `APPIMAGE_EXTRACT_AND_RUN=1`.
 
@@ -168,6 +176,7 @@ Install Rust with [rustup](https://rustup.rs/), then `wget` and
 ./build.sh                    # x86_64 and aarch64 AppImages
 ./scripts/build-deb.sh all    # matching .deb packages
 ./scripts/build-flatpak.sh    # x86_64 Flatpak bundle
+./scripts/build-pkg.sh        # native x86_64 Arch package
 ```
 
 `build.sh` downloads and **SHA-512-verifies** Proton's CLI, builds the Rust
@@ -184,6 +193,7 @@ crates/engine/       two-way Rust sync engine
 crates/apprun/       Rust AppImage entry point
 build.sh             download -> verify -> build -> package -> validate
 scripts/build-deb.sh install the tested AppImage as a Debian package
+scripts/build-pkg.sh install the tested payload as a native Arch package
 scripts/build-flatpak.sh ship the tested AppImage in a Flatpak sandbox
 upstream.lock        Proton CLI version + SHA-512s (written by check-upstream.sh)
 scripts/             upstream check, release notes, licence texts, dev install

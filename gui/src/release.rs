@@ -239,6 +239,14 @@ pub fn updater_feed_trusted() -> bool {
     trusted_download_url(KEY_REVOCATIONS_URL) && trusted_download_url(KEY_REVOCATIONS_SIG_URL)
 }
 
+/// Can this install apply a downloaded update itself? An AppImage swaps in
+/// place; the Arch package is installed by pacman under polkit. Flatpak owns
+/// its own updates.
+pub fn can_self_update() -> bool {
+    !crate::paths::in_flatpak()
+        && (appimage_path().is_some() || crate::paths::in_arch_package())
+}
+
 fn trusted_download_url(url: &str) -> bool {
     let Some(rest) = url.strip_prefix("https://") else {
         return false;
@@ -813,8 +821,23 @@ fn download_plan(
     rel: &Release,
     arch: &str,
     target: Option<&Path>,
+    packaged: bool,
 ) -> Result<DownloadPlan, String> {
-    let name = if !rel.gui.is_empty() {
+    let name = if packaged {
+        // Arch package releases are named after the same CLI+GUI pair. The
+        // package is x86_64 only; asking for another arch is an error, not a
+        // reason to fall back to an AppImage this install cannot use.
+        if arch != "x86_64" || rel.cli.is_empty() || rel.gui.is_empty() {
+            return Err(format!(
+                "no Arch Linux package for {arch} in release {}",
+                rel.tag
+            ));
+        }
+        format!(
+            "proton-drive-{}+gui{}-1-{arch}.pkg.tar.zst",
+            rel.cli, rel.gui
+        )
+    } else if !rel.gui.is_empty() {
         format!(
             "ProtonDrive-CLI-{}-GUI-{}-{arch}.AppImage",
             rel.cli, rel.gui
@@ -847,17 +870,28 @@ fn download_plan(
     if !trusted_download_url(&sig_url) {
         return Err(format!("manifest signature is not on a trusted host: {sig_url}"));
     }
-    let target = install_target(target, &name)
-        .ok_or_else(|| "no writable install directory for the update".to_string())?;
-    let base = target
-        .parent()
-        .ok_or_else(|| "install target has no parent directory".to_string())?;
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let dir = base.join(format!(".proton-update-{}-{}", std::process::id(), nanos));
-    let dest = dir.join(format!("proton-update-{name}"));
+    let (dir, dest) = if packaged {
+        // pacman runs as root and can read the user's state directory. Keep
+        // the archive private (0700) until the user authorises the install.
+        let dir = crate::paths::resolve()
+            .state_dir
+            .join(format!(".proton-update-{}-{}", std::process::id(), nanos));
+        let dest = dir.join(format!("proton-update-{name}"));
+        (dir, dest)
+    } else {
+        let target = install_target(target, &name)
+            .ok_or_else(|| "no writable install directory for the update".to_string())?;
+        let base = target
+            .parent()
+            .ok_or_else(|| "install target has no parent directory".to_string())?;
+        let dir = base.join(format!(".proton-update-{}-{}", std::process::id(), nanos));
+        let dest = dir.join(format!("proton-update-{name}"));
+        (dir, dest)
+    };
     Ok(DownloadPlan {
         name,
         url,
@@ -877,7 +911,8 @@ pub fn download_update(rel: &Release, arch: &str) -> Result<std::path::PathBuf, 
             "This Flatpak is updated by your software center, not by the app.".to_string(),
         );
     }
-    let plan = download_plan(rel, arch, appimage_path().as_deref())?;
+    let packaged = appimage_path().is_none() && crate::paths::in_arch_package();
+    let plan = download_plan(rel, arch, appimage_path().as_deref(), packaged)?;
 
     // Signature first: a checksum is only trustworthy when the manifest that
     // carries it is signed by the project key. The GitHub API digest is a
@@ -934,9 +969,10 @@ pub fn download_update(rel: &Release, arch: &str) -> Result<std::path::PathBuf, 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            let mode = if packaged { 0o644 } else { 0o755 };
             let _ = std::fs::set_permissions(
                 &plan.dest,
-                std::fs::Permissions::from_mode(0o755),
+                std::fs::Permissions::from_mode(mode),
             );
         }
         Ok(())
@@ -1131,10 +1167,47 @@ fn copy_new(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// What the updater did with a verified download.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UpdateOutcome {
+    /// The new build is installed at this path; the caller may relaunch it.
+    Installed(PathBuf),
+    /// The archive is verified, but installing it needs the user's command.
+    Manual(ManualInstall),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ManualInstall {
+    pub command: String,
+    pub reason: String,
+}
+
+/// Install the verified download, or report the command that finishes it.
+///
+/// An AppImage is swapped in place. An Arch package cannot be replaced by
+/// the user process running out of `/usr`, so it goes through pacman, with
+/// polkit (`pkexec`) asking for the password. When no polkit agent can ask,
+/// the verified archive stays in the state directory and the caller shows
+/// the one-line `sudo pacman -U` command instead.
+pub fn install_update_and_restart(
+    dl: &std::path::Path,
+    tag: &str,
+) -> Result<UpdateOutcome, String> {
+    // The running format decides, not what else is installed: an AppImage
+    // stays self-updating even when the Arch package also exists.
+    if appimage_path().is_some() {
+        return install_appimage_update(dl, tag).map(UpdateOutcome::Installed);
+    }
+    if crate::paths::in_arch_package() {
+        return install_arch_package(dl);
+    }
+    Err("not running as an AppImage or an Arch package".to_string())
+}
+
 /// Swap the running AppImage for the freshly downloaded one, then return
 /// its path (the caller relaunches it once the single-instance lock is
 /// free - a new copy started now would just report "Already running").
-pub fn install_update_and_restart(
+fn install_appimage_update(
     dl: &std::path::Path,
     tag: &str,
 ) -> Result<std::path::PathBuf, String> {
@@ -1224,6 +1297,87 @@ pub fn install_update_and_restart(
         return Err(format!("could not replace the AppImage ({e})"));
     }
     Ok(target)
+}
+
+/// Install a verified Arch package with pacman. polkit's graphical agent asks
+/// for the password; without an agent the command is returned for the user.
+fn install_arch_package(dl: &std::path::Path) -> Result<UpdateOutcome, String> {
+    use std::process::Command;
+
+    let archive = std::fs::canonicalize(dl).unwrap_or_else(|_| dl.to_path_buf());
+    let command = format!("sudo pacman -U {}", shell_quote(&archive));
+    if !Path::new("/usr/bin/pacman").is_file() {
+        return Ok(UpdateOutcome::Manual(ManualInstall {
+            command,
+            reason: "pacman was not found, so this is not a standard Arch install".to_string(),
+        }));
+    }
+    let pkexec = ["/usr/bin/pkexec", "/bin/pkexec", "/usr/local/bin/pkexec"]
+        .into_iter()
+        .find(|p| Path::new(p).is_file());
+    let Some(pkexec) = pkexec else {
+        return Ok(UpdateOutcome::Manual(ManualInstall {
+            command,
+            reason: "polkit (pkexec) is not installed, so no password prompt can appear"
+                .to_string(),
+        }));
+    };
+
+    let output = Command::new(pkexec)
+        .arg("/usr/bin/pacman")
+        .args(["-U", "--noconfirm", "--noprogressbar"])
+        .arg(&archive)
+        .output()
+        .map_err(|e| format!("could not start pkexec: {e}"))?;
+    if output.status.success() {
+        // The vendor unit changed with the package; refresh systemd's copy so
+        // the restarted sync service runs the new engine.
+        let _ = Command::new("systemctl")
+            .args(["--user", "daemon-reload"])
+            .status();
+        if let Some(dir) = dl.parent()
+            && dir
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with(".proton-update-"))
+        {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        return Ok(UpdateOutcome::Installed(
+            std::env::current_exe().unwrap_or_else(|_| PathBuf::from("/usr/bin/proton-drive-gui")),
+        ));
+    }
+
+    let code = output.status.code().unwrap_or(-1);
+    if code == 126 || code == 127 {
+        // pkexec's "dismissed" / "not authorized" / "no agent" exits.
+        return Ok(UpdateOutcome::Manual(ManualInstall {
+            command,
+            reason: "the password prompt was dismissed or no polkit agent is running"
+                .to_string(),
+        }));
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let detail = stderr
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("no error output");
+    Err(format!("pacman could not install the update (exit {code}): {detail}"))
+}
+
+/// Quote one path for a copy-paste shell command.
+fn shell_quote(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    if !text.is_empty()
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"/._+-".contains(&b))
+    {
+        text.into_owned()
+    } else {
+        format!("'{}'", text.replace('\'', "'\\''"))
+    }
 }
 
 #[cfg(test)]
@@ -1398,6 +1552,43 @@ mod tests {
     }
 
     #[test]
+    fn arch_package_plan_uses_the_package_asset_and_a_private_directory() {
+        let rel = rel("0.9.0", "3.33.12");
+        let plan = download_plan(&rel, "x86_64", None, true).unwrap();
+        assert_eq!(
+            plan.name,
+            "proton-drive-0.9.0+gui3.33.12-1-x86_64.pkg.tar.zst"
+        );
+        assert!(plan.url.ends_with(&plan.name));
+        let state = crate::paths::resolve().state_dir;
+        assert!(plan.dest.starts_with(&state), "{}", plan.dest.display());
+        assert!(
+            plan.dest
+                .parent()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".proton-update-")
+        );
+        // There is no aarch64 Arch package to fall back to.
+        assert!(download_plan(&rel, "aarch64", None, true).is_err());
+    }
+
+    #[test]
+    fn shell_quote_survives_spaces_and_quotes() {
+        assert_eq!(
+            shell_quote(Path::new("/home/u/.state/update.pkg.tar.zst")),
+            "/home/u/.state/update.pkg.tar.zst"
+        );
+        assert_eq!(shell_quote(Path::new("/home/a b/pkg")), "'/home/a b/pkg'");
+        assert_eq!(
+            shell_quote(Path::new("/home/o'brien/pkg")),
+            "'/home/o'\\''brien/pkg'"
+        );
+    }
+
+    #[test]
     fn update_comparison_is_qt_semantics() {
         // newer CLI always wins
         assert!(has_update("0.9.0", &rel("0.10.0", "3.14.0")));
@@ -1434,7 +1625,7 @@ mod tests {
         let target = dir.join("current.AppImage");
         std::fs::write(&target, b"x").unwrap();
         let rel = rel("0.9.0", "3.31.2");
-        let plan = download_plan(&rel, "x86_64", Some(&target)).unwrap();
+        let plan = download_plan(&rel, "x86_64", Some(&target), false).unwrap();
         let manifest = http_get_text_retry(&plan.sums_url, 60).unwrap();
         let signature = http_get_bytes_retry(&plan.sig_url, 60, 1024).unwrap();
         check_manifest_trust(manifest.as_bytes(), &signature).unwrap();
@@ -1519,14 +1710,14 @@ mod tests {
             url: "https://evil/x.AppImage".into(),
             digest: Some("a".repeat(64)),
         });
-        let e = download_plan(&r, "x86_64", Some(&app)).unwrap_err();
+        let e = download_plan(&r, "x86_64", Some(&app), false).unwrap_err();
         assert!(e.contains("trusted host"), "{e}");
 
         r.assets[0].url =
             "https://github.com/zhafribs/Proton-Drive-Linux-Cli/releases/download/v1/x.AppImage"
                 .into();
         r.assets[0].digest = Some("not-a-digest".into());
-        let e = download_plan(&r, "x86_64", Some(&app)).unwrap_err();
+        let e = download_plan(&r, "x86_64", Some(&app), false).unwrap_err();
         assert!(e.contains("not a SHA-256"), "{e}");
         let _ = std::fs::remove_dir_all(&target);
     }
@@ -1762,7 +1953,7 @@ mod tests {
         std::fs::write(&app, b"x").unwrap();
         let mut r = rel("0.9.0", "3.20.22");
         r.assets.clear();
-        let plan = download_plan(&r, "x86_64", Some(&app)).unwrap();
+        let plan = download_plan(&r, "x86_64", Some(&app), false).unwrap();
         assert!(plan.url.ends_with(
             "/v0.9.0-gui3.20.22/ProtonDrive-CLI-0.9.0-GUI-3.20.22-x86_64.AppImage"
         ));
@@ -1797,7 +1988,7 @@ mod tests {
                 digest: None,
             },
         ];
-        let plan = download_plan(&r, "x86_64", Some(&app)).unwrap();
+        let plan = download_plan(&r, "x86_64", Some(&app), false).unwrap();
         assert!(plan.sig_url.ends_with("SHA256SUMS.sig"));
         assert!(plan.sums_url.ends_with("SHA256SUMS"));
         let _ = std::fs::remove_dir_all(&dir);

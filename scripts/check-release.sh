@@ -31,6 +31,7 @@ APPIMAGE_ARM64="$DIST/ProtonDrive-CLI-${VERSION}-GUI-${GUI_VERSION}-aarch64.AppI
 DEB_AMD64="$DIST/proton-drive_${VERSION}+gui${GUI_VERSION}_amd64.deb"
 DEB_ARM64="$DIST/proton-drive_${VERSION}+gui${GUI_VERSION}_arm64.deb"
 FLATPAK="$DIST/proton-drive_${VERSION}+gui${GUI_VERSION}_x86_64.flatpak"
+ARCH_PKG="$DIST/proton-drive-${VERSION}+gui${GUI_VERSION}-1-x86_64.pkg.tar.zst"
 [ -f "$APPIMAGE" ] || die "missing artifact $(basename "$APPIMAGE")"
 [ -f "$DIST/SHA256SUMS" ] || die "dist/SHA256SUMS missing"
 
@@ -107,6 +108,25 @@ if [ -z "${CHECK_RELEASE_PUBLIC_KEY:-}" ]; then
         || die "aarch64 AppImage is not an AArch64 ELF"
     [ -f "$FLATPAK" ] || die "missing artifact $(basename "$FLATPAK") - run scripts/build-flatpak.sh"
     [ -s "$FLATPAK" ] || die "$(basename "$FLATPAK") is empty"
+    [ -f "$ARCH_PKG" ] || die "missing artifact $(basename "$ARCH_PKG") - run scripts/build-pkg.sh"
+    pkg_members="$(tar --zstd -tf "$ARCH_PKG")" \
+        || die "$(basename "$ARCH_PKG") is not a readable zstd package"
+    grep -qx '.PKGINFO' <<<"$pkg_members" || die "$(basename "$ARCH_PKG") has no .PKGINFO"
+    grep -qx '.MTREE' <<<"$pkg_members" || die "$(basename "$ARCH_PKG") has no .MTREE"
+    pkg_info="$(tar --zstd -xOf "$ARCH_PKG" .PKGINFO)"
+    grep -qx "pkgname = proton-drive" <<<"$pkg_info" || die "$(basename "$ARCH_PKG") has the wrong package name"
+    grep -qx "pkgver = ${VERSION}+gui${GUI_VERSION}-1" <<<"$pkg_info" \
+        || die "$(basename "$ARCH_PKG") has the wrong version"
+    grep -qx "arch = x86_64" <<<"$pkg_info" || die "$(basename "$ARCH_PKG") has the wrong architecture"
+    for member in usr/bin/proton-drive usr/bin/proton-drive-gui usr/bin/proton-engine \
+                  usr/lib/proton-drive/proton-drive usr/lib/proton-drive/package \
+                  usr/lib/systemd/user/proton-sync.service; do
+        grep -qx "$member" <<<"$pkg_members" \
+            || die "$(basename "$ARCH_PKG") is missing $member"
+    done
+    tar --zstd -xOf "$ARCH_PKG" usr/lib/systemd/user/proton-sync.service \
+        | grep -q "PROTON_GUI_VERSION=${GUI_VERSION}" \
+        || die "$(basename "$ARCH_PKG") service unit has the wrong GUI version"
     for pair in "$DEB_AMD64:amd64" "$DEB_ARM64:arm64"; do
         deb="${pair%%:*}"
         darch="${pair##*:}"
@@ -126,7 +146,7 @@ fi
 # --- checksums and the version-bump guard.
 ( cd "$DIST" && sha256sum -c --ignore-missing SHA256SUMS >/dev/null ) \
     || die "dist/SHA256SUMS does not match the built AppImage"
-for artifact in "$APPIMAGE" "$APPIMAGE_ARM64" "$DEB_AMD64" "$DEB_ARM64" "$FLATPAK"; do
+for artifact in "$APPIMAGE" "$APPIMAGE_ARM64" "$DEB_AMD64" "$DEB_ARM64" "$FLATPAK" "$ARCH_PKG"; do
     if [ -f "$artifact" ]; then
         grep -q "  $(basename "$artifact")\$" "$DIST/SHA256SUMS" \
             || die "dist/SHA256SUMS has no entry for $(basename "$artifact")"

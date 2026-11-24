@@ -1,0 +1,13 @@
+#!/bin/sh
+# Arch Linux entry point. Mirrors the AppImage's AppRun routing without the
+# AppImage: no argument opens the GUI, `__sync-engine` starts the sync engine,
+# and every other argument is the upstream Proton CLI.
+case "${1-}" in
+    '') exec /usr/bin/proton-drive-gui ;;
+    __sync-engine)
+        shift
+        exec /usr/bin/proton-engine --loop "$@"
+        ;;
+    __gui|--smoke|--diagnose) exec /usr/bin/proton-drive-gui "$@" ;;
+    *) exec /usr/lib/proton-drive/proton-drive "$@" ;;
+esac

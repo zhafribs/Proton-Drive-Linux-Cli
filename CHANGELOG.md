@@ -1,3 +1,23 @@
+## 3.33.11 — 2026-11-25
+
+### Native Arch Linux package
+
+- **`proton-drive-<cli>+gui<app>-1-x86_64.pkg.tar.zst`** installs the desktop
+  app, sync engine, official CLI and command dispatcher natively under
+  `/usr` — no AppImage, no FUSE — with desktop entry, AppStream metadata,
+  icons and licences from the same tested payload.
+- **The packaged sync service is recognised.** Distro packages ship
+  `proton-sync.service` in systemd's vendor directory; the GUI now finds it
+  there, so Start, Pause and Start-at-login work in a native install instead
+  of the app behaving as if no service existed.
+- **The in-app update button now updates the Arch package.** It downloads the
+  release's `.pkg.tar.zst`, verifies it against the signed `SHA256SUMS`, then
+  runs `pacman -U` through polkit — the system password dialog. If no polkit
+  agent can ask, the verified archive stays on disk and the app shows the exact
+  `sudo pacman -U …` command with a Copy button.
+- **AppStream metadata is format-neutral.** It no longer calls every build an
+  AppImage, now that releases also ship a native Arch package.
+
 ## 3.33.10 — 2026-11-24
 
 ### No more hourly “1 file(s) uploaded”

@@ -2,28 +2,29 @@
 <component type="desktop-application">
   <id>io.github.zhafribs.protondrivecli</id>
   <name>Proton Drive</name>
-  <summary>Sync and manage your Proton Drive - unofficial AppImage with the official CLI inside</summary>
+  <summary>Sync and manage your Proton Drive - unofficial desktop app with the official CLI inside</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <description>
     <p>
-      Unofficial AppImage packaging of the official Proton Drive CLI published by
+      Unofficial packaging of the official Proton Drive CLI published by
       Proton AG, plus an open-source desktop app built on top of it. The CLI
-      binary inside is the unmodified upstream linux build, verified against
-      the SHA-512 checksum published on proton.me before it is packaged.
+      binary is the unmodified upstream Linux build, verified against the
+      SHA-512 checksum published on proton.me before it is packaged.
     </p>
     <p>
-      Double-clicking the AppImage opens the app window: sign in once, pick a
-      folder, and it stays in sync both ways in the background - deletions,
-      renames and moves included, with a tray icon and optional start-at-login.
-      Running the AppImage with arguments uses the upstream command-line client
-      unchanged (auth, filesystem operations, sharing, albums and photos,
-      Google Takeout import); --help lists everything.
+      Launching the app opens its window: sign in once, pick a folder, and it
+      stays in sync both ways in the background - deletions, renames and moves
+      included, with a tray icon and optional start-at-login. Starting it with
+      arguments uses the upstream command-line client unchanged (auth,
+      filesystem operations, sharing, albums and photos, Google Takeout
+      import); --help lists everything.
     </p>
     <p>
-      Nothing else to install: the AppImage carries its own sync-engine
-      runtime inside (the desktop app is a native binary since GUI 3.14.0),
-      so it runs on any glibc 2.28+ system with FUSE and OpenGL - the
-      things every graphical session already has.
+      The desktop app and sync engine are native binaries and the official CLI
+      is bundled, so no separate install is needed. Releases are available as
+      an AppImage, a Debian package, a Flatpak and an Arch Linux package; the
+      AppImage additionally needs FUSE and OpenGL, which every graphical
+      session already has.
     </p>
     <p>
       This package is not produced or endorsed by Proton AG: it is unofficial
@@ -54,6 +55,6 @@
   </releases>
   <content_rating type="oars-1.1"/>
   <custom>
-    <value key="Package">AppImage</value>
+    <value key="Package">AppImage, deb, Flatpak, Arch Linux</value>
   </custom>
 </component>

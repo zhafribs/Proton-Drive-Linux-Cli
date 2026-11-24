@@ -1364,6 +1364,14 @@ fn updates_card(app: &mut SettingsView, ui: &mut egui::Ui) {
                 .weak(),
             );
             ui.add_space(4.0);
+        } else if crate::paths::in_arch_package() {
+            ui.label(
+                rt(t("Installing asks for your password through polkit. Without a \
+                     polkit agent, the app shows the pacman command to run."))
+                .size(11.5)
+                .weak(),
+            );
+            ui.add_space(4.0);
         }
         let mut v = app.draft.updates_auto;
         if widgets::toggle(ui, "Check for new versions automatically", &mut v, None) {
@@ -1382,7 +1390,7 @@ fn updates_card(app: &mut SettingsView, ui: &mut egui::Ui) {
             );
         }
         ui.add_space(6.0);
-        let has_update = app.upd.available.is_some() && app.ctx.paths.appimage.is_some();
+        let has_update = app.upd.available.is_some() && crate::release::can_self_update();
         ui.horizontal_wrapped(|ui| {
             if ui.tbutton("Check now").clicked() {
                 app.action_check_updates();

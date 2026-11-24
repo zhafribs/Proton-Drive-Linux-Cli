@@ -1,0 +1,15 @@
+[Unit]
+Description=Proton Drive folder sync (official CLI, two-way)
+
+[Service]
+Type=simple
+Environment=PROTON_DRIVE_BIN=/usr/lib/proton-drive/proton-drive
+Environment=PROTON_GUI_VERSION=@GUI_VERSION@
+Environment=MALLOC_ARENA_MAX=2
+EnvironmentFile=-%h/.config/proton-sync.conf
+ExecStart=/usr/bin/proton-drive __sync-engine
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=default.target

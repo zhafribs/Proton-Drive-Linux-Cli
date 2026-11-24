@@ -444,7 +444,7 @@ fn updates(app: &mut AboutView, ui: &mut egui::Ui) {
         let checking = app.upd.checking;
         let downloading = app.upd.downloading;
         let status = app.upd.label.clone();
-        let has_update = release.is_some() && app.ctx.paths.appimage.is_some();
+        let has_update = release.is_some() && crate::release::can_self_update();
 
         if !status.is_empty() {
             let short = status.split(" (").next().unwrap_or(&status).to_string();

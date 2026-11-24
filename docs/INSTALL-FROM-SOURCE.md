@@ -45,6 +45,13 @@ After the AppImages exist, build the matching Debian packages (plain `ar` and
 ./scripts/build-deb.sh all
 ```
 
+The native x86_64 Arch package needs `bsdtar` (`libarchive`) and `zstd`, but
+not `makepkg` or `fakeroot`:
+
+```bash
+./scripts/build-pkg.sh
+```
+
 The x86_64 Flatpak needs `flatpak`, `flatpak-builder` and the
 `org.freedesktop.Platform/Sdk//25.08` runtimes:
 

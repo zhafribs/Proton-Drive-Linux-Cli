@@ -22,6 +22,19 @@ pub fn in_flatpak() -> bool {
         || std::path::Path::new("/.flatpak-info").is_file()
 }
 
+/// Marker the Arch package installs beside its payload. The in-app updater
+/// reads it to install a new `.pkg.tar.zst` through pacman (with polkit)
+/// instead of trying to swap an AppImage that does not exist.
+pub const PACKAGE_MARKER: &str = "/usr/lib/proton-drive/package";
+
+pub fn in_arch_package() -> bool {
+    in_arch_package_at(std::path::Path::new(PACKAGE_MARKER))
+}
+
+fn in_arch_package_at(marker: &std::path::Path) -> bool {
+    std::fs::read_to_string(marker).is_ok_and(|text| text.trim() == "arch")
+}
+
 #[derive(Clone)]
 pub struct Paths {
     pub conf_file: PathBuf,
@@ -115,4 +128,25 @@ pub fn find_icon_svg() -> Option<PathBuf> {
         "/usr/share/icons/hicolor/scalable/apps/proton-drive-gui.svg",
     ));
     cands.into_iter().find(|p| p.is_file())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn package_marker_names_only_the_arch_package() {
+        let dir = std::env::temp_dir().join(format!("pd-marker-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("package");
+
+        assert!(!in_arch_package_at(&marker));
+        std::fs::write(&marker, "arch\n").unwrap();
+        assert!(in_arch_package_at(&marker));
+        std::fs::write(&marker, "flatpak").unwrap();
+        assert!(!in_arch_package_at(&marker));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

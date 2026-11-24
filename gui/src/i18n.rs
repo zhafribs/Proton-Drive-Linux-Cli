@@ -229,6 +229,12 @@ pub fn t(text: &str) -> String {
         "Updates" => "Kemas kini",
         "Check now" => "Semak sekarang",
         "Download and restart" => "Muat turun dan mulakan semula",
+        "Finish the update" => "Selesaikan kemas kini",
+        "Copy command" => "Salin perintah",
+        "Open a terminal, run this command, then reopen Proton Drive:" =>
+            "Buka terminal, jalankan perintah ini, kemudian buka semula Proton Drive:",
+        "Installing asks for your password through polkit. Without a polkit agent, the app shows the pacman command to run." =>
+            "Pemasangan meminta kata laluan anda melalui polkit. Tanpa agen polkit, aplikasi menunjukkan perintah pacman untuk dijalankan.",
         "Open download page" => "Buka halaman muat turun",
         "Technical details" => "Butiran teknikal",
         "Copy diagnostics" => "Salin diagnostik",

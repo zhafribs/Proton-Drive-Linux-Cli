@@ -586,16 +586,35 @@ pub fn ensure_service_unit(appimage: Option<&Path>, smoke: bool) -> String {
     "written".to_string()
 }
 
-/// Is there a unit file at all (repo installs may predate this app)?
+/// Distro packages install the same unit in systemd's vendor directory
+/// instead of writing a per-user copy. Without this lookup a native install
+/// looks like it has no sync service, so Start and Start-at-login are refused.
+const VENDOR_UNIT: &str = "/usr/lib/systemd/user/proton-sync.service";
+
+/// The user unit wins when both exist: an AppImage run writes its own copy
+/// there, and that must keep pointing at the AppImage, not at a stale package.
+fn first_unit_file(user: &Path, vendor: &Path) -> Option<PathBuf> {
+    [user, vendor]
+        .into_iter()
+        .find(|p| p.is_file())
+        .map(Path::to_path_buf)
+}
+
+fn unit_has_environment_file_at(user: &Path, vendor: &Path) -> bool {
+    first_unit_file(user, vendor)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .is_some_and(|text| text.contains("EnvironmentFile"))
+}
+
+/// Is there a unit file at all? AppImage runs write one under ~/.config;
+/// distro packages ship one in the vendor directory.
 pub fn unit_exists() -> bool {
-    crate::service_unit_path().is_file()
+    first_unit_file(&crate::service_unit_path(), Path::new(VENDOR_UNIT)).is_some()
 }
 
 /// Does the installed unit look like a current one (has EnvironmentFile)?
 pub fn unit_has_environment_file() -> bool {
-    std::fs::read_to_string(crate::service_unit_path())
-        .map(|t| t.contains("EnvironmentFile"))
-        .unwrap_or(false)
+    unit_has_environment_file_at(&crate::service_unit_path(), Path::new(VENDOR_UNIT))
 }
 
 /// Ask the running engine to check now. The file is a signal only: the engine
@@ -698,6 +717,36 @@ mod tests {
         // Quoting applies to paths with spaces (this repo lives in one).
         assert_eq!(quote_for_unit("plain"), "plain");
         assert_eq!(quote_for_unit("a b"), "\"a b\"");
+    }
+
+    #[test]
+    fn vendor_unit_is_found_without_a_user_copy() {
+        let dir = std::env::temp_dir().join(format!(
+            "pdservice-units-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let user = dir.join("user.service");
+        let vendor = dir.join("vendor.service");
+
+        assert_eq!(first_unit_file(&user, &vendor), None);
+        assert!(!unit_has_environment_file_at(&user, &vendor));
+
+        std::fs::write(&vendor, "[Service]\nEnvironmentFile=-/tmp/conf\n").unwrap();
+        assert_eq!(first_unit_file(&user, &vendor), Some(vendor.clone()));
+        assert!(unit_has_environment_file_at(&user, &vendor));
+
+        // A user unit still wins, so an AppImage run keeps its own copy.
+        std::fs::write(&user, "[Service]\nExecStart=/tmp/app.AppImage\n").unwrap();
+        assert_eq!(first_unit_file(&user, &vendor), Some(user.clone()));
+        assert!(!unit_has_environment_file_at(&user, &vendor));
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// An update can leave the unit naming a file that no longer exists

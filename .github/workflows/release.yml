@@ -141,6 +141,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             librsvg2-bin desktop-file-utils appstream binutils openssl \
+            libarchive-tools zstd \
             flatpak flatpak-builder
 
       - name: Cache the Rust build (registry + cargo tools + target)
@@ -244,6 +245,17 @@ jobs:
       - name: Build .deb packages
         run: SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" ./scripts/build-deb.sh all
 
+      - name: Build the Arch Linux package
+        run: SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" ./scripts/build-pkg.sh x86_64
+
+      - name: Prove the Arch package is reproducible
+        run: |
+          set -euo pipefail
+          cp dist/proton-drive-*.pkg.tar.zst "$RUNNER_TEMP/first.pkg.tar.zst"
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" ./scripts/build-pkg.sh x86_64
+          cmp "$RUNNER_TEMP/first.pkg.tar.zst" dist/proton-drive-*.pkg.tar.zst
+          echo "reproducible: both Arch packages are byte-identical"
+
       - name: Install the Flatpak runtime
         run: |
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
@@ -289,6 +301,7 @@ jobs:
                   dist/proton-drive_"${VERSION}"+gui"${GUI}"_amd64.deb
                   dist/proton-drive_"${VERSION}"+gui"${GUI}"_arm64.deb
                   dist/proton-drive_"${VERSION}"+gui"${GUI}"_x86_64.flatpak
+                  dist/proton-drive-"${VERSION}"+gui"${GUI}"-1-x86_64.pkg.tar.zst
                   dist/SHA256SUMS
                   dist/SHA256SUMS.sig
                   dist/revocations.json
@@ -302,6 +315,7 @@ jobs:
                         proton-drive_"${VERSION}"+gui"${GUI}"_amd64.deb \
                         proton-drive_"${VERSION}"+gui"${GUI}"_arm64.deb \
                         proton-drive_"${VERSION}"+gui"${GUI}"_x86_64.flatpak \
+                        proton-drive-"${VERSION}"+gui"${GUI}"-1-x86_64.pkg.tar.zst \
                         SHA256SUMS SHA256SUMS.sig revocations.json revocations.json.sig; do
               grep -qxF "$name" <<<"$existing" || missing=1
             done
@@ -316,7 +330,7 @@ jobs:
           else
             gh release create "$TAG" \
               --target "$(git rev-parse HEAD)" \
-              --title "Proton Drive CLI ${VERSION} + GUI ${GUI} — AppImage, deb + Flatpak" \
+              --title "Proton Drive CLI ${VERSION} + GUI ${GUI} — AppImage, deb, Flatpak + Arch" \
               --notes-file "$NOTES" \
               "${ASSETS[@]}"
             echo "Created release $TAG."
@@ -330,6 +344,7 @@ jobs:
             dist/*.AppImage
             dist/*.deb
             dist/*.flatpak
+            dist/*.pkg.tar.zst
             dist/SHA256SUMS
             dist/SHA256SUMS.sig
             dist/revocations.json

@@ -36,8 +36,9 @@ ARM="$DIST/ProtonDrive-CLI-${VERSION}-GUI-${GUI_VERSION}-aarch64.AppImage"
 DEB_AMD64="$DIST/proton-drive_${VERSION}+gui${GUI_VERSION}_amd64.deb"
 DEB_ARM64="$DIST/proton-drive_${VERSION}+gui${GUI_VERSION}_arm64.deb"
 FLATPAK="$DIST/proton-drive_${VERSION}+gui${GUI_VERSION}_x86_64.flatpak"
-for artifact in "$X86" "$ARM" "$DEB_AMD64" "$DEB_ARM64" "$FLATPAK" "$DIST/SHA256SUMS"; do
-    [ -f "$artifact" ] || { echo "error: missing $(basename "$artifact") - run ./build.sh and scripts/build-deb.sh first" >&2; exit 1; }
+ARCH_PKG="$DIST/proton-drive-${VERSION}+gui${GUI_VERSION}-1-x86_64.pkg.tar.zst"
+for artifact in "$X86" "$ARM" "$DEB_AMD64" "$DEB_ARM64" "$FLATPAK" "$ARCH_PKG" "$DIST/SHA256SUMS"; do
+    [ -f "$artifact" ] || { echo "error: missing $(basename "$artifact") - run the build scripts first" >&2; exit 1; }
 done
 
 # Sanity: SHA256SUMS must describe exactly the artifacts we are about to announce.
@@ -75,6 +76,7 @@ OTHER_ROWS="$TMP/other-rows.md"
     printf '| `%s` | Debian/Ubuntu amd64 | `%s` |\n' "$(basename "$DEB_AMD64")" "$(sha256 "$DEB_AMD64")"
     printf '| `%s` | Debian/Ubuntu arm64 | `%s` |\n' "$(basename "$DEB_ARM64")" "$(sha256 "$DEB_ARM64")"
     printf '| `%s` | Flatpak x86_64 | `%s` |\n' "$(basename "$FLATPAK")" "$(sha256 "$FLATPAK")"
+    printf '| `%s` | Arch Linux x86_64 | `%s` |\n' "$(basename "$ARCH_PKG")" "$(sha256 "$ARCH_PKG")"
 } > "$OTHER_ROWS"
 
 RENDERED="$TMP/rendered.md"
@@ -88,6 +90,7 @@ sed \
     -e "s|{{X86_FILE}}|$(basename "$X86")|g" \
     -e "s|{{DEB_AMD64_FILE}}|$(basename "$DEB_AMD64")|g" \
     -e "s|{{FLATPAK_FILE}}|$(basename "$FLATPAK")|g" \
+    -e "s|{{ARCH_FILE}}|$(basename "$ARCH_PKG")|g" \
     -e "/{{OTHER_ARCH}}/r $OTHER_ROWS" \
     -e "/{{OTHER_ARCH}}/d" \
     -e "s|{{TAG}}|v${VERSION}-gui${GUI_VERSION}|g" \

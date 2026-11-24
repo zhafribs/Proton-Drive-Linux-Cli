@@ -55,8 +55,9 @@ pub enum Back {
     SaveHint(String),
     /// Release check: (release, update available, installed CLI version).
     Update(Result<(release::Release, bool, String), String>),
-    /// Download + swap finished; Ok is the new AppImage's path.
-    UpdateInstalled(Result<String, String>),
+    /// Download + install finished. `Installed` carries the new binary to
+    /// relaunch; `Manual` carries the command when polkit could not install it.
+    UpdateInstalled(Result<release::UpdateOutcome, String>),
     /// Selective-sync folder listing (parent rel "" = the root level).
     SelFolders {
         parent: String,
@@ -259,6 +260,9 @@ pub struct UpdateUi {
     pub checking: bool,
     pub downloading: bool,
     pub quit_at: Option<std::time::Instant>,
+    /// Set when the verified archive needs the user's own pacman command
+    /// (no polkit agent); shown as a copyable instruction window.
+    pub manual: Option<release::ManualInstall>,
     /// automatic check schedule (startup + every 6h, updates_auto pref)
     pub next_check: Option<std::time::Instant>,
 }
@@ -1389,15 +1393,15 @@ impl App {
             return;
         }
         self.upd.downloading = true;
-        self.upd.label = "Downloading and verifying the update...".into();
+        self.upd.label = "Downloading, verifying and installing the update...".into();
+        self.upd.manual = None;
         self.toast("Downloading the update. This can take a few minutes.");
         let tx = self.ctx.tx.clone();
         // x86_64 / aarch64, the release filenames' arch (uname -m).
         let arch = std::env::consts::ARCH;
         std::thread::spawn(move || {
             let r = release::download_update(&rel, arch)
-                .and_then(|dl| release::install_update_and_restart(&dl, &rel.tag))
-                .map(|p| p.to_string_lossy().into_owned());
+                .and_then(|dl| release::install_update_and_restart(&dl, &rel.tag));
             let _ = tx.send(Back::UpdateInstalled(r));
         });
     }
@@ -1691,13 +1695,18 @@ impl App {
                 Back::UpdateInstalled(r) => {
                     self.upd.downloading = false;
                     match r {
-                        Ok(target) => {
+                        Ok(release::UpdateOutcome::Installed(target)) => {
                             self.upd.label = "Updated - the new version is starting...".to_string();
                             // main() starts it once the lock is free.
-                            *self.relaunch_slot.lock().unwrap() =
-                                Some(std::path::PathBuf::from(target));
+                            *self.relaunch_slot.lock().unwrap() = Some(target);
                             self.upd.quit_at =
                                 Some(std::time::Instant::now() + Duration::from_millis(1500));
+                        }
+                        Ok(release::UpdateOutcome::Manual(manual)) => {
+                            self.upd.label =
+                                "Update downloaded and verified - authorize the install to finish."
+                                    .to_string();
+                            self.upd.manual = Some(manual);
                         }
                         Err(e) => {
                             self.upd.label = format!("Update failed: {e}");
@@ -2661,6 +2670,59 @@ impl App {
         }
     }
 
+    /// A verified package update that needs the user's own command. The
+    /// window stays until dismissed, so the command is never lost.
+    fn update_manual_ui(&mut self, ctx: &egui::Context) {
+        let Some(manual) = self.upd.manual.clone() else {
+            return;
+        };
+        let mut close = false;
+        egui::Window::new(crate::i18n::tr("Finish the update", "Selesaikan kemas kini"))
+            .id(egui::Id::unique("update-manual"))
+            .collapsible(false)
+            .resizable(false)
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_max_width(560.0);
+                ui.label(
+                    rt(format!(
+                        "The update was downloaded and verified, but it could not be \
+                         installed automatically: {}.",
+                        manual.reason
+                    ))
+                    .size(12.5),
+                );
+                ui.add_space(6.0);
+                ui.label(
+                    rt(crate::i18n::tr(
+                        "Open a terminal, run this command, then reopen Proton Drive:",
+                        "Buka terminal, jalankan perintah ini, kemudian buka semula \
+                         Proton Drive:",
+                    ))
+                    .size(12.0),
+                );
+                let mut command = manual.command.clone();
+                ui.add(
+                    egui::TextEdit::singleline(&mut command)
+                        .font(egui::TextStyle::Monospace)
+                        .desired_width(f32::INFINITY),
+                );
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    if ui.tbutton("Copy command").clicked() {
+                        ui.ctx().copy_text(manual.command.clone());
+                    }
+                    if ui.tbutton("Close").clicked() {
+                        close = true;
+                    }
+                });
+            });
+        if close {
+            self.upd.manual = None;
+        }
+    }
+
     /// A silent 50 MB download looked like a hang. This stays above every
     /// page until the signed update is installed and the app restarts.
     fn update_progress_ui(&mut self, ctx: &egui::Context) {
@@ -2697,6 +2759,16 @@ impl App {
                 .size(11.5)
                 .weak(),
             );
+            if crate::paths::in_arch_package() {
+                ui.add_space(4.0);
+                ui.label(
+                    rt(crate::i18n::tr(
+                        "Enter your password in the system dialog to install the package.",
+                        "Masukkan kata laluan anda dalam dialog sistem untuk memasang pakej.",
+                    ))
+                    .size(11.5),
+                );
+            }
         });
         ctx.request_repaint_after(Duration::from_millis(100));
     }
@@ -3733,6 +3805,7 @@ impl App {
         self.dialog_ui(&ctx);
         self.onboarding_ui(&ctx);
         self.update_progress_ui(&ctx);
+        self.update_manual_ui(&ctx);
     }
 }
 

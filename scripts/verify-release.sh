@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Download a published release and verify checksums, signatures, smoke,
-# GLIBC floor and the .deb metadata. Usage: scripts/verify-release.sh [tag]
-# (default: latest)
+# GLIBC floor, the .deb metadata and the Arch package. Usage:
+# scripts/verify-release.sh [tag] (default: latest)
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TAG="${1:-latest}"
@@ -79,4 +79,28 @@ for deb in proton-drive_*_amd64.deb proton-drive_*_arm64.deb; do
     grep -qx './usr/lib/proton-drive/ProtonDrive.AppImage' <<<"$data_list" \
         || { echo "$deb does not install the AppImage" >&2; exit 1; }
     echo "deb: $deb OK"
+done
+
+for pkg in proton-drive-*-x86_64.pkg.tar.zst; do
+    [ -f "$pkg" ] || { echo "missing Arch package: $pkg" >&2; exit 1; }
+    info="$(tar --zstd -xOf "$pkg" .PKGINFO)" \
+        || { echo "$pkg has no readable .PKGINFO" >&2; exit 1; }
+    grep -qx 'pkgname = proton-drive' <<<"$info" \
+        || { echo "$pkg has the wrong package name" >&2; exit 1; }
+    grep -qx 'arch = x86_64' <<<"$info" \
+        || { echo "$pkg architecture mismatch" >&2; exit 1; }
+    members="$(tar --zstd -tf "$pkg")"
+    for member in usr/bin/proton-drive usr/bin/proton-drive-gui usr/bin/proton-engine \
+                  usr/lib/proton-drive/proton-drive usr/lib/proton-drive/package \
+                  usr/lib/systemd/user/proton-sync.service; do
+        grep -qx "$member" <<<"$members" \
+            || { echo "$pkg is missing $member" >&2; exit 1; }
+    done
+    mkdir -p "$TMP/pkg-root"
+    tar --zstd -xf "$pkg" -C "$TMP/pkg-root" usr/bin/proton-drive-gui usr/bin/proton-engine
+    for f in proton-drive-gui proton-engine; do
+        glibc_floor "$TMP/pkg-root/usr/bin/$f"
+    done
+    rm -rf "$TMP/pkg-root"
+    echo "arch package: $pkg OK"
 done
