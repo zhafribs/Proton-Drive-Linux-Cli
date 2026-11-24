@@ -1,0 +1,100 @@
+# Release evidence — v0.9.0-gui3.33.11
+
+Tag: v0.9.0-gui3.33.11
+Purpose: ship a native Arch Linux package and make the app's own update button
+update it, with polkit when available and a copyable command when it is not.
+
+## What changed
+
+- New release asset `proton-drive-0.9.0+gui3.33.11-1-x86_64.pkg.tar.zst`.
+  It installs the tested payload natively under `/usr` (GUI, engine, official
+  CLI, dispatcher, desktop entry, AppStream metadata, icons and licences).
+  There is no AppImage and no FUSE requirement.
+- The package ships `proton-sync.service` in systemd's vendor directory and a
+  `/usr/lib/proton-drive/package` marker. The GUI now finds the vendor unit, so
+  Start, Pause and Start-at-login work in a native install.
+- With the marker present, **Download and restart** downloads the release's
+  `.pkg.tar.zst`, verifies it against the signed `SHA256SUMS`, and runs
+  `pacman -U` through `pkexec` (polkit password dialog). Without a polkit agent
+  or a dismissed prompt, the verified archive stays on disk and the app shows
+  the exact `sudo pacman -U …` command with a Copy button.
+- AppImage installs keep the AppImage self-update path even if the Arch package
+  is also installed (the running format decides).
+
+## Package contents
+
+Installed size 120.77 MiB, depends on the system GUI stack (glibc, fontconfig,
+libglvnd, libX11/XCB/cursor/Xi/xkbcommon/Xrandr/Xrender, Wayland), optional
+polkit for the password prompt.
+
+    usr/bin/proton-drive                         dispatcher (no args = GUI)
+    usr/bin/proton-drive-gui
+    usr/bin/proton-engine
+    usr/lib/proton-drive/proton-drive            official CLI, unmodified
+    usr/lib/proton-drive/package                 "arch" updater marker
+    usr/lib/systemd/user/proton-sync.service     ExecStart=/usr/bin/proton-drive __sync-engine
+    usr/share/applications/io.github.zhafribs.protondrivecli.desktop
+    usr/share/metainfo/io.github.zhafribs.protondrivecli.appdata.xml
+    usr/share/icons/hicolor/{256x256,512x512}/apps/proton-drive.png
+    usr/share/icons/hicolor/scalable/apps/proton-drive{,-gui}.svg
+    usr/share/licenses/proton-drive/{LICENSE,THIRD-PARTY.txt}
+
+## Build and gate
+
+- `cargo test --workspace --all-targets`: 340 passed, 0 failed, 6 ignored.
+- `cargo clippy --release --workspace --all-targets -D warnings`: clean.
+- CI run `45446727261`: verify and release jobs succeeded; `check-release: OK —
+  CLI 0.9.0, GUI 3.33.11`.
+- The workflow rebuilt the package from the same commit and `cmp` reported it
+  byte-identical (`reproducible: both Arch packages are byte-identical`).
+
+## Published assets (signed SHA256SUMS)
+
+    ProtonDrive-CLI-0.9.0-GUI-3.33.11-x86_64.AppImage    52799992 bytes
+    ProtonDrive-CLI-0.9.0-GUI-3.33.11-aarch64.AppImage   51423752 bytes
+    proton-drive_0.9.0+gui3.33.11_amd64.deb              51905956 bytes
+    proton-drive_0.9.0+gui3.33.11_arm64.deb              50513400 bytes
+    proton-drive_0.9.0+gui3.33.11_x86_64.flatpak         40108592 bytes
+    proton-drive-0.9.0+gui3.33.11-1-x86_64.pkg.tar.zst   49167997 bytes
+
+SHA-256 (signed SHA256SUMS):
+
+    b7032d01402489efadd67308806976960015abed45fe6be5fa8768656b739bde  x86_64 AppImage
+    64912815a3cd16258efa979cce457a676ad7e8f3c4df215615aacb24906144c6  aarch64 AppImage
+    e2523db15dc431de27fa87ff83bab378b8a4262b3748828950b2ffa4be157e6b  amd64 .deb
+    6a56d7ac6ea537dc674fe9e70af7c3229cb4da52c417a3604ac7dcb67d441fa0  arm64 .deb
+    7c25291e8aff1857b2a32d3d33fec6377ecd17e3eafdc2d522373b5d3472f33d  x86_64 .flatpak
+    6a571c82bdd92df40dcfedc4f8aee8c8309676e0acd81d01f74580cace9c4d71  Arch package
+
+## Verification
+
+`scripts/verify-release.sh v0.9.0-gui3.33.11` downloaded the published release
+and reported:
+
+- `signature: SHA256SUMS OK` and `signature: revocations.json OK`.
+- x86_64 smoke: `gui 3.33.11`, CLI reachable, health status `ok`.
+- GLIBC floor 2.28 for AppRun, GUI and engine on both AppImages, and for the
+  GUI and engine inside the Arch package.
+- Both `.deb` files install the tested AppImage; the Flatpak bundle and the
+  Arch package are present and well formed.
+
+The published Arch package was installed into a disposable pacman root
+(`pacman -Udd --root …`): installed cleanly, `/usr/lib/proton-drive/package`
+contains `arch`, and `pacman -Qip` reports version
+`0.9.0+gui3.33.11-1`, architecture `x86_64`, installed size 120.77 MiB.
+
+In a user namespace with the package's files overlaid on `/usr`:
+
+- `proton-drive --version` reached the official CLI through the dispatcher.
+- `systemd-analyze verify` accepted the vendor unit and its `ExecStart`.
+- `PROTON_SYNC_SMOKE=1 proton-drive --smoke` reported
+  `smoke ok: gui 3.33.11, conf keys 15, cli true, health status 'ok'`.
+
+## Limits
+
+- The live polkit password dialog was not automated: it needs an interactive
+  desktop session and a newer release than the one being installed. The
+  download, signed-manifest verification, asset selection and install command
+  are covered by tests; the first package-to-package update will be 3.33.12.
+- A custom `XDG_CONFIG_HOME`/`XDG_STATE_HOME` is not carried into the vendor
+  unit (it uses the systemd `%h` defaults). Default Arch desktops are unaffected.
