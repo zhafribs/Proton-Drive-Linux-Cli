@@ -1,0 +1,91 @@
+# Release evidence — v0.9.0-gui3.33.13
+
+Tag: v0.9.0-gui3.33.13
+Purpose: make Colors → "My system" follow the desktop palette immediately,
+from whatever file the wallpaper tool writes.
+
+## What changed
+
+- **No filename is special.** The palette reader used to try
+  `gtk-4.0/noctalia.css`, `gtk-3.0/noctalia.css` and the two stock `gtk.css`
+  files. It now scans every `*.css` in `~/.config/gtk-4.0` and then
+  `~/.config/gtk-3.0`, newest first, and takes the first file that carries the
+  complete token set (`accent_*`, `window_bg_color`/`view_bg_color`,
+  `card_bg_color`/`popover_bg_color`, `window_fg_color`/`view_fg_color`).
+  - A stock `gtk.css` that is only `@import url("...")` parses to nothing and
+    is skipped; the imported file is found by the scan.
+  - After switching palette tools, the file just generated wins over the old
+    tool's leftover, because files are ordered by modification time.
+  - Tools covered in practice: Noctalia, matugen, pywal's GTK template,
+    Gradience, caelestia, end-4's templates and ML4W — all write GTK CSS,
+    under different names.
+- **Immediate repaint.** An inotify watch on the two GTK config directories
+  wakes the UI on any `*.css` create/write/rename. The 30-second theme poll
+  stays as the safety net, and when inotify cannot watch, a one-second
+  re-read-and-compare loop replaces it.
+- The Settings hint under Colors now names the tools generically.
+
+## Build and gate
+
+- `cargo test --workspace --all-targets`: 352 passed, 0 failed, 6 ignored.
+- `cargo clippy --release --workspace --all-targets -D warnings`: clean.
+- CI run `45601817702` (commit `229100c`) passed; `check-release: OK — CLI
+  0.9.0, GUI 3.33.13`; the workflow rebuilt the Arch package and `cmp`
+  reported it byte-identical (`reproducible: both Arch packages are
+  byte-identical`).
+- An earlier run for `cf801c5` was cancelled before publishing, so this is the
+  only 3.33.13 release.
+
+## Published assets (signed SHA256SUMS)
+
+    ProtonDrive-CLI-0.9.0-GUI-3.33.13-x86_64.AppImage    52808184 bytes
+    ProtonDrive-CLI-0.9.0-GUI-3.33.13-aarch64.AppImage   51427848 bytes
+    proton-drive_0.9.0+gui3.33.13_amd64.deb              51913512 bytes
+    proton-drive_0.9.0+gui3.33.13_arm64.deb              50516076 bytes
+    proton-drive_0.9.0+gui3.33.13_x86_64.flatpak         40114704 bytes
+    proton-drive-0.9.0+gui3.33.13-1-x86_64.pkg.tar.zst   49172779 bytes
+
+SHA-256 (signed SHA256SUMS):
+
+    3b76a2309918a1badd09b32e761debc35beede16cffa5247a1ff31368977b692  x86_64 AppImage
+    e0859ab72af5910599cf2bf1b8e6abb5b3aa47edc48b45a39dd6b16999d9297d  aarch64 AppImage
+    7dda4f41a94a4329b02640bc75edc6b9534cd2c8681abbd938ab60ce2756c908  amd64 .deb
+    e68bc67891e7a9c3337379746068cf84cdba117891c812ef6a2677185568b3a9  arm64 .deb
+    d28931e000d5ccdc9f123fa91556cff9b7a0bddaec18a3d884fdb463358938fc  x86_64 .flatpak
+    98f93bba8bfb1722b23e70c2cc13e3fb6f52e8ba02ac43882c999a0fb6d768cd  Arch package
+
+## Verification
+
+`scripts/verify-release.sh v0.9.0-gui3.33.13` downloaded the published release:
+
+- `signature: SHA256SUMS OK` and `signature: revocations.json OK`.
+- GLIBC floor 2.28 for AppRun, GUI and engine on both AppImages, and for the
+  GUI and engine inside the Arch package.
+- Flatpak, both `.deb` files and the Arch package present and well formed.
+
+The published Arch package was downloaded again, its checksum matched the
+signed manifest (`sha256sum -c`: OK), and it installed on the live machine
+through polkit:
+
+    pacman -U proton-drive-0.9.0+gui3.33.13-1-x86_64.pkg.tar.zst
+    upgraded proton-drive (0.9.0+gui3.33.12-1 -> 0.9.0+gui3.33.13-1)
+
+After restarting the vendor service and the GUI:
+
+    package            proton-drive 0.9.0+gui3.33.13-1
+    service            active, /usr/lib/systemd/user/proton-sync.service
+    processes          /usr/bin/proton-engine --loop, /usr/bin/proton-drive-gui
+    health             status syncing, build 3.33.13
+
+On the live config the reader finds `gtk-4.0/noctalia.css` (36
+`@define-color` tokens, newest complete file); the newer
+`gtk-4.0/noctalia-extensions.css` has no tokens and is skipped, and the stock
+`gtk.css` is an `@import` stub.
+
+## Limits
+
+- Only GTK CSS is read. A setup that generates no GTK colours (for example a
+  scheme kept solely in JSON/Hyprland config) still falls back to Proton
+  colours; adding a second format would need its own parser and tests.
+- The watch covers the two GTK directories that exist when the app starts. A
+  directory created later is picked up by the 30-second theme tick.
