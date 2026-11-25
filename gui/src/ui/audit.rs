@@ -241,6 +241,7 @@ fn fixture(page: Page) -> App {
         scale_applied: None,
         size_dirty_since: None,
         theme_rx: mpsc::channel().1,
+        colors_rx: mpsc::channel().1,
         icon_tex: None,
         tray: None,
         wayland_fallback: false,

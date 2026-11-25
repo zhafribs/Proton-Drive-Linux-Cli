@@ -370,6 +370,8 @@ pub struct App {
     size_dirty_since: Option<Instant>,
     /// New colour schemes from `system_theme::watch` (OS flips).
     theme_rx: mpsc::Receiver<prefs::Theme>,
+    /// Wakes when the desktop rewrites its generated wallpaper palette.
+    colors_rx: mpsc::Receiver<()>,
     pub icon_tex: Option<egui::TextureHandle>,
     /// The system tray (None when the desktop has no tray host).
     pub tray: Option<tray::Tray>,
@@ -759,6 +761,7 @@ impl App {
 
         spawn_poller(tx.clone(), paths.clone(), journal.clone());
         let theme_rx = system_theme::watch(cc.egui_ctx.clone());
+        let colors_rx = crate::system_colors::watch(cc.egui_ctx.clone());
 
         // Identity (version + sign-in) as soon as the window exists.
         let tx_id = tx.clone();
@@ -904,6 +907,7 @@ impl App {
             scale_applied: None,
             size_dirty_since: None,
             theme_rx,
+            colors_rx,
             icon_tex,
             tray,
             wayland_fallback,
@@ -1717,24 +1721,30 @@ impl App {
         }
     }
 
-    /// Take the desktop's latest colour scheme. Only the "Match my system"
-    /// preference reacts; an explicit Light/Dark keeps winning.
+    /// Take the desktop's latest colour scheme, and any rewrite of the
+    /// generated wallpaper palette. Only the "Match my system" preference
+    /// reacts; an explicit Light/Dark keeps winning.
     fn drain_theme(&mut self, ctx: &egui::Context) {
         let mut latest = None;
         while let Ok(theme) = self.theme_rx.try_recv() {
             latest = Some(theme);
         }
-        let Some(theme) = latest else { return };
-        if theme != self.system_theme {
+        let theme_changed = latest.is_some();
+        if let Some(theme) = latest
+            && theme != self.system_theme
+        {
             self.system_theme = theme.clone();
             if matches!(self.ctx.prefs.theme(), prefs::Theme::System) {
                 theme::force(ctx, &theme);
                 ctx.request_repaint();
             }
         }
-        // The same tick is the wallpaper hook: the desktop rewrites its GTK
-        // colours when the picture changes, and "My system" must follow.
-        if self.ctx.prefs.color_source() == prefs::ColorSource::System
+        // The desktop rewrites its generated GTK colours when the wallpaper
+        // changes. The file watcher reports that write, so "My system"
+        // repaints at once instead of waiting for the 30-second theme poll.
+        let colors_changed = self.colors_rx.try_iter().count() > 0;
+        if (theme_changed || colors_changed)
+            && self.ctx.prefs.color_source() == prefs::ColorSource::System
             && theme::refresh(ctx, prefs::ColorSource::System, self.ctx.prefs.motion_enabled())
         {
             ctx.request_repaint();

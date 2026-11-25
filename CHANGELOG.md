@@ -1,3 +1,15 @@
+## 3.33.13 — 2026-11-25
+
+### Wallpaper colours apply immediately
+
+- **No more 30-second wait.** With **Settings → Appearance → Colors → My
+  system**, the window repaints as soon as the desktop rewrites its generated
+  GTK colours. A small inotify watcher on `~/.config/gtk-4.0` and
+  `~/.config/gtk-3.0` reports the write instead of the palette being noticed on
+  the next theme tick, so a wallpaper change recolours the app in well under a
+  second. If the watch cannot be installed, a one-second file check replaces it,
+  and the 30-second theme poll still covers the rest.
+
 ## 3.33.12 — 2026-11-25
 
 ### Follow the wallpaper, or keep Proton violet
