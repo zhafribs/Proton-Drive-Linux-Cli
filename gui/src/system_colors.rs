@@ -1,17 +1,19 @@
 //! The desktop's own colours, as the theme generator writes them.
 //!
-//! GTK colour schemes are plain `@define-color name #rrggbb;` files, and every
-//! wallpaper-colour tool (Noctalia, matugen, pywal's GTK template, Gradience,
-//! libadwaita's accent) writes the same names to the same two places. Reading
-//! those tokens is how "match my wallpaper" works without decoding the picture
-//! ourselves: the desktop already did it, and the shell is using the result.
+//! GTK colour schemes are plain `@define-color name #rrggbb;` files. Whatever
+//! generated them - Noctalia, matugen, pywal, Gradience, caelestia, end-4's
+//! templates, ML4W - they land in `~/.config/gtk-4.0` or `~/.config/gtk-3.0`
+//! under a name we do not have to know: every `*.css` there is read, newest
+//! first, and the first complete palette wins. Reading those tokens is how
+//! "match my wallpaper" works without decoding the picture ourselves: the
+//! desktop already did it, and the shell is using the result.
 
 use eframe::egui::Color32;
 use inotify::{EventMask, Inotify, WatchMask};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::Duration;
 
 /// The tokens the app needs. Everything else is derived from them so a
 /// wallpaper palette does not have to carry twenty hand-tuned shades.
@@ -30,14 +32,8 @@ impl SystemColors {
     }
 }
 
-/// The files a palette tool rewrites, relative to the config directory: the
-/// active desktop's generated file first, then the stock GTK one.
-const FILES: [&str; 4] = [
-    "gtk-4.0/noctalia.css",
-    "gtk-3.0/noctalia.css",
-    "gtk-4.0/gtk.css",
-    "gtk-3.0/gtk.css",
-];
+/// Where palette tools write, in preference order.
+const DIRS: [&str; 2] = ["gtk-4.0", "gtk-3.0"];
 
 fn config_base() -> Option<PathBuf> {
     std::env::var_os("XDG_CONFIG_HOME")
@@ -47,10 +43,45 @@ fn config_base() -> Option<PathBuf> {
 
 /// The desktop's generated palette, or `None` when nothing published one.
 pub fn read() -> Option<SystemColors> {
-    let base = config_base()?;
-    FILES
-        .iter()
-        .find_map(|rel| parse(&std::fs::read_to_string(base.join(rel)).ok()?))
+    read_at(&config_base()?)
+}
+
+/// Newest complete palette in the GTK config directories.
+///
+/// Filenames differ per tool (`gtk.css`, `noctalia.css`, `colors.css`, ...),
+/// and a stock `gtk.css` is often just an `@import` stub, so parse every CSS
+/// file and take the newest one that carries the tokens. GTK 4 wins over GTK 3
+/// when both publish one.
+fn read_at(base: &Path) -> Option<SystemColors> {
+    DIRS.iter().find_map(|dir| {
+        let mut files = css_files(&base.join(dir));
+        // Newest first: the file the desktop just generated is the palette in
+        // use; an older leftover from a previous tool must not win.
+        files.sort_by_key(|(time, _)| std::cmp::Reverse(*time));
+        files
+            .into_iter()
+            .find_map(|(_, path)| parse(&std::fs::read_to_string(path).ok()?))
+    })
+}
+
+/// `(modified, path)` for every CSS file in `dir`; subdirectories are ignored.
+fn css_files(dir: &Path) -> Vec<(std::time::SystemTime, PathBuf)> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| is_css_path(path))
+        .filter_map(|path| Some((std::fs::metadata(&path).ok()?.modified().ok()?, path)))
+        .collect()
+}
+
+fn is_css_path(path: &Path) -> bool {
+    path.is_file()
+        && path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("css"))
 }
 
 /// Fallback poll when inotify cannot watch the GTK directories.
@@ -60,9 +91,10 @@ const POLL: Duration = Duration::from_secs(1);
 ///
 /// A wallpaper change is not a colour-scheme change, so the portal's
 /// `SettingChanged` signal never fires for it and the 30-second theme poll
-/// left the window on the old palette for half a minute. The palette tools
-/// write these files in place or through a rename, which inotify reports at
-/// once; one `()` is sent per batch of writes and the UI thread re-reads.
+/// left the window on the old palette for half a minute. Palette tools write
+/// their CSS in place or through a rename, which inotify reports at once,
+/// whatever the file is called; one `()` is sent per batch of writes and the
+/// UI thread re-reads.
 pub fn watch(ctx: eframe::egui::Context) -> mpsc::Receiver<()> {
     let (tx, rx) = mpsc::channel();
     let Some(base) = config_base() else {
@@ -92,7 +124,7 @@ fn run(base: PathBuf, tx: mpsc::Sender<()>, ctx: eframe::egui::Context) {
                         || event.mask.contains(EventMask::DELETE_SELF)
                     {
                         return;
-                    } else if is_color_file(event.name) {
+                    } else if is_css_name(event.name) {
                         wake = true;
                     }
                 }
@@ -105,10 +137,10 @@ fn run(base: PathBuf, tx: mpsc::Sender<()>, ctx: eframe::egui::Context) {
             }
         }
         None => {
-            let mut last = stamp(&base);
+            let mut last = read_at(&base);
             loop {
                 std::thread::sleep(POLL);
-                let now = stamp(&base);
+                let now = read_at(&base);
                 if now != last {
                     last = now;
                     if tx.send(()).is_err() {
@@ -139,27 +171,11 @@ fn watcher(base: &Path) -> Option<Inotify> {
     (watched > 0).then_some(inotify)
 }
 
-fn is_color_file(name: Option<&std::ffi::OsStr>) -> bool {
+/// Any `*.css` write in the watched directories matters: the palette file's
+/// name depends on the tool that generated it.
+fn is_css_name(name: Option<&std::ffi::OsStr>) -> bool {
     name.and_then(|n| n.to_str())
-        .is_some_and(|n| n == "noctalia.css" || n == "gtk.css")
-}
-
-/// Modification time and length of every candidate file, for the fallback.
-fn stamp(base: &Path) -> Vec<(u128, u64)> {
-    FILES
-        .iter()
-        .map(|rel| match std::fs::metadata(base.join(rel)) {
-            Ok(meta) => {
-                let nanos = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                    .map_or(0, |d| d.as_nanos());
-                (nanos, meta.len())
-            }
-            Err(_) => (0, 0),
-        })
-        .collect()
+        .is_some_and(|n| n.to_ascii_lowercase().ends_with(".css"))
 }
 
 fn parse(text: &str) -> Option<SystemColors> {
@@ -231,6 +247,7 @@ fn parse_color(text: &str) -> Option<Color32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::UNIX_EPOCH;
 
     /// The shape Noctalia writes for a teal wallpaper.
     const TEAL: &str = "\
@@ -273,46 +290,97 @@ mod tests {
         assert_eq!(parse("@define-color window_bg_color #fff;\n"), None);
     }
 
-    #[test]
-    fn only_the_palette_files_wake_the_ui() {
-        use std::ffi::OsStr;
-        assert!(is_color_file(Some(OsStr::new("noctalia.css"))));
-        assert!(is_color_file(Some(OsStr::new("gtk.css"))));
-        // A palette tool writes through this temporary name and renames it.
-        assert!(!is_color_file(Some(OsStr::new("gtk.css.tmp"))));
-        assert!(!is_color_file(Some(OsStr::new("settings.ini"))));
-        assert!(!is_color_file(None));
-    }
+    /// A blue palette, to tell "newest wins" apart from "first name wins".
+    const BLUE: &str = "\
+@define-color accent_color #7aa2f7;
+@define-color accent_bg_color #7aa2f7;
+@define-color accent_fg_color #16161e;
+@define-color window_bg_color #16161e;
+@define-color window_fg_color #c0caf5;
+@define-color card_bg_color #1f2335;
+";
 
-    #[test]
-    fn stamp_notices_a_rewrite() {
-        let dir = std::env::temp_dir().join(format!("pd-colors-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("gtk-4.0")).unwrap();
-        let before = stamp(&dir);
-        std::fs::write(dir.join("gtk-4.0/noctalia.css"), "a").unwrap();
-        let written = stamp(&dir);
-        assert_ne!(before, written);
-        std::fs::write(dir.join("gtk-4.0/noctalia.css"), "aa").unwrap();
-        assert_ne!(written, stamp(&dir));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// The wallpaper path end to end: the desktop rewrites `noctalia.css`
-    /// and the watcher wakes the UI instead of waiting for the theme poll.
-    #[test]
-    fn a_wallpaper_write_wakes_the_watcher() {
+    fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "pd-colors-watch-{}-{}",
+            "pd-colors-{tag}-{}-{}",
             std::process::id(),
             UNIX_EPOCH.elapsed().unwrap().as_nanos()
         ));
         std::fs::create_dir_all(dir.join("gtk-4.0")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn any_css_write_wakes_the_ui() {
+        use std::ffi::OsStr;
+        assert!(is_css_name(Some(OsStr::new("noctalia.css"))));
+        assert!(is_css_name(Some(OsStr::new("gtk.css"))));
+        assert!(is_css_name(Some(OsStr::new("end4.css"))));
+        assert!(is_css_name(Some(OsStr::new("Colors.CSS"))));
+        // Palette tools write through a temporary name and rename it.
+        assert!(!is_css_name(Some(OsStr::new("gtk.css.tmp"))));
+        assert!(!is_css_name(Some(OsStr::new("settings.ini"))));
+        assert!(!is_css_name(None));
+    }
+
+    /// No filename is special: an import stub is skipped and any name that
+    /// carries the tokens is read.
+    #[test]
+    fn finds_a_palette_whatever_the_tool_named_it() {
+        let dir = temp_dir("named");
+        std::fs::write(dir.join("gtk-4.0/gtk.css"), "@import url(\"end4.css\");\n").unwrap();
+        std::fs::write(dir.join("gtk-4.0/end4.css"), TEAL).unwrap();
+        assert_eq!(
+            read_at(&dir).map(|c| c.accent),
+            Some(Color32::from_rgb(0x84, 0xD2, 0xE6))
+        );
+
+        // GTK 3 is read when GTK 4 publishes no complete palette.
+        std::fs::remove_file(dir.join("gtk-4.0/end4.css")).unwrap();
+        std::fs::create_dir_all(dir.join("gtk-3.0")).unwrap();
+        std::fs::write(dir.join("gtk-3.0/colors.css"), BLUE).unwrap();
+        assert_eq!(
+            read_at(&dir).map(|c| c.accent),
+            Some(Color32::from_rgb(0x7A, 0xA2, 0xF7))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Switching palette tools leaves the old file behind; the one just
+    /// generated must win.
+    #[test]
+    fn the_newest_palette_wins() {
+        let dir = temp_dir("newest");
+        let old = dir.join("gtk-4.0/noctalia.css");
+        let new = dir.join("gtk-4.0/caelestia.css");
+        std::fs::write(&old, TEAL).unwrap();
+        std::fs::write(&new, BLUE).unwrap();
+        std::fs::File::open(&old)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(1_000))
+            .unwrap();
+        std::fs::File::open(&new)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(2_000))
+            .unwrap();
+        assert_eq!(
+            read_at(&dir).map(|c| c.accent),
+            Some(Color32::from_rgb(0x7A, 0xA2, 0xF7))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The wallpaper path end to end: the desktop rewrites its CSS under
+    /// whatever name it chose, and the watcher wakes the UI instead of
+    /// waiting for the theme poll.
+    #[test]
+    fn a_wallpaper_write_wakes_the_watcher() {
+        let dir = temp_dir("watch");
         let (tx, rx) = mpsc::channel();
         let watched = dir.clone();
         std::thread::spawn(move || run(watched, tx, eframe::egui::Context::default()));
 
-        let file = dir.join("gtk-4.0/noctalia.css");
+        let file = dir.join("gtk-4.0/end4.css");
         // Retry: the watch may still be installing on the first write.
         for _ in 0..20 {
             std::fs::write(&file, TEAL).unwrap();
@@ -321,7 +389,7 @@ mod tests {
                 return;
             }
         }
-        panic!("rewriting noctalia.css should wake the watcher");
+        panic!("rewriting a palette CSS should wake the watcher");
     }
 
     #[test]

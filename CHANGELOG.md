@@ -1,14 +1,20 @@
 ## 3.33.13 — 2026-11-25
 
-### Wallpaper colours apply immediately
+### Wallpaper colours: any tool, applied immediately
 
-- **No more 30-second wait.** With **Settings → Appearance → Colors → My
-  system**, the window repaints as soon as the desktop rewrites its generated
-  GTK colours. A small inotify watcher on `~/.config/gtk-4.0` and
-  `~/.config/gtk-3.0` reports the write instead of the palette being noticed on
-  the next theme tick, so a wallpaper change recolours the app in well under a
-  second. If the watch cannot be installed, a one-second file check replaces it,
-  and the 30-second theme poll still covers the rest.
+- **No filename is special.** *My system* reads every `*.css` in
+  `~/.config/gtk-4.0` and `~/.config/gtk-3.0`, newest first, and takes the
+  first that carries the palette tokens. Noctalia, matugen, pywal, Gradience,
+  caelestia, end-4 and ML4W all write different names (`noctalia.css`,
+  `colors.css`, `gtk.css`, …); a stock `gtk.css` that only imports another file
+  is skipped, and after switching tools the palette just generated wins over
+  the old tool's leftover.
+- **No more 30-second wait.** The window repaints as soon as the desktop
+  rewrites its generated GTK colours. A small inotify watcher on the two GTK
+  config directories reports any `*.css` write instead of the palette being
+  noticed on the next theme tick, so a wallpaper change recolours the app in
+  well under a second. If the watch cannot be installed, a one-second file
+  check replaces it, and the 30-second theme poll still covers the rest.
 
 ## 3.33.12 — 2026-11-25
 

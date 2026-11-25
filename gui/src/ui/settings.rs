@@ -1259,7 +1259,7 @@ fn appearance_card(app: &mut SettingsView, ui: &mut egui::Ui) {
                 if theme::system_colors_active() {
                     "Using your desktop's accent and surfaces, so the window follows the wallpaper."
                 } else {
-                    "No desktop colours found, so Proton colours are used. Wallpaper themes that publish GTK colours (Noctalia, matugen, pywal) are picked up automatically."
+                    "No desktop colours found, so Proton colours are used. Any wallpaper tool that writes GTK colours (Noctalia, matugen, pywal, caelestia, end-4, ML4W) is picked up automatically, whatever the file is called."
                 }
             } else {
                 "Proton violet, the app's own colours."
