@@ -26,7 +26,7 @@ pub fn dot_color(status_key: &str) -> [u8; 3] {
     let c = match status_key {
         "syncing" | "signing_in" => crate::theme::CYAN,
         "signed_out" => crate::theme::MAGENTA,
-        other => crate::theme::status_color(other),
+        other => crate::theme::status_color(other, &eframe::egui::Visuals::dark()),
     };
     let [r, g, b, _] = c.to_array();
     [r, g, b]
@@ -396,7 +396,7 @@ mod tests {
             let expected = match key {
                 "syncing" | "signing_in" => crate::theme::CYAN,
                 "signed_out" => crate::theme::MAGENTA,
-                other => crate::theme::status_color(other),
+                other => crate::theme::status_color(other, &eframe::egui::Visuals::dark()),
             };
             let [r, g, b, a] = expected.to_array();
             assert_eq!(a, 0xff, "{key} palette colour must be opaque");

@@ -1,3 +1,25 @@
+## 3.33.12 — 2026-11-25
+
+### Follow the wallpaper, or keep Proton violet
+
+- **Settings → Appearance → Colors** picks where the palette comes from.
+  *Proton* is the violet look the app has always had and stays the default, so
+  upgrading changes nothing. *My system* takes the accent and surfaces your
+  desktop generated from the wallpaper.
+- **No wallpaper decoding.** The app reads the `@define-color` tokens the
+  desktop already writes (`~/.config/gtk-4.0/noctalia.css`, then GTK 3, then
+  the stock `gtk.css`), which is the same file Noctalia, matugen, pywal's GTK
+  template and libadwaita accents maintain. If nothing published colours, it
+  says so and keeps Proton violet.
+- **Derived shades stay accessible.** Secondary text, borders and the
+  foreground on an accent fill are mixed from the desktop's tokens and nudged
+  until they meet WCAG AA (4.5:1 text, 3:1 controls), because a wallpaper
+  palette is not required to be readable.
+- **Live wallpaper changes.** The 30-second system-theme tick also re-reads the
+  generated colours, so switching wallpaper repaints the window without a
+  restart. A dark wallpaper palette restyles the dark theme and leaves the
+  light theme's neutrals alone (it only takes the accent).
+
 ## 3.33.11 — 2026-11-25
 
 ### Native Arch Linux package

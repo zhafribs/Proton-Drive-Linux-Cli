@@ -1232,6 +1232,42 @@ fn appearance_card(app: &mut SettingsView, ui: &mut egui::Ui) {
             );
         }
         ui.add_space(4.0);
+        labeled_control(ui, "Colors", |ui| {
+            let mut source = app.ctx.prefs.color_source();
+            egui::ComboBox::from_id_salt("color_source")
+                .selected_text(match source {
+                    crate::prefs::ColorSource::Proton => "Proton",
+                    crate::prefs::ColorSource::System => "My system",
+                })
+                .show_ui(ui, |ui| {
+                    for (value, label) in [
+                        (crate::prefs::ColorSource::Proton, "Proton"),
+                        (crate::prefs::ColorSource::System, "My system"),
+                    ] {
+                        if ui
+                            .tselectable_value(&mut source, value, label)
+                            .changed()
+                        {
+                            app.ctx.prefs.set("colors", value.as_str());
+                            *app.style_dirty = true;
+                        }
+                    }
+                });
+        });
+        ui.label(
+            rt(if app.ctx.prefs.color_source() == crate::prefs::ColorSource::System {
+                if theme::system_colors_active() {
+                    "Using your desktop's accent and surfaces, so the window follows the wallpaper."
+                } else {
+                    "No desktop colours found, so Proton colours are used. Wallpaper themes that publish GTK colours (Noctalia, matugen, pywal) are picked up automatically."
+                }
+            } else {
+                "Proton violet, the app's own colours."
+            })
+            .size(11.5)
+            .weak(),
+        );
+        ui.add_space(4.0);
         labeled_control(ui, "Language / Bahasa", |ui| {
             egui::ComboBox::from_id_salt("language")
                 .selected_text(app.draft.language.label())

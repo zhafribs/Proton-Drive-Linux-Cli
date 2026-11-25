@@ -82,7 +82,7 @@ pub fn metric(ui: &mut egui::Ui, label: &str, value: &str, sub: &str) {
 /// Photos so a status reads the same everywhere.
 pub fn status_pill(ui: &mut egui::Ui, key: &str, label: &str) {
     let label = t(label);
-    let color = theme::status_color(key);
+    let color = theme::status_color(key, ui.visuals());
     let text = theme::status_text_color(key, ui.visuals());
     egui::Frame::new()
         .fill(color.gamma_multiply(0.10))
@@ -147,8 +147,8 @@ pub fn primary_button_hint_response(
     hint: &str,
 ) -> egui::Response {
     let response = ui.add(
-        egui::Button::new(rt(text).color(egui::Color32::WHITE))
-            .fill(theme::ACCENT)
+        egui::Button::new(rt(text).color(theme::on_accent(ui.visuals())))
+            .fill(theme::accent(ui.visuals()))
             .stroke(egui::Stroke::NONE)
             .corner_radius(theme::pill()),
     );
@@ -162,7 +162,7 @@ pub fn primary_button_hint_response(
         ui.painter().rect_stroke(
             response.rect,
             theme::pill(),
-            egui::Stroke::new(1.5, egui::Color32::WHITE),
+            egui::Stroke::new(1.5, theme::on_accent(ui.visuals())),
             egui::StrokeKind::Inside,
         );
     }
@@ -179,10 +179,11 @@ pub fn primary_button_full(ui: &mut egui::Ui, text: &str) -> bool {
         egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &text)
     });
     let radius = theme::pill();
+    let accent = theme::accent(ui.visuals());
     let fill = if response.hovered() {
-        theme::ACCENT.gamma_multiply(0.92)
+        accent.gamma_multiply(0.92)
     } else {
-        theme::ACCENT
+        accent
     };
     ui.painter().rect_filled(rect, radius, fill);
     ui.painter().text(
@@ -190,7 +191,7 @@ pub fn primary_button_full(ui: &mut egui::Ui, text: &str) -> bool {
         egui::Align2::CENTER_CENTER,
         &text,
         egui::FontId::proportional(13.0),
-        egui::Color32::WHITE,
+        theme::on_accent(ui.visuals()),
     );
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -213,13 +214,13 @@ pub fn primary_button_full(ui: &mut egui::Ui, text: &str) -> bool {
 /// Round identity avatar: accent disc, cyan cap and the initial.
 pub fn avatar(ui: &egui::Ui, center: egui::Pos2, radius: f32, initial: &str) {
     let painter = ui.painter();
-    painter.circle_filled(center, radius, theme::ACCENT);
+    painter.circle_filled(center, radius, theme::accent(ui.visuals()));
     painter.text(
         center,
         egui::Align2::CENTER_CENTER,
         initial,
         egui::FontId::proportional(radius * 0.93),
-        egui::Color32::WHITE,
+        theme::on_accent(ui.visuals()),
     );
 }
 
@@ -304,7 +305,7 @@ pub fn status_orb(ui: &mut egui::Ui, status: &str, animate: bool) {
     let size = 72.0;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     let c = rect.center();
-    let color = theme::status_color(status);
+    let color = theme::status_color(status, ui.visuals());
     let ink = theme::status_text_color(status, ui.visuals());
     let painter = ui.painter();
     let r = size / 2.0 - 5.0;

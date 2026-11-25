@@ -741,7 +741,7 @@ impl App {
         let upd_next_check = prefs
             .updates_auto()
             .then(|| std::time::Instant::now() + Duration::from_secs(5));
-        theme::apply(&cc.egui_ctx, &prefs.theme(), prefs.motion_enabled());
+        theme::apply(&cc.egui_ctx, prefs.color_source(), prefs.motion_enabled());
         theme::force(
             &cc.egui_ctx,
             &system_theme::resolve(&prefs.theme(), &detected_theme),
@@ -1725,12 +1725,18 @@ impl App {
             latest = Some(theme);
         }
         let Some(theme) = latest else { return };
-        if theme == self.system_theme {
-            return;
+        if theme != self.system_theme {
+            self.system_theme = theme.clone();
+            if matches!(self.ctx.prefs.theme(), prefs::Theme::System) {
+                theme::force(ctx, &theme);
+                ctx.request_repaint();
+            }
         }
-        self.system_theme = theme.clone();
-        if matches!(self.ctx.prefs.theme(), prefs::Theme::System) {
-            theme::force(ctx, &theme);
+        // The same tick is the wallpaper hook: the desktop rewrites its GTK
+        // colours when the picture changes, and "My system" must follow.
+        if self.ctx.prefs.color_source() == prefs::ColorSource::System
+            && theme::refresh(ctx, prefs::ColorSource::System, self.ctx.prefs.motion_enabled())
+        {
             ctx.request_repaint();
         }
     }
@@ -2030,7 +2036,7 @@ impl App {
                             ui.painter().circle_filled(
                                 rect.center(),
                                 5.0,
-                                theme::status_color(key),
+                                theme::status_color(key, ui.visuals()),
                             );
                             ui.add(
                                 egui::Label::new(
@@ -2183,7 +2189,7 @@ impl App {
         // Presence dot: the live status colour with a ring.
         let dot = c + egui::vec2(10.0, 10.0);
         ui.painter()
-            .circle_filled(dot, 4.5, theme::status_color(self.status_key()));
+            .circle_filled(dot, 4.5, theme::status_color(self.status_key(), ui.visuals()));
         ui.painter()
             .circle_stroke(dot, 4.5, egui::Stroke::new(1.5, ui.visuals().panel_fill));
         ui.painter().text(
@@ -2240,7 +2246,7 @@ impl App {
                             ui.painter().circle_filled(
                                 d.center(),
                                 4.0,
-                                theme::status_color(self.status_key()),
+                                theme::status_color(self.status_key(), ui.visuals()),
                             );
                             ui.add(
                                 egui::Label::new(
@@ -2274,11 +2280,7 @@ impl App {
     }
 
     fn central(&mut self, ui: &mut egui::Ui) {
-        let page = if ui.visuals().dark_mode {
-            theme::DARK_PAGE
-        } else {
-            theme::PAGE
-        };
+        let page = theme::page(ui.visuals());
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::central_panel(ui.style())
@@ -3642,7 +3644,7 @@ impl eframe::App for App {
             if pref == prefs::Theme::System {
                 self.system_theme = system_theme::detect();
             }
-            theme::apply(ctx, &pref, self.ctx.prefs.motion_enabled());
+            theme::apply(ctx, self.ctx.prefs.color_source(), self.ctx.prefs.motion_enabled());
             theme::force(ctx, &self.resolved_theme());
             self.style_dirty = false;
         }

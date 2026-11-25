@@ -1,9 +1,15 @@
 //! Clarity styling: neutral solid surfaces, Proton violet accent, flat status
 //! discs, and a quiet light/dark pair. egui paints everything with rounded
 //! rects and lines - no textures, shaders, or per-frame allocations.
+//!
+//! Two colour sources feed the same accessors: the Proton palette below, or
+//! the desktop's generated GTK colours (see [`crate::system_colors`]) so the
+//! window can follow the wallpaper like the shell does.
 
-use crate::prefs::Theme;
+use crate::prefs::{ColorSource, Theme};
+use crate::system_colors::SystemColors;
 use eframe::egui;
+use std::sync::{LazyLock, RwLock};
 
 pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(0x70, 0x51, 0xF0);
 pub const ACCENT_LIGHT: egui::Color32 = egui::Color32::from_rgb(0xA7, 0x8B, 0xFF);
@@ -95,11 +101,7 @@ pub fn file_color(name: &str, visuals: &egui::Visuals) -> egui::Color32 {
 
 /// Theme-aware muted text colour with WCAG AA contrast on its own surface.
 pub fn muted(visuals: &egui::Visuals) -> egui::Color32 {
-    if visuals.dark_mode {
-        DARK_SECONDARY
-    } else {
-        SECONDARY
-    }
+    mode(visuals).secondary
 }
 
 // --- light theme: frosted daylight ------------------------------------------
@@ -139,26 +141,248 @@ pub const DARK_BORDER: egui::Color32 = egui::Color32::from_rgb(0x2C, 0x2C, 0x3F)
 /// Interactive-control border for the dark theme (3:1 on DARK_SURFACE).
 pub const DARK_CONTROL_BORDER: egui::Color32 = egui::Color32::from_rgb(0x6B, 0x6A, 0x82);
 
+// --- the live palette -------------------------------------------------------
+// Every value the app paints comes from here. The constants above are the
+// Proton source and the fallback when the desktop publishes no colours.
+
+/// One resolved colour set for one of egui's two visual modes.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct Mode {
+    page: egui::Color32,
+    surface: egui::Color32,
+    input: egui::Color32,
+    faint: egui::Color32,
+    hover: egui::Color32,
+    ink: egui::Color32,
+    strong: egui::Color32,
+    secondary: egui::Color32,
+    border: egui::Color32,
+    control_border: egui::Color32,
+    accent: egui::Color32,
+    accent_light: egui::Color32,
+    accent_soft: egui::Color32,
+    accent_text: egui::Color32,
+    accent_hover: egui::Color32,
+    on_accent: egui::Color32,
+}
+
+impl Mode {
+    fn proton_light() -> Mode {
+        Mode {
+            page: PAGE,
+            surface: SURFACE,
+            input: SURFACE,
+            faint: egui::Color32::from_rgb(0xF1, 0xEF, 0xF9),
+            hover: ACCENT_HOVER,
+            ink: INK,
+            strong: NAVY,
+            secondary: SECONDARY,
+            border: BORDER,
+            control_border: CONTROL_BORDER,
+            accent: ACCENT,
+            accent_light: ACCENT_LIGHT,
+            accent_soft: ACCENT_SOFT,
+            accent_text: ACCENT_TEXT,
+            accent_hover: ACCENT_HOVER,
+            on_accent: egui::Color32::WHITE,
+        }
+    }
+
+    fn proton_dark() -> Mode {
+        Mode {
+            page: DARK_PAGE,
+            surface: DARK_SURFACE,
+            input: DARK_INPUT,
+            faint: DARK_FAINT,
+            hover: DARK_HOVER,
+            ink: DARK_INK,
+            strong: DARK_STRONG,
+            secondary: DARK_SECONDARY,
+            border: DARK_BORDER,
+            control_border: DARK_CONTROL_BORDER,
+            accent: ACCENT,
+            accent_light: ACCENT_LIGHT,
+            accent_soft: ACCENT.gamma_multiply(0.30),
+            accent_text: ACCENT_LIGHT,
+            accent_hover: DARK_HOVER,
+            on_accent: egui::Color32::WHITE,
+        }
+    }
+
+    /// Replace the neutrals with the desktop's page/card/text tokens. Shades
+    /// are mixed from those three, so a wallpaper palette only has to publish
+    /// the ones it actually has.
+    fn with_surfaces(mut self, s: &SystemColors) -> Mode {
+        self.page = s.page;
+        self.surface = s.surface;
+        self.ink = ensure_contrast(s.fg, self.surface, 4.5);
+        self.strong = self.ink;
+        self.secondary = ensure_contrast(mix(self.ink, self.surface, 0.40), self.surface, 4.5);
+        self.input = mix(self.surface, self.ink, 0.06);
+        self.faint = mix(self.surface, self.ink, 0.05);
+        self.hover = mix(self.surface, self.ink, 0.09);
+        self.border = mix(self.surface, self.ink, 0.16);
+        self.control_border =
+            ensure_contrast(mix(self.surface, self.ink, 0.40), self.surface, 3.0);
+        self
+    }
+
+    /// Replace the accent family, keeping the rest of this mode's surfaces.
+    fn with_accent(mut self, s: &SystemColors) -> Mode {
+        let accent = s.accent;
+        let dark = luminance(self.surface) < 0.5;
+        self.accent = accent;
+        self.accent_light = ensure_contrast(accent, self.surface, 4.5);
+        self.accent_soft = mix(accent, self.surface, if dark { 0.72 } else { 0.86 });
+        self.accent_hover = mix(accent, self.surface, if dark { 0.85 } else { 0.93 });
+        self.accent_text = if dark {
+            self.accent_light
+        } else {
+            ensure_contrast(accent, self.accent_soft, 4.5)
+        };
+        // The desktop ships a matching foreground for its accent; only trust
+        // it when it actually reads on that fill.
+        self.on_accent = s
+            .on_accent
+            .filter(|c| contrast(*c, accent) >= 4.5)
+            .unwrap_or_else(|| {
+                let target = if contrast(egui::Color32::WHITE, accent)
+                    >= contrast(egui::Color32::BLACK, accent)
+                {
+                    egui::Color32::WHITE
+                } else {
+                    egui::Color32::BLACK
+                };
+                ensure_contrast(target, accent, 4.5)
+            });
+        self
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct Palette {
+    light: Mode,
+    dark: Mode,
+    /// True when the colours came from the desktop, not from Proton.
+    system: bool,
+}
+
+impl Palette {
+    fn proton() -> Palette {
+        Palette {
+            light: Mode::proton_light(),
+            dark: Mode::proton_dark(),
+            system: false,
+        }
+    }
+
+    /// The desktop's accent on both modes; its surfaces replace the neutrals
+    /// of whichever mode it was generated for. A dark wallpaper palette must
+    /// not repaint the light theme dark, so the other mode keeps the Proton
+    /// surfaces and takes only the accent.
+    fn from_system(s: &SystemColors) -> Palette {
+        let mut light = Mode::proton_light();
+        let mut dark = Mode::proton_dark();
+        if s.is_dark() {
+            dark = dark.with_surfaces(s);
+        } else {
+            light = light.with_surfaces(s);
+        }
+        light = light.with_accent(s);
+        dark = dark.with_accent(s);
+        Palette {
+            light,
+            dark,
+            system: true,
+        }
+    }
+}
+
+static ACTIVE: LazyLock<RwLock<Palette>> = LazyLock::new(|| RwLock::new(Palette::proton()));
+
+fn active() -> Palette {
+    *ACTIVE.read().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The palette in use for the current visual mode.
+fn mode(visuals: &egui::Visuals) -> Mode {
+    if visuals.dark_mode {
+        active().dark
+    } else {
+        active().light
+    }
+}
+
+/// Whether "My system" found desktop colours to use.
+pub fn system_colors_active() -> bool {
+    active().system
+}
+
+pub(crate) fn luminance(c: egui::Color32) -> f64 {
+    let lin = |v: u8| {
+        let s = f64::from(v) / 255.0;
+        if s <= 0.04045 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+}
+
+pub(crate) fn contrast(a: egui::Color32, b: egui::Color32) -> f64 {
+    let (l1, l2) = (luminance(a), luminance(b));
+    let (hi, lo) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+fn mix(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let ch = |x: u8, y: u8| (f32::from(x) * (1.0 - t) + f32::from(y) * t).round() as u8;
+    egui::Color32::from_rgb(ch(a.r(), b.r()), ch(a.g(), b.g()), ch(a.b(), b.b()))
+}
+
+/// Nudge `c` toward white or black until it reads on `bg`. A wallpaper palette
+/// is not required to be accessible; the app still is.
+fn ensure_contrast(c: egui::Color32, bg: egui::Color32, min: f64) -> egui::Color32 {
+    if contrast(c, bg) >= min {
+        return c;
+    }
+    let target = if luminance(bg) < 0.5 {
+        egui::Color32::WHITE
+    } else {
+        egui::Color32::BLACK
+    };
+    let mut out = c;
+    for step in 1..=50 {
+        out = mix(c, target, step as f32 / 50.0);
+        if contrast(out, bg) >= min {
+            break;
+        }
+    }
+    out
+}
+
 /// Solid surface fill. The old glass/aurora layer is gone: cards and panels
 /// are opaque so hierarchy comes from borders and spacing, not glow.
 pub fn glass_fill(visuals: &egui::Visuals) -> egui::Color32 {
-    if visuals.dark_mode {
-        DARK_SURFACE
-    } else {
-        SURFACE
-    }
+    mode(visuals).surface
+}
+
+/// The page behind the cards.
+pub fn page(visuals: &egui::Visuals) -> egui::Color32 {
+    mode(visuals).page
+}
+
+/// Text/icon colour that reads on an accent-filled control (primary button,
+/// avatar, selection).
+pub fn on_accent(visuals: &egui::Visuals) -> egui::Color32 {
+    mode(visuals).on_accent
 }
 
 /// Hairline edge for panels and cards.
 pub fn glass_stroke(visuals: &egui::Visuals) -> egui::Stroke {
-    egui::Stroke::new(
-        1.0,
-        if visuals.dark_mode {
-            DARK_BORDER
-        } else {
-            BORDER
-        },
-    )
+    egui::Stroke::new(1.0, mode(visuals).border)
 }
 
 /// Danger text that stays AA on the current surface.
@@ -207,7 +431,7 @@ pub fn status_text_color(key: &str, visuals: &egui::Visuals) -> egui::Color32 {
         "error" => danger_text(visuals),
         "signed_out" | "starting" => {
             if visuals.dark_mode {
-                ACCENT_LIGHT
+                mode(visuals).accent_light
             } else {
                 INFO
             }
@@ -220,30 +444,18 @@ pub fn status_text_color(key: &str, visuals: &egui::Visuals) -> egui::Color32 {
 
 /// Accent that reads on the theme currently in use.
 pub fn accent(visuals: &egui::Visuals) -> egui::Color32 {
-    if visuals.dark_mode {
-        ACCENT_LIGHT
-    } else {
-        ACCENT
-    }
+    mode(visuals).accent
 }
 
 /// Accent colour for text/icons on `accent_soft`; the bright accent is only
 /// 4.26:1 on the light pill, so light mode uses the darker shade.
 pub fn accent_text(visuals: &egui::Visuals) -> egui::Color32 {
-    if visuals.dark_mode {
-        ACCENT_LIGHT
-    } else {
-        ACCENT_TEXT
-    }
+    mode(visuals).accent_text
 }
 
-/// Soft purple pill (active nav, pressed control) for the current theme.
+/// Soft accent pill (active nav, pressed control) for the current theme.
 pub fn accent_soft(visuals: &egui::Visuals) -> egui::Color32 {
-    if visuals.dark_mode {
-        ACCENT.gamma_multiply(0.30)
-    } else {
-        ACCENT_SOFT
-    }
+    mode(visuals).accent_soft
 }
 
 /// Pill radius. egui clamps a corner radius to half the smallest side, so
@@ -284,16 +496,16 @@ pub fn card_frame(ui: &egui::Ui) -> egui::Frame {
 
 
 /// Orb/dot color per status key.
-pub fn status_color(key: &str) -> egui::Color32 {
+pub fn status_color(key: &str, visuals: &egui::Visuals) -> egui::Color32 {
     match key {
         "synced" => SUCCESS,
-        "syncing" => ACCENT,
+        "syncing" => accent(visuals),
         "paused" | "deletes_held" => WARNING,
         // A lost session is recoverable - warn, do not alarm.
         "needs_login" => WARNING,
         // No account yet: calm, not an error.
         "signed_out" => INFO,
-        "signing_in" => ACCENT,
+        "signing_in" => accent(visuals),
         // The engine is not running - neutral grey, not a failure.
         "engine_stopped" => MUTED,
         "starting" => INFO,
@@ -324,7 +536,15 @@ pub fn force(ctx: &egui::Context, theme: &Theme) {
 /// the same corner radius, checkboxes cap their rounding themselves, and
 /// `strong_text_color()` resolves to `widgets.active.fg_stroke` - so the
 /// whole look cascades from these two blocks.
-pub fn apply(ctx: &egui::Context, _theme: &Theme, animate: bool) {
+pub fn apply(ctx: &egui::Context, colors: ColorSource, animate: bool) {
+    let palette = match colors {
+        ColorSource::System => crate::system_colors::read()
+            .map(|s| Palette::from_system(&s))
+            .unwrap_or_else(Palette::proton),
+        ColorSource::Proton => Palette::proton(),
+    };
+    *ACTIVE.write().unwrap_or_else(|e| e.into_inner()) = palette;
+    let (dm, lm) = (palette.dark, palette.light);
     let mut base = ctx.style_of(egui::Theme::Dark).as_ref().clone();
     base.spacing.item_spacing = egui::vec2(10.0, 8.0);
     base.spacing.button_padding = egui::vec2(14.0, 7.0);
@@ -335,80 +555,80 @@ pub fn apply(ctx: &egui::Context, _theme: &Theme, animate: bool) {
 
     // --- dark ---------------------------------------------------------------
     let mut dark = egui::Visuals::dark();
-    dark.panel_fill = DARK_PAGE;
-    dark.window_fill = DARK_SURFACE;
-    dark.extreme_bg_color = DARK_INPUT; // TextEdit background
-    dark.faint_bg_color = DARK_FAINT;
-    dark.weak_text_color = Some(DARK_SECONDARY);
-    dark.hyperlink_color = ACCENT_LIGHT;
-    dark.selection.bg_fill = ACCENT;
-    dark.selection.stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
+    dark.panel_fill = dm.page;
+    dark.window_fill = dm.surface;
+    dark.extreme_bg_color = dm.input; // TextEdit background
+    dark.faint_bg_color = dm.faint;
+    dark.weak_text_color = Some(dm.secondary);
+    dark.hyperlink_color = dm.accent_light;
+    dark.selection.bg_fill = dm.accent;
+    dark.selection.stroke = egui::Stroke::new(1.0, dm.on_accent);
     dark.button_frame = true;
     dark.window_corner_radius = egui::CornerRadius::same(14);
     dark.menu_corner_radius = round10;
     dark.window_shadow.blur = 30;
-    dark.widgets.noninteractive.bg_fill = DARK_SURFACE; // cards
-    dark.widgets.noninteractive.weak_bg_fill = DARK_SURFACE;
-    dark.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, DARK_BORDER);
-    dark.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, DARK_INK); // body text
+    dark.widgets.noninteractive.bg_fill = dm.surface; // cards
+    dark.widgets.noninteractive.weak_bg_fill = dm.surface;
+    dark.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, dm.border);
+    dark.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, dm.ink); // body text
     dark.widgets.noninteractive.corner_radius = round12;
-    dark.widgets.inactive.weak_bg_fill = DARK_SURFACE; // buttons
-    dark.widgets.inactive.bg_fill = DARK_SURFACE; // checkbox box
-    dark.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, DARK_CONTROL_BORDER);
+    dark.widgets.inactive.weak_bg_fill = dm.surface; // buttons
+    dark.widgets.inactive.bg_fill = dm.surface; // checkbox box
+    dark.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, dm.control_border);
     dark.widgets.inactive.corner_radius = pill;
-    dark.widgets.hovered.bg_fill = DARK_HOVER;
-    dark.widgets.hovered.weak_bg_fill = DARK_HOVER;
-    dark.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, DARK_CONTROL_BORDER);
-    dark.widgets.hovered.fg_stroke = egui::Stroke::new(1.5, DARK_STRONG);
+    dark.widgets.hovered.bg_fill = dm.hover;
+    dark.widgets.hovered.weak_bg_fill = dm.hover;
+    dark.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, dm.control_border);
+    dark.widgets.hovered.fg_stroke = egui::Stroke::new(1.5, dm.strong);
     dark.widgets.hovered.corner_radius = pill;
-    dark.widgets.active.bg_fill = ACCENT.gamma_multiply(0.6);
-    dark.widgets.active.weak_bg_fill = ACCENT.gamma_multiply(0.6);
-    dark.widgets.active.bg_stroke = egui::Stroke::new(1.0, ACCENT_LIGHT);
-    dark.widgets.active.fg_stroke = egui::Stroke::new(1.5, DARK_STRONG); // strong text
+    dark.widgets.active.bg_fill = dm.accent.gamma_multiply(0.6);
+    dark.widgets.active.weak_bg_fill = dm.accent.gamma_multiply(0.6);
+    dark.widgets.active.bg_stroke = egui::Stroke::new(1.0, dm.accent_light);
+    dark.widgets.active.fg_stroke = egui::Stroke::new(1.5, dm.strong); // strong text
     dark.widgets.active.corner_radius = pill;
-    dark.widgets.open.bg_fill = DARK_HOVER;
-    dark.widgets.open.weak_bg_fill = DARK_HOVER;
-    dark.widgets.open.bg_stroke = egui::Stroke::new(1.0, DARK_CONTROL_BORDER);
-    dark.widgets.open.fg_stroke = egui::Stroke::new(1.0, DARK_STRONG);
+    dark.widgets.open.bg_fill = dm.hover;
+    dark.widgets.open.weak_bg_fill = dm.hover;
+    dark.widgets.open.bg_stroke = egui::Stroke::new(1.0, dm.control_border);
+    dark.widgets.open.fg_stroke = egui::Stroke::new(1.0, dm.strong);
     dark.widgets.open.corner_radius = pill;
 
     // --- light (the Proton Drive web look) ----------------------------------
     let mut light = egui::Visuals::light();
-    light.panel_fill = PAGE;
-    light.window_fill = SURFACE;
-    light.extreme_bg_color = SURFACE; // TextEdit background
-    light.faint_bg_color = egui::Color32::from_rgb(0xF1, 0xEF, 0xF9);
-    light.weak_text_color = Some(SECONDARY);
-    light.hyperlink_color = ACCENT;
-    light.selection.bg_fill = ACCENT;
-    light.selection.stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
+    light.panel_fill = lm.page;
+    light.window_fill = lm.surface;
+    light.extreme_bg_color = lm.input; // TextEdit background
+    light.faint_bg_color = lm.faint;
+    light.weak_text_color = Some(lm.secondary);
+    light.hyperlink_color = lm.accent;
+    light.selection.bg_fill = lm.accent;
+    light.selection.stroke = egui::Stroke::new(1.0, lm.on_accent);
     light.button_frame = true;
     light.window_corner_radius = round12;
     light.menu_corner_radius = round10;
     light.window_shadow.blur = 24;
-    light.widgets.noninteractive.bg_fill = SURFACE; // cards
-    light.widgets.noninteractive.weak_bg_fill = SURFACE;
-    light.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, BORDER);
-    light.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, INK); // body text
+    light.widgets.noninteractive.bg_fill = lm.surface; // cards
+    light.widgets.noninteractive.weak_bg_fill = lm.surface;
+    light.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, lm.border);
+    light.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, lm.ink); // body text
     light.widgets.noninteractive.corner_radius = round12;
-    light.widgets.inactive.weak_bg_fill = SURFACE; // buttons
-    light.widgets.inactive.bg_fill = SURFACE; // checkbox box
-    light.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, CONTROL_BORDER);
+    light.widgets.inactive.weak_bg_fill = lm.surface; // buttons
+    light.widgets.inactive.bg_fill = lm.surface; // checkbox box
+    light.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, lm.control_border);
     light.widgets.inactive.corner_radius = pill;
-    light.widgets.hovered.bg_fill = ACCENT_HOVER;
-    light.widgets.hovered.weak_bg_fill = ACCENT_HOVER;
-    light.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, CONTROL_BORDER);
-    light.widgets.hovered.fg_stroke = egui::Stroke::new(1.5, NAVY);
+    light.widgets.hovered.bg_fill = lm.accent_hover;
+    light.widgets.hovered.weak_bg_fill = lm.accent_hover;
+    light.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, lm.control_border);
+    light.widgets.hovered.fg_stroke = egui::Stroke::new(1.5, lm.strong);
     light.widgets.hovered.corner_radius = pill;
-    light.widgets.active.bg_fill = ACCENT_SOFT;
-    light.widgets.active.weak_bg_fill = ACCENT_SOFT;
-    light.widgets.active.bg_stroke = egui::Stroke::new(1.0, ACCENT);
-    light.widgets.active.fg_stroke = egui::Stroke::new(1.5, NAVY); // strong text
+    light.widgets.active.bg_fill = lm.accent_soft;
+    light.widgets.active.weak_bg_fill = lm.accent_soft;
+    light.widgets.active.bg_stroke = egui::Stroke::new(1.0, lm.accent);
+    light.widgets.active.fg_stroke = egui::Stroke::new(1.5, lm.strong); // strong text
     light.widgets.active.corner_radius = pill;
-    light.widgets.open.bg_fill = ACCENT_HOVER;
-    light.widgets.open.weak_bg_fill = ACCENT_HOVER;
-    light.widgets.open.bg_stroke = egui::Stroke::new(1.0, CONTROL_BORDER);
-    light.widgets.open.fg_stroke = egui::Stroke::new(1.0, NAVY);
+    light.widgets.open.bg_fill = lm.accent_hover;
+    light.widgets.open.weak_bg_fill = lm.accent_hover;
+    light.widgets.open.bg_stroke = egui::Stroke::new(1.0, lm.control_border);
+    light.widgets.open.fg_stroke = egui::Stroke::new(1.0, lm.strong);
     light.widgets.open.corner_radius = pill;
 
     for (t, visuals) in [(egui::Theme::Light, light), (egui::Theme::Dark, dark)] {
@@ -421,6 +641,14 @@ pub fn apply(ctx: &egui::Context, _theme: &Theme, animate: bool) {
         };
         ctx.set_style_of(t, style);
     }
+}
+
+/// Re-read the desktop colours (a wallpaper change rewrites them) and restyle
+/// only when they moved. Returns whether the palette changed.
+pub fn refresh(ctx: &egui::Context, colors: ColorSource, animate: bool) -> bool {
+    let before = active();
+    apply(ctx, colors, animate);
+    active() != before
 }
 
 #[cfg(test)]
@@ -446,32 +674,18 @@ mod tests {
     fn motion_off_disables_widget_animation() {
         let ctx = egui::Context::default();
         force(&ctx, &Theme::Dark);
-        apply(&ctx, &Theme::Dark, false);
+        apply(&ctx, ColorSource::Proton, false);
         assert_eq!(ctx.style_of(egui::Theme::Dark).animation_time, 0.0);
-        apply(&ctx, &Theme::Dark, true);
+        apply(&ctx, ColorSource::Proton, true);
         assert!(ctx.style_of(egui::Theme::Dark).animation_time > 0.0);
-        apply(&ctx, &Theme::Light, false);
+        apply(&ctx, ColorSource::Proton, false);
         assert_eq!(ctx.style_of(egui::Theme::Light).animation_time, 0.0);
-        apply(&ctx, &Theme::Light, true);
+        apply(&ctx, ColorSource::Proton, true);
         assert!(ctx.style_of(egui::Theme::Light).animation_time > 0.0);
     }
 
-    fn luminance(c: egui::Color32) -> f64 {
-        let lin = |v: u8| {
-            let s = v as f64 / 255.0;
-            if s <= 0.04045 {
-                s / 12.92
-            } else {
-                ((s + 0.055) / 1.055).powf(2.4)
-            }
-        };
-        0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
-    }
-
     fn ratio(a: egui::Color32, b: egui::Color32) -> f64 {
-        let (l1, l2) = (luminance(a), luminance(b));
-        let (hi, lo) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
-        (hi + 0.05) / (lo + 0.05)
+        contrast(a, b)
     }
 
     /// WCAG contrast gate for the palette: text pairs meet AA (4.5:1) and
@@ -538,5 +752,87 @@ mod tests {
             let r = ratio(fg, bg);
             assert!(r >= min, "ratio {r:.2} below {min}: {fg:?} on {bg:?}");
         }
+    }
+
+    /// The Proton palette is what shipped: moving every accessor onto the live
+    /// palette must not change a single default pixel.
+    #[test]
+    fn proton_palette_is_the_original_theme() {
+        let light = Mode::proton_light();
+        assert_eq!(light.page, PAGE);
+        assert_eq!(light.surface, SURFACE);
+        assert_eq!(light.ink, INK);
+        assert_eq!(light.secondary, SECONDARY);
+        assert_eq!(light.accent, ACCENT);
+        assert_eq!(light.accent_soft, ACCENT_SOFT);
+        assert_eq!(light.accent_text, ACCENT_TEXT);
+        assert_eq!(light.accent_hover, ACCENT_HOVER);
+        assert_eq!(light.border, BORDER);
+        assert_eq!(light.control_border, CONTROL_BORDER);
+        let dark = Mode::proton_dark();
+        assert_eq!(dark.page, DARK_PAGE);
+        assert_eq!(dark.surface, DARK_SURFACE);
+        assert_eq!(dark.input, DARK_INPUT);
+        assert_eq!(dark.ink, DARK_INK);
+        assert_eq!(dark.secondary, DARK_SECONDARY);
+        assert_eq!(dark.accent_soft, ACCENT.gamma_multiply(0.30));
+        assert_eq!(dark.accent_text, ACCENT_LIGHT);
+    }
+
+    fn wallpaper(is_dark: bool) -> SystemColors {
+        if is_dark {
+            SystemColors {
+                accent: egui::Color32::from_rgb(0x84, 0xD2, 0xE6),
+                on_accent: Some(egui::Color32::from_rgb(0x00, 0x36, 0x40)),
+                page: egui::Color32::from_rgb(0x0F, 0x14, 0x16),
+                surface: egui::Color32::from_rgb(0x1B, 0x21, 0x22),
+                fg: egui::Color32::from_rgb(0xDE, 0xE3, 0xE5),
+            }
+        } else {
+            SystemColors {
+                accent: egui::Color32::from_rgb(0x4F, 0x6B, 0x8A),
+                on_accent: None,
+                page: egui::Color32::from_rgb(0xFA, 0xF8, 0xF5),
+                surface: egui::Color32::from_rgb(0xFF, 0xFF, 0xFF),
+                fg: egui::Color32::from_rgb(0x22, 0x1E, 0x1B),
+            }
+        }
+    }
+
+    /// A wallpaper palette is arbitrary, so the derived shades must still meet
+    /// the same contrast bars the Proton palette is tested against.
+    #[test]
+    fn system_palette_stays_readable() {
+        for dark in [true, false] {
+            let p = Palette::from_system(&wallpaper(dark));
+            let (m, other) = if dark { (p.dark, p.light) } else { (p.light, p.dark) };
+            assert!(p.system);
+            assert_eq!(m.page, wallpaper(dark).page);
+            // The mode the wallpaper did not describe keeps the Proton look.
+            assert_eq!(other.page, if dark { PAGE } else { DARK_PAGE });
+            for (fg, bg, min) in [
+                (m.ink, m.surface, 4.5),
+                (m.secondary, m.surface, 4.5),
+                (m.accent_text, m.accent_soft, 4.5),
+                (m.accent_light, m.surface, 4.5),
+                (m.control_border, m.surface, 3.0),
+                (m.on_accent, m.accent, 4.5),
+                (m.ink, m.input, 4.5),
+            ] {
+                let r = ratio(fg, bg);
+                assert!(r >= min, "dark={dark} ratio {r:.2} below {min}");
+            }
+        }
+    }
+
+    /// A washed-out wallpaper accent (yellow) must not leave white labels on
+    /// the primary button.
+    #[test]
+    fn system_accent_gets_a_readable_foreground() {
+        let mut s = wallpaper(true);
+        s.accent = egui::Color32::from_rgb(0xF2, 0xE0, 0x6B);
+        s.on_accent = Some(egui::Color32::WHITE); // the desktop guessed wrong
+        let m = Palette::from_system(&s).dark;
+        assert!(ratio(m.on_accent, m.accent) >= 4.5);
     }
 }

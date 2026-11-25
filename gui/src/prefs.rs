@@ -32,6 +32,30 @@ impl Theme {
     }
 }
 
+/// Where the colours come from. `Proton` is the app's own violet palette;
+/// `System` takes the desktop's generated GTK colours, which wallpaper-colour
+/// tools (Noctalia, matugen, pywal, libadwaita accents) write to the same file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColorSource {
+    Proton,
+    System,
+}
+
+impl ColorSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ColorSource::Proton => "proton",
+            ColorSource::System => "system",
+        }
+    }
+    pub fn from_str(s: &str) -> ColorSource {
+        match s {
+            "system" => ColorSource::System,
+            _ => ColorSource::Proton,
+        }
+    }
+}
+
 /// Interface scale: how big the whole UI (widgets *and* type) is drawn.
 ///
 /// egui draws text at fixed point sizes with its own bundled font, so a
@@ -158,6 +182,15 @@ impl Prefs {
 
     pub fn theme(&self) -> Theme {
         Theme::from_str(self.values.get("theme").map(String::as_str).unwrap_or("system"))
+    }
+    /// Unset means Proton: an upgrade keeps the app's existing look.
+    pub fn color_source(&self) -> ColorSource {
+        ColorSource::from_str(
+            self.values
+                .get("colors")
+                .map(String::as_str)
+                .unwrap_or("proton"),
+        )
     }
     pub fn ui_scale(&self) -> UiScale {
         UiScale::from_str(self.values.get("ui_scale").map(String::as_str).unwrap_or("default"))
@@ -329,6 +362,19 @@ mod tests {
         assert_eq!(Prefs::load(&p).ui_scale(), UiScale::default());
         std::fs::remove_file(&p).ok();
     }
+    #[test]
+    fn color_source_defaults_to_proton_and_roundtrips() {
+        let p = std::env::temp_dir().join(format!("pdprefs-colors-{}.conf", std::process::id()));
+        std::fs::write(&p, "[General]\ntheme=dark\n").unwrap();
+        assert_eq!(Prefs::load(&p).color_source(), ColorSource::Proton);
+        let mut pr = Prefs::load(&p);
+        pr.set("colors", ColorSource::System.as_str());
+        assert_eq!(Prefs::load(&p).color_source(), ColorSource::System);
+        pr.set("colors", "nonsense");
+        assert_eq!(Prefs::load(&p).color_source(), ColorSource::Proton);
+        std::fs::remove_file(&p).ok();
+    }
+
     #[test]
     fn nav_width_is_parsed_and_clamped() {
         let p = std::env::temp_dir().join(format!("pdprefs-nw-{}.conf", std::process::id()));

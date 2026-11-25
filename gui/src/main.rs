@@ -18,6 +18,7 @@ mod prefs;
 mod release;
 mod service;
 mod statewatch;
+mod system_colors;
 mod system_theme;
 mod theme;
 mod tray;
@@ -29,7 +30,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// The GUI's own version (the release tag is `v<CLI>-gui<GUI>`).
-pub const GUI_VERSION: &str = "3.33.11";
+pub const GUI_VERSION: &str = "3.33.12";
 
 /// The systemd user unit path (shared with `service.rs`).
 pub fn service_unit_path() -> PathBuf {
